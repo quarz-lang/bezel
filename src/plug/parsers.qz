@@ -12,7 +12,8 @@
 # `pass` (`"*/*"`, the default, passes every type; `"text/*"` a family;
 # `"application/xml"` one), and is `Bezel::UnsupportedMediaType` (`415`)
 # otherwise. A request without a body, or without a `Content-Type`, is
-# passed on as it is.
+# passed on as it is, and so is a JSON body that turns out empty (a
+# chunked one).
 class Plug::Parsers
   include Plug
 
@@ -35,13 +36,15 @@ class Plug::Parsers
   def call(conn: Conn) -> Conn
     ctype = conn.header("content-type")
     return conn if ctype.nil?
-    body = conn.request.body
-    return conn if body.size == 0
+    size = conn.request.body.size
+    # (Without Content-Length nor chunked framing, a request has no body.)
+    return conn if size == 0 || (size.nil? && !conn.request.headers.token?("transfer-encoding", "chunked"))
     type = ctype.partition(";")[0].strip.downcase
     if @parsers.include?(:urlencoded) && type == "application/x-www-form-urlencoded"
       ps = Params.from_query(read(conn))
     elsif @parsers.include?(:json) && (type == "application/json" || (type.start_with?("application/") && type.end_with?("+json")))
       text = read(conn)
+      return conn if text.empty?
       begin
         value = JSON.parse(text)
       rescue JSON::ParseError

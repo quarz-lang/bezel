@@ -58,11 +58,16 @@ class PlugTest < Test::Case
     events = Atom.new(Array[String].new)
     rec = Bezel::Plug::Logger.new(->(e: Bezel::LogEvent) { events.update { |es| es.push(e.to_s) }; nil })
     plugs: Array[Bezel::Plug] = [rec, Bezel.plug { |c| raise Bezel::Forbidden.new }]
-    assert_raise(Bezel::Forbidden) { Bezel::Plug.run(plugs, Bezel::Conn.build(req("/a%0Ab"))) }
-    assert_match(/\AGET \/a\\x0ab -> 403 in /, events.value[0])
+    out = Bezel::Plug.run(plugs, Bezel::Conn.build(req("/a%0Ab")))
+    assert_true(out.error.is_a?(Bezel::Forbidden))
+    assert_true(out.halted?)
+    assert_match(/\AGET \/a\\x0ab -> 403 in [0-9]+\.[0-9]ms\z/, events.value[0])
     boom: Array[Bezel::Plug] = [rec, Bezel.plug { |c| raise "boom" }]
-    assert_raise(RuntimeError) { Bezel::Plug.run(boom, Bezel::Conn.build(req)) }
+    assert_true(Bezel::Plug.run(boom, Bezel::Conn.build(req)).error.is_a?(RuntimeError))
     assert_match(/-> 500 in /, events.value[1])
+    none: Array[Bezel::Plug] = [rec, Bezel::Plug::Head.new]
+    Bezel::Plug.run(none, Bezel::Conn.build(HTTP::Server::Request.head("/x")))
+    assert_match(/\AHEAD \/x -> 404 in /, events.value[2])
   end
 
   def test_logger_silent_above_info
@@ -162,9 +167,23 @@ class PlugTest < Test::Case
   def test_timeout
     t = Bezel::Plug::Timeout.new(20.ms)
     slow: Array[Bezel::Plug] = [t, Bezel.plug { |c| Task.sleep(2.seconds); c.text("late") }]
-    e = assert_raise(Bezel::TimeoutError) { Bezel::Plug.run(slow, Bezel::Conn.build(req)) }
-    assert_equal(503, e.as(HTTP::Error).status)
+    late = Bezel::Plug.run(slow, Bezel::Conn.build(req))
+    assert_true(late.error.is_a?(Bezel::TimeoutError))
+    assert_equal(503, late.final_status)
+    inner: Array[Bezel::Plug] = [t, Bezel.plug { |c| Task.timeout(1.ms) { Task.sleep(1.second) }; c.text("x") }]
+    own = Bezel::Plug.run(inner, Bezel::Conn.build(req))
+    assert_true(own.error.is_a?(Task::Timeout))
+    assert_equal(500, own.final_status)
     fast: Array[Bezel::Plug] = [t, Bezel.plug { |c| c.text("ok") }]
     assert_equal(200, Bezel::Plug.run(fast, Bezel::Conn.build(req)).status)
+  end
+
+  def test_parsers_without_a_body
+    p = Bezel::Plug::Parsers.new(pass: ["text/*"])
+    bare = HTTP::Server::Request.new("DELETE", "/x", "/x", "", "HTTP/1.1",
+      HTTP::Headers.of({"Content-Type" => "application/json"}), HTTP::Body.new(HTTP::Reader.of(Bytes.new), nil, false, 1000), nil, {}, HTTP::Proxies.none, false, false)
+    assert_false(p.call(Bezel::Conn.build(bare)).halted?)
+    xml = bare.with(headers: HTTP::Headers.of({"Content-Type" => "application/xml"}))
+    assert_false(p.call(Bezel::Conn.build(xml)).halted?)
   end
 end

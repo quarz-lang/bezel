@@ -83,4 +83,33 @@ class ParamsTest < Test::Case
     assert_raise(Bezel::BadRequest) { ps.array("l") }
     assert_true(ps.array("missing").empty?)
   end
+
+  def test_rack_list_of_maps
+    ps = Bezel::Params.from_query("a[][b][c]=1&a[][b][d]=2&a[][b][c]=3")
+    assert_equal("[{\"b\" => {\"c\" => \"1\", \"d\" => \"2\"}}, {\"b\" => {\"c\" => \"3\"}}]", ps.to_h["a"].inspect)
+  end
+
+  def test_conflicts_are_bad_requests
+    ["a=1&a[]=2", "a[]=1&a[b]=2", "a[b]=1&a=2&a[c]=3", "a[][]=1", "a[b]=1&a[]=2"].each do |q|
+      assert_raise(Bezel::BadRequest) { Bezel::Params.from_query(q) }
+    end
+    assert_equal("2", Bezel::Params.from_query("a[]=1&a=2").fetch("a"))
+  end
+
+  def test_depth_is_limited
+    deep = "a" + "[b]" * 32 + "=1"
+    assert_nothing_raised { Bezel::Params.from_query(deep) }
+    assert_raise(Bezel::BadRequest) { Bezel::Params.from_query("a" + "[b]" * 33 + "=1") }
+    assert_raise(Bezel::BadRequest) { Bezel::Params.from_query("a" + "[b]" * 15_000 + "=1") }
+  end
+
+  def test_large_forms_are_linear
+    list = (0...40_000).map { |i| "t[]=#{i}" }.join("&")
+    map = (0...40_000).map { |i| "u[k#{i}]=#{i}" }.join("&")
+    started = Time.monotonic
+    ps = Bezel::Params.from_query(list + "&" + map)
+    assert_equal(40_000, ps.array("t").size)
+    assert_equal(40_000, ps["u"].size)
+    assert_compare(Time.monotonic - started, :<, 3.seconds)
+  end
 end

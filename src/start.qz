@@ -1,13 +1,17 @@
 # Serves `endpoint` until the process is told to stop: loads the
-# configuration (`Bezel::Config.load`, the application's name from the
-# endpoint's namespace, MyApp::Endpoint giving `my_app`, unless
-# `config` is given), opens the database's pool when there is a
-# DATABASE_URL, and runs an `HTTP::Server` with the endpoint's handler
-# on HOST:PORT (HTTPS with TLS_CERT and TLS_KEY). SIGTERM
-# shuts it down gracefully: no new connections, the requests in flight
-# given `grace` to finish, then cancelled; SIGINT (Ctrl-C) does the
-# same with one second. Returns once the server has stopped and the pool
-# is closed.
+# configuration (`Bezel::Config.load` over the application's `settings`,
+# `{dev: MyApp::Config.dev, ...}`, its name taken from the endpoint's
+# namespace, MyApp::Endpoint giving `my_app`; or `config` when given),
+# opens the database's pool when there is a DATABASE_URL, and runs an
+# `HTTP::Server` with the endpoint's handler on HOST:PORT (HTTPS with
+# TLS_CERT and TLS_KEY).
+#
+# SIGTERM shuts the server down gracefully: no new connections, the
+# requests in flight given `grace` to finish, then cancelled; SIGINT
+# (Ctrl-C) does the same with one second. A second signal during the
+# shutdown ends the process at once (status 1), for a request that
+# never waits. Returns once the server has stopped and the pool is
+# closed, with the signals' default actions back.
 #
 # ```quarz no_run
 # # src/main.qz of an application
@@ -15,21 +19,37 @@
 #   def self.plugs -> Array[Bezel::Plug] = [Bezel::Plug::Logger.new, Bezel.plug { |conn| conn.text("hi") }]
 # end
 #
-# Bezel.start(Store)
+# Bezel.start(Store, {prod: Bezel::Settings.new(port: 8080)})
 # ```
-public def start(endpoint: Type[Endpoint], config: Config? = nil, *, grace: Duration = 30.seconds) -> Void
-  c = config || Config.load(app_name(endpoint))
+public def start(endpoint: Type[Endpoint], settings: Hash[Symbol, Settings] = {}, *, config: Config? = nil,
+                 grace: Duration = 30.seconds) -> Void
+  c = config || Config.load(app_name(endpoint), settings)
   pool = open_pool(c)
   begin
     srv = server(endpoint, App.new(c, pool))
-    Signal.trap(:TERM) { srv.shutdown(timeout: grace) }
-    Signal.trap(:INT) { srv.shutdown(timeout: 1.second) }
+    signals = Atom.new(0)
+    Signal.trap(:TERM) do
+      if signals.update { |n| n + 1 } > 1
+        STDERR.puts "bezel: a second signal: exiting now"
+        exit!(1)
+      end
+      srv.shutdown(timeout: grace)
+    end
+    Signal.trap(:INT) do
+      if signals.update { |n| n + 1 } > 1
+        STDERR.puts "bezel: a second signal: exiting now"
+        exit!(1)
+      end
+      srv.shutdown(timeout: 1.second)
+    end
     a = srv.local_address
     STDERR.puts "bezel: #{c.app} (#{c.env}) listening on #{c.tls_cert ? "https" : "http"}://#{a.host}:#{a.port}"
     Task.scope do |s|
       s.spawn { srv.serve }
     end
   ensure
+    Signal.trap(:TERM, :default)
+    Signal.trap(:INT, :default)
     pool&.close
   end
 end

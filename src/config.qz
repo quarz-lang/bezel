@@ -33,9 +33,10 @@ end
 # | TLS_CERT, TLS_KEY | paths of the certificate chain and its key (PEM): HTTPS | none (behind a proxy) |
 # | LOG_LEVEL | `debug`, `info`, `warn` or `error` | `info` |
 #
-# A value that does not parse, or a missing one that is required, is a
-# `Bezel::ConfigError` when the configuration is loaded, before the
-# server starts. Its `inspect` and `to_s` do not show the secret or the
+# A value that does not parse (a port, a level, a proxy, a database
+# URL, a certificate and its key, which are read), or a missing one that
+# is required, is a `Bezel::ConfigError` when the configuration is
+# loaded, before the server starts. Its `inspect` and `to_s` do not show the secret or the
 # database's URL.
 #
 # ```
@@ -94,7 +95,19 @@ data Config(
     pool_size = Config.int_var(environ, "POOL_SIZE") || s.pool_size || 10
     raise ConfigError.new("POOL_SIZE must be positive, not #{pool_size}") if pool_size < 1
     db = Config.var(environ, "DATABASE_URL") || s.database_url
+    if db
+      begin
+        PG.parse_url(db)
+      rescue ArgumentError => e
+        raise ConfigError.new("DATABASE_URL: #{e.message}")
+      end
+    end
     proxies = Config.var(environ, "TRUSTED_PROXIES")&.split(",")&.map(&:strip)&.reject(&:empty?) || s.trusted_proxies || []
+    begin
+      HTTP::Proxies.of(proxies)
+    rescue ArgumentError => e
+      raise ConfigError.new("TRUSTED_PROXIES: #{e.message}")
+    end
     level_name = Config.var(environ, "LOG_LEVEL")
     level = level_name ? level_name.downcase.to_sym : (s.log_level || :info)
     unless LOG_LEVELS.include?(level)
@@ -104,6 +117,16 @@ data Config(
     key = Config.var(environ, "TLS_KEY")
     if cert.nil? != key.nil?
       raise ConfigError.new("TLS_CERT and TLS_KEY go together: #{cert ? "TLS_KEY" : "TLS_CERT"} is missing")
+    end
+    if cert && key
+      [cert, key].each do |path|
+        raise ConfigError.new("TLS file #{path.inspect} cannot be read") unless File.file?(path) && File.readable?(path)
+      end
+      begin
+        TLS::ServerConfig.new(certificate: File.read_bytes(cert), private_key: File.read_bytes(key))
+      rescue TLS::Error => e
+        raise ConfigError.new("TLS_CERT/TLS_KEY: #{e.message}")
+      end
     end
     secret = Config.var(environ, "SECRET_KEY_BASE")
     if secret

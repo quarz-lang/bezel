@@ -67,4 +67,14 @@ class ConfigTest < Test::Case
     assert_false(c.log?(:info))
     assert_true(c.log?(:error))
   end
+
+  def test_checked_at_load
+    p = assert_raise(Bezel::ConfigError) { load({"TRUSTED_PROXIES" => "not an address"}) }
+    assert_match(/TRUSTED_PROXIES/, p.message)
+    t = assert_raise(Bezel::ConfigError) { load({"TLS_CERT" => "/nonexistent/c.pem", "TLS_KEY" => "/nonexistent/k.pem"}) }
+    assert_match(/cannot be read/, t.message)
+    d = assert_raise(Bezel::ConfigError) { load({"DATABASE_URL" => "mysql://u:hunter2@h/d"}) }
+    assert_match(/DATABASE_URL/, d.message)
+    assert_false(d.message.include?("hunter2"))
+  end
 end

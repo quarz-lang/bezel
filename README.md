@@ -32,7 +32,9 @@ class Shop::Endpoint < Bezel::Endpoint
   end
 end
 
-Bezel.start(Shop::Endpoint)     # HOST, PORT, DATABASE_URL, SECRET_KEY_BASE... from the environment
+# HOST, PORT, DATABASE_URL, SECRET_KEY_BASE... from the environment,
+# over the application's settings per environment
+Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://localhost/shop_dev")})
 ```
 
 - **`Bezel::Conn`** is a `data` value: the request, the merged
@@ -43,14 +45,16 @@ Bezel.start(Shop::Endpoint)     # HOST, PORT, DATABASE_URL, SECRET_KEY_BASE... f
 - **A plug** is a `Bezel::Plug` (`call(conn) -> Conn`, and `wrap` for
   one that acts around the rest, as `Logger` and `Timeout` do) or a
   block (`Bezel.plug { |conn| ... }`). A plug that answers halts the
-  pipeline.
+  pipeline; an exception a plug raises halts it too, kept in the
+  connection (`conn.error`) with what the plugs before it did.
 - **An endpoint** lists its plugs in `def self.plugs`. A request no plug
   answers is a `404`. An exception is answered with the error page:
   `Bezel::NotFound`, `Bezel::Forbidden` and the other `HTTP::Error`s with
   their status, anything else with `500`, reported to the endpoint's
   `on_error`. In `dev` and `test` the page shows the exception, its
   backtrace and the request (HTML, or JSON for a JSON `Accept`); in
-  `prod` it shows the status only.
+  `prod` it shows the status only. Headers the plugs set (the request
+  id) stay on the error page.
 - **`Bezel::Config`** reads `BEZEL_ENV` (`dev`, `test`, `prod`), `HOST`,
   `PORT`, `DATABASE_URL`, `POOL_SIZE`, `SECRET_KEY_BASE` (required in
   `prod`, 64 bytes or more), `TRUSTED_PROXIES`, `TLS_CERT`/`TLS_KEY` and
@@ -58,7 +62,7 @@ Bezel.start(Shop::Endpoint)     # HOST, PORT, DATABASE_URL, SECRET_KEY_BASE... f
   environment.
 - **`Bezel.start`** serves the endpoint with `HTTP::Server`, opens a
   `PG::Pool` when there is a `DATABASE_URL`, and stops gracefully on
-  `SIGTERM` and `SIGINT`.
+  `SIGTERM` and `SIGINT` (a second signal ends the process at once).
 
 An endpoint is tested without a socket:
 

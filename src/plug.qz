@@ -33,7 +33,10 @@ module Plug
     c.halted? ? c : rest.call(c)
   end
 
-  # Runs `plugs` on `conn` in order, until one halts.
+  # Runs `plugs` on `conn` in order, until one halts. A `StandardError`
+  # a plug raises stops the pipeline: the result is the connection as
+  # that plug received it (with what the plugs before it did: the
+  # request id, headers), halted, the exception its `error`.
   def self.run(plugs: Array[Plug], conn: Conn) -> Conn = Plug.run_from(plugs, 0, conn, ->(c: Conn) { c })
 
   # Runs `plugs` on `conn` in order, then `rest`, until one halts: the
@@ -43,8 +46,12 @@ module Plug
   # :nodoc:
   def self.run_from(plugs: Array[Plug], i: Int, conn: Conn, rest: (Conn) -> Conn) -> Conn
     return conn if conn.halted?
-    return rest.call(conn) if i >= plugs.size
-    plugs[i].wrap(conn, ->(c: Conn) { Plug.run_from(plugs, i + 1, c, rest) })
+    begin
+      return rest.call(conn) if i >= plugs.size
+      plugs[i].wrap(conn, ->(c: Conn) { Plug.run_from(plugs, i + 1, c, rest) })
+    rescue StandardError => e
+      conn.with(error: e, halted: true)
+    end
   end
 end
 

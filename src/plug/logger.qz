@@ -13,12 +13,16 @@ data LogEvent(
 )
   # One line: `GET /users -> 200 in 1.2ms [id]`.
   def to_s -> String
-    "#{method} #{path} -> #{status} in #{duration}#{request_id ? " [#{request_id}]" : ""}"
+    "#{method} #{path} -> #{status} in #{format("%.1f", duration.to_f * 1000.0)}ms#{request_id ? " [#{request_id}]" : ""}"
   end
 end
 
-# Logs one line per request, once the rest of the pipeline has answered
-# (with the status, or 500 when it raised): to standard error, or to
+# Logs one line per request, once the rest of the pipeline has answered,
+# with the status the client gets (`Conn#final_status`: 404 when nothing
+# answered, the error's when a plug raised), the method and path as this
+# plug received them (before `Plug::Head` or `Plug::MethodOverride`
+# change the method), and the request's id when `Plug::RequestId` ran
+# before it: to standard error, or to
 # `on_event` when given (for structured logs). Lines are written at the
 # `info` level, so a LOG_LEVEL of `warn` or `error` silences them.
 # The path is written percent-decoded, as `Conn#path`; control
@@ -37,21 +41,18 @@ class Plug::Logger
     return rest.call(conn) unless conn.config.log?(:info)
     begin
       out = rest.call(conn)
-    rescue HTTP::Error => e
-      report(conn, e.status)
-      raise e
     rescue StandardError => e
-      report(conn, 500)
+      report(conn, Conn.status_of(e), conn.request_id)
       raise e
     end
-    report(out, out.status)
+    report(conn, out.final_status, out.request_id || conn.request_id)
     out
   end
 
   # :nodoc:
-  def report(conn: Conn, status: Int) -> Void
+  def report(conn: Conn, status: Int, request_id: String?) -> Void
     path = conn.path.gsub(/[\x00-\x1f\x7f]/) { |c| "\\x#{c.ord.to_s(16).rjust(2, "0")}" }
-    event = LogEvent.new(conn.method, path, status, Time.monotonic - conn.started, conn.request_id)
+    event = LogEvent.new(conn.method, path, status, Time.monotonic - conn.started, request_id)
     f = @on_event
     if f
       f.call(event)

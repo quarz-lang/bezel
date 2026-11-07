@@ -82,7 +82,10 @@ data Conn(
   # The application.
   app: App,
   # When the endpoint took the request (`Time.monotonic`).
-  started: Duration
+  started: Duration,
+  # The exception a plug raised, which stopped the pipeline
+  # (`Plug.run`): the endpoint answers it with `Bezel::ErrorPage`.
+  error: StandardError? = nil
 )
   # A connection for `req` in `app`, its parameters those of the query
   # (`Bezel::BadRequest` when it does not decode).
@@ -113,6 +116,19 @@ data Conn(
 
   # Whether a response's body is set.
   def sent? -> Bool = !resp_body.nil?
+
+  # The status the client gets: the error's (an `HTTP::Error`'s own,
+  # 500 for another exception) when a plug raised, else 404 when no
+  # plug answered, else `status`.
+  def final_status -> Int
+    e = error
+    return Conn.status_of(e) if e
+    sent? ? status : 404
+  end
+
+  # The status an exception is answered with: an `HTTP::Error`'s own,
+  # else 500.
+  def self.status_of(error: Exception) -> Int = error.is_a?(HTTP::Error) ? error.status : 500
 
   # The connection with the pipeline stopped after this plug.
   def halt -> Conn = with(halted: true)

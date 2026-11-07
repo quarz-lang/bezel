@@ -122,4 +122,13 @@ class EndpointTest < Test::Case
   def test_app_name
     assert_equal("endpoint_test_app", Bezel.app_name(EndpointTestApp))
   end
+
+  def test_error_pages_keep_the_request_id
+    boom = EndpointTestApp.call(HTTP::Server::Request.get("/boom"))
+    id = boom.headers["x-request-id"] || ""
+    assert_equal(22, id.size)
+    assert_true(text_of(boom).include?(id))
+    assert_equal(22, (EndpointTestApp.call(HTTP::Server::Request.get("/nothing")).headers["x-request-id"] || "").size)
+    assert_equal("ArgumentError /boom", EndpointTestApp::ERRORS.value.last)
+  end
 end

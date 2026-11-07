@@ -56,17 +56,31 @@ data Runner(endpoint: Type[Endpoint], plugs: Array[Plug], app: App)
     conn = Conn.bare(req, app)
     begin
       conn = conn.merge_params(Params.from_query(req.query))
-      out = Plug.run(plugs, conn)
-      raise NotFound.new("no route for #{req.method} #{req.path}") unless out.sent?
-      out.to_response
     rescue StandardError => e
-      answer(conn, e)
+      return answer(conn, e)
     end
+    out = Plug.run(plugs, conn, ->(c: Conn) { Runner.answered(c) })
+    e = out.error
+    e ? answer(out, e) : out.to_response
   end
 
   # :nodoc:
+  # `conn`, or `Bezel::NotFound` when no plug answered it.
+  def self.answered(conn: Conn) -> Conn
+    raise NotFound.new("no route for #{conn.method} #{conn.path}") unless conn.sent?
+    conn
+  end
+
+  # :nodoc:
+  # Headers of a response being made that an error page does not keep:
+  # they describe the body or the resource it replaces.
+  DROPPED = ["content-type", "content-length", "content-encoding", "content-disposition",
+             "etag", "last-modified", "location", "cache-control", "expires"]
+
+  # The error page for `error`, with the headers the plugs set on
+  # `conn` (the request id, security headers) but `DROPPED`.
   def answer(conn: Conn, error: StandardError) -> HTTP::Server::Response
-    status = error.is_a?(HTTP::Error) ? error.status : 500
+    status = Conn.status_of(error)
     if status >= 500 && !error.is_a?(HTTP::Error)
       begin
         endpoint.on_error(error, conn)
@@ -74,6 +88,10 @@ data Runner(endpoint: Type[Endpoint], plugs: Array[Plug], app: App)
         STDERR.puts "bezel: on_error raised #{e.class.name}: #{e.message}"
       end
     end
-    ErrorPage.response(conn, error, status)
+    res = ErrorPage.response(conn, error, status)
+    headers = HTTP::Headers.empty
+    conn.resp_headers.each { |k, v| headers = headers.add(k, v) unless DROPPED.include?(k) }
+    res.headers.each { |k, v| headers = headers.put(k, v) }
+    res.with(headers: headers)
   end
 end
