@@ -13,21 +13,29 @@ class Testing::Parser
   TEXT = ["script", "style", "textarea", "title"]
 
   # A comment, a doctype or processing instruction, an end tag, a start
-  # tag, a lone `<`, or text.
-  TOKEN = /<!--.*?(?:-->|\z)|<![^>]*>?|<\?[^>]*>?|<\/[A-Za-z][^>]*>?|<[A-Za-z][A-Za-z0-9\-]*(?:"[^"]*"|'[^']*'|[^'">])*>?|<|[^<]+/m
+  # tag, a lone `<`, or text. A start tag never runs past a `<` (a quoted
+  # value holding one is cut, rare in practice), so that a `<` in a
+  # script (`a<b`) cannot hide the script's end tag; an unbalanced quote
+  # is a character of the tag.
+  TOKEN = /<!--.*?(?:-->|\z)|<![^>]*>?|<\?[^>]*>?|<\/[A-Za-z][^>]*>?|<[A-Za-z][A-Za-z0-9\-]*(?:"[^"<]*"|'[^'<]*'|[^'"<>]|['"])*>?|<|[^<]+/m
 
   # An attribute in a start tag.
   ATTR = /([^\s"'>\/=]+)(?:\s*=\s*(?:"([^"]*)"?|'([^']*)'?|([^\s>]*)))?/
 
-  # The elements a start tag closes when one is open at the top (the
-  # implied end tags).
+  # The elements a start tag closes when one is open (the implied end
+  # tags), searched down the open elements until a boundary.
   CLOSES = {
     "p" => ["p"], "li" => ["li"], "dt" => ["dt", "dd"], "dd" => ["dt", "dd"], "option" => ["option"],
     "tr" => ["td", "th", "tr"], "td" => ["td", "th"], "th" => ["td", "th"],
-    "div" => ["p"], "ul" => ["p"], "ol" => ["p"], "table" => ["p"], "form" => ["p"], "h1" => ["p"],
-    "h2" => ["p"], "h3" => ["p"], "h4" => ["p"], "h5" => ["p"], "h6" => ["p"], "section" => ["p"],
+    "div" => ["p"], "ul" => ["p"], "ol" => ["p"], "dl" => ["p"], "table" => ["p"], "form" => ["p"],
+    "h1" => ["p"], "h2" => ["p"], "h3" => ["p"], "h4" => ["p"], "h5" => ["p"], "h6" => ["p"],
+    "section" => ["p"], "article" => ["p"], "header" => ["p"], "footer" => ["p"], "nav" => ["p"],
     "pre" => ["p"], "blockquote" => ["p"], "hr" => ["p"]
   }
+
+  # Elements the search for an element to close does not go past.
+  BOUNDARIES = ["html", "body", "table", "ul", "ol", "dl", "select", "template", "button", "td", "th", "li",
+                "div", "section", "article", "form", "blockquote"]
 
   def initialize(@src: String); end
 
@@ -66,20 +74,33 @@ class Testing::Parser
           stack.pop
         end
       elsif t.size > 1 && t.start_with?("<")
-        tag, attrs, self_closing = Testing::Parser.start_tag(t)
+        tag, attrs = Testing::Parser.start_tag(t)
         closes = CLOSES[tag]?
         if closes
-          while stack.size > 1 && closes.include?(stack.last&.tag || "")
+          k = stack.size - 1
+          found = -1
+          # (The outermost open element to close before a boundary: a
+          # new row closes its cells and the row.)
+          while k > 0
+            t2 = stack[k].tag
+            if closes.include?(t2)
+              found = k
+            elsif BOUNDARIES.include?(t2)
+              break
+            end
+            k -= 1
+          end
+          while found > 0 && stack.size > found
             stack.pop
           end
         end
         node = Testing::Node.new(tag, attrs)
         stack.last&.add(node)
-        if TEXT.include?(tag) && !self_closing
+        if TEXT.include?(tag)
           raw_tag = tag
           raw_node = node
           raw = String::Builder.new
-        elsif !VOID.include?(tag) && !self_closing
+        elsif !VOID.include?(tag)
           stack << node
         end
       else
@@ -96,12 +117,13 @@ class Testing::Parser
     token[2, token.size - 2].delete_suffix(">").strip.downcase
   end
 
-  # The name, attributes and `/>` of a start tag token.
-  def self.start_tag(token: String) -> [String, Hash[String, String], Bool]
+  # The name and attributes of a start tag token. (`/>` is ignored, as
+  # HTML does: a void element has no content anyway, and `<a href=/>`
+  # is a link to `/`.)
+  def self.start_tag(token: String) -> [String, Hash[String, String]]
     m = token.match(/\A<([A-Za-z][A-Za-z0-9\-]*)/)
     name = m ? (m[1] || "") : ""
     body = token[name.size + 1, token.size - name.size - 1]
-    self_closing = body.end_with?("/>")
     attrs: Hash[String, String] = {}
     body.delete_suffix(">").gsub(ATTR) do |a|
       am = a.match(ATTR)
@@ -112,7 +134,7 @@ class Testing::Parser
       end
       ""
     end
-    [name.downcase, attrs, self_closing]
+    [name.downcase, attrs]
   end
 
   # `text` with its character references decoded (a reference that is no

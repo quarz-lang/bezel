@@ -41,7 +41,8 @@ end
 
 class TtAged < Bezel::Controller
   controller
-  def who(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "user #{conn.session["user_id"] || "-"}")
+  def who(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "user #{conn.session["user_id"] || "-"} #{conn.params.string?("x") || ""}")
+  def rel(conn: Bezel::Conn) -> Bezel::Conn = conn.redirect(conn.params.fetch("to"))
   def hop(conn: Bezel::Conn) -> Bezel::Conn = conn.redirect("http://www.example.com/aged#top")
   def away(conn: Bezel::Conn) -> Bezel::Conn = conn.redirect("https://evil.example/who")
   def cookies(conn: Bezel::Conn) -> Bezel::Conn = text(conn, conn.header("cookie") || "")
@@ -56,6 +57,8 @@ class TtAgedRouter < Bezel::Router
   routes do
     scope "/", pipeline: :aged do
       get "/aged", TtAged, :who
+      get "/a/who", TtAged, :who
+      get "/a/rel", TtAged, :rel
       get "/hop", TtAged, :hop
       get "/away", TtAged, :away
       get "/cookies", TtAged, :cookies
@@ -199,10 +202,21 @@ class TestingTest < Test::Case
     # login_as for a store with max_age.
     c = Bezel::Testing::Client.new(TtAgedApp, session_key: "_aged")
     c.login_as({"user_id" => "7"})
-    assert_equal("user 7", Bezel::Testing.text_response(c.get("/aged")))
+    assert_equal("user 7 ", Bezel::Testing.text_response(c.get("/aged")))
     # follow_redirect drops the fragment, takes the client's own host, refuses another.
     c.get("/hop")
-    assert_equal("user 7", Bezel::Testing.text_response(c.follow_redirect))
+    assert_equal("user 7 ", Bezel::Testing.text_response(c.follow_redirect))
+    # (`?x=2` resolves against the redirecting path, /a/rel, which then
+    # misses its `to`.)
+    c.get("/a/rel", params: {"to" => "?x=2"})
+    assert_equal(400, c.follow_redirect.status)
+    {"//www.example.com/a/who?x=1" => "user 7 1", "who?x=3" => "user 7 3",
+     "http://www.example.com:80/a/who?x=4" => "user 7 4"}.each do |to, want|
+      c.get("/a/rel", params: {"to" => to})
+      assert_equal(want, Bezel::Testing.text_response(c.follow_redirect))
+    end
+    c.get("/a/rel", params: {"to" => "http://www.example.com?x=5"})
+    assert_equal(404, c.follow_redirect.status)
     c.get("/away")
     assert_match(/leaves the application/, failure { c.follow_redirect })
     # Cookies: a Max-Age parsed, an empty value kept.
@@ -210,9 +224,32 @@ class TestingTest < Test::Case
     assert_equal("1", c.cookies["keep"])
     assert_nil(c.cookies["gone"]?)
     assert_equal("", c.cookies["blank"])
+    # A Max-Age too long for an Int keeps the cookie.
     # A Cookie header given is sent with the jar's.
     sent = Bezel::Testing.text_response(c.get("/cookies", headers: {"cookie" => "mine=1"}))
     assert_true(sent.start_with?("mine=1; "))
     assert_true(sent.include?("_aged="))
+  end
+
+  def test_parser_second_review_fixes
+    js = Bezel::Testing::Doc.parse("<script>for(i=0;i<n;i++){}</script><p>hi</p><script>if (a<b) x()</script><textarea>x<y</textarea><i>z</i>")
+    assert_equal(2, js.select("script").size)
+    assert_true(js.has_element?("p"))
+    assert_equal("x<y", node(js, "textarea").text)
+    assert_true(js.has_element?("i"))
+    links = Bezel::Testing::Doc.parse("<a href=/>Home</a><a href=/x/>L</a><p>z</p><a title=don't href=/y>Q</a>")
+    assert_equal("Home", node(links, "a[href=\"/\"]").text)
+    assert_equal("L", node(links, "a[href=\"/x/\"]").text)
+    assert_equal("Q", node(links, "a[href=\"/y\"]").text)
+    nested = Bezel::Testing::Doc.parse("<ul><li><b>a<li>b</ul><table><tr><td><p>x<td>y</table><div><p><b>x<div>y</div></div>")
+    assert_false(nested.has_element?("li li"))
+    assert_false(nested.has_element?("td td"))
+    assert_equal(2, nested.select("li").size)
+  end
+
+  def test_a_huge_max_age_keeps_the_cookie
+    c = Bezel::Testing::Client.new(TtAgedApp)
+    c.take(HTTP::Server::Response.empty(204).header("set-cookie", "b=1; Max-Age=99999999999999999999999"))
+    assert_equal("1", c.cookies["b"])
   end
 end

@@ -160,6 +160,7 @@ class Testing::Client
   var @session_key: String?
   var @last: HTTP::Server::Response? = nil
   @host: String = "www.example.com"
+  var @last_path: String = "/"
 
   # A client of `endpoint` in `app`; `session_key` names the session's
   # cookie (found by itself among the cookies otherwise: the one that
@@ -197,19 +198,25 @@ class Testing::Client
   def delete(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
              headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("DELETE", path, params, json, headers)
 
-  # A GET of where `res` redirects to: a path of the application, or a
-  # URL of the client's host (`Test::AssertionFailed` for another host);
-  # the fragment is dropped.
+  # A GET of where `res` redirects to, resolved as a browser does against
+  # the last request (`?page=2`, `edit`, `//www.example.com/x`,
+  # `http://www.example.com:80/x`); `Test::AssertionFailed` for another
+  # host. The fragment is dropped.
   def follow_redirect(res: HTTP::Server::Response = last) -> HTTP::Server::Response
     location = Testing.redirected_to(res, nil).partition("#")[0]
-    m = location.match(/\A[A-Za-z][A-Za-z0-9+.\-]*:\/\/([^\/?]*)(.*)\z/)
+    m = location.match(/\A(?:[A-Za-z][A-Za-z0-9+.\-]*:)?\/\/([^\/?]*)(.*)\z/)
     if m
-      host = m[1] || ""
-      Testing.fail("the redirect leaves the application: #{location}") unless host.downcase == @host.downcase
-      path = m[2] || ""
-      location = path.empty? ? "/" : path
+      authority = (m[1] || "").downcase
+      authority = authority.delete_suffix(":80").delete_suffix(":443")
+      Testing.fail("the redirect leaves the application: #{location}") unless authority == @host.downcase
+      rest = m[2] || ""
+      location = rest.start_with?("/") ? rest : "/#{rest}"
+    elsif location.start_with?("?")
+      location = @last_path + location
+    elsif !location.start_with?("/")
+      cut = @last_path.rindex("/") || 0
+      location = @last_path[0, cut + 1] + location
     end
-    Testing.fail("the redirect is not a path: #{location}") unless location.start_with?("/") && !location.start_with?("//")
     get(location)
   end
 
@@ -231,6 +238,7 @@ class Testing::Client
     parts = [given_cookie || "", jar].reject(&:empty?)
     h = h.put("Cookie", parts.join("; ")) unless parts.empty?
     res = @endpoint.call(HTTP::Server::Request.build(method, target, HTTP::Headers.of(h), body), @app)
+    @last_path = target.partition("?")[0]
     take(res)
     @last = res
     res
@@ -311,8 +319,10 @@ class Testing::Client
       name, eq, value = pair.partition("=")
       next if eq.empty?
       # (Max-Age zero or less deletes it; an Expires date is not read.)
-      age = sc.match(/;\s*max-age\s*=\s*(-?[0-9]+)/i)
-      if age && (age[1] || "0").to_i <= 0
+      age = sc.match(/;\s*max-age\s*=\s*(-?)([0-9]+)/i)
+      # (Digits beyond what an Int holds are a long time ahead.)
+      gone = !age.nil? && (age[1] == "-" || ((age[2] || "").size <= 15 && (age[2] || "0").to_i == 0))
+      if gone
         @cookies = @cookies.delete(name)
       else
         @cookies = @cookies.put(name, value)
