@@ -5,8 +5,9 @@
 # accepts none of them, or names another `_format`, is
 # `Bezel::NotAcceptable` (`406`).
 #
-# The formats and their media types: `html` (`text/html`; not
-# `application/xhtml+xml`, so that `application/*` is no HTML), `json`
+# The formats and their media types: `html` (`text/html`, and
+# `application/xhtml+xml` when named exactly, so that `application/*` is
+# no HTML), `json`
 # (`application/json`), `text` (`text/plain`), `xml` (`application/xml`
 # and `text/xml`), `csv` (`text/csv`).
 #
@@ -52,6 +53,9 @@ class Plug::Accepts
   # it (`text/html;q=0` refuses HTML even under `*/*`), a format the best
   # of its media types', and the highest quality above 0 wins, the format
   # listed first among equals.
+  # Media types a format takes only when the header names them exactly.
+  EXACT = {"html" => ["application/xhtml+xml"]}
+
   def choose(accept: String) -> String?
     ranges: Array[[String, Float]] = []
     accept.split(",").each do |part|
@@ -93,6 +97,12 @@ class Plug::Accepts
           end
         end
         fq = tq if tq > fq
+      end
+      (EXACT[f]? || []).each do |t|
+        ranges.each do |rq|
+          range, q = rq
+          fq = q if range == t && q > fq
+        end
       end
       if fq > best_q
         best = f

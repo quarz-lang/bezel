@@ -41,6 +41,32 @@ class RtPages < Bezel::Controller
   def data(conn: Bezel::Conn) -> Bezel::Conn = json(conn, JSON.parse("{\"format\": \"#{conn.format}\"}"))
 end
 
+# Three levels, the subclass written first: the statements still run
+# ancestors first (docs/14 §2); the middle one names an inherited action.
+class RtLeaf < RtMid
+  controller do
+    plug :leaf_mark
+  end
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "leaf #{conn.assign?(:b) || "-"} #{conn.assign?(:m) || "-"} #{conn.assign?(:l) || "-"}")
+  private def leaf_mark(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:l, "L")
+end
+
+class RtMid < RtBase
+  controller do
+    plug :mid_mark, only: [:show]
+  end
+  private def mid_mark(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:m, "M")
+end
+
+class RtBase < Bezel::Controller
+  controller do
+    plug :base_mark, except: [:index]
+  end
+  def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "leaf #{conn.assign?(:b) || "-"} #{conn.assign?(:m) || "-"} #{conn.assign?(:l) || "-"}")
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "base")
+  private def base_mark(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:b, "B")
+end
+
 class RtAdminBase < Bezel::Controller
   controller do
     plug :require_admin
@@ -97,6 +123,8 @@ class RtRouter < Bezel::Router
       get "/bare", RtAdminBare, :index
       get "/more", RtPagesMore, :more
       options "/data", RtPages, :data
+      get "/probe", RtPages, :me
+      head "/probe", RtPages, :home
       resources "/posts/", RtComments, only: [:index] do
         get "/x", RtPages, :me, as: "x"
       end
@@ -149,6 +177,8 @@ class RouterTest < Test::Case
       "GET /admin/bare - index",
       "GET /admin/more - more",
       "OPTIONS /admin/data - data",
+      "GET /admin/probe - me",
+      "HEAD /admin/probe - home",
       "GET /admin/posts admin_posts index",
       "GET /admin/posts/{post_id}/x admin_post_x me"
     ], names)
@@ -169,11 +199,16 @@ class RouterTest < Test::Case
     [".", "..", ""].each { |bad| assert_raise(ArgumentError) { RtRouter.user_path(id: bad) } }
     assert_raise(ArgumentError) { RtRouter.file_path(path: "../../etc/passwd") }
     assert_raise(ArgumentError) { RtRouter.file_path(path: "a//b") }
+    assert_equal("/files/", RtRouter.file_path(path: ""))
     assert_equal("/users/.x", RtRouter.user_path(id: ".x"))
     assert_equal("/users?page=2&tag=a+b&tag=c", Bezel::Router.with_query(RtRouter.users_path, {"page" => "2", "tag" => ["a b", "c"]}))
     assert_equal("/users", Bezel::Router.with_query("/users", Hash[String, String | Array[String]].new))
     c = Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Host" => "shop.example"})))
     assert_equal("http://shop.example/users/1", c.url(RtRouter.user_path(id: 1)))
+    evil = Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Host" => "evil.example/x?"})))
+    assert_raise(Bezel::BadRequest) { evil.url("/users/1") }
+    v6 = Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Host" => "[::1]:8080"})))
+    assert_equal("http://[::1]:8080/", v6.url("/"))
   end
 
   def test_routing_and_pipelines
@@ -229,7 +264,20 @@ class RouterTest < Test::Case
   def test_an_action_the_statement_does_not_cover_is_a_500
     res = get("/admin/more")
     assert_equal(500, res.status)
-    assert_match(/RtPagesMore|RtPages has no action more/, text_of(res))
+    assert_match(/RtPages has no action more \(a subclass&#39;s actions need its own `controller` statement\)/, text_of(res))
+  end
+
+  def test_a_head_route_beats_get_for_head
+    res = RtEndpoint.call(HTTP::Server::Request.head("/admin/probe"))
+    assert_match(/\Ahome /, text_of(res))
+    assert_equal("me", text_of(get("/admin/probe")))
+  end
+
+  def test_three_levels_declared_subclass_first
+    assert_equal([:base_mark, :mid_mark, :leaf_mark], RtLeaf.controller_plugs.map(&:method))
+    c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    assert_equal("leaf B M L", (RtLeaf.new.dispatch(:show, c).resp_body.as(HTTP::Content::Text)).text)
+    assert_equal("leaf - - L", (RtLeaf.new.dispatch(:index, c).resp_body.as(HTTP::Content::Text)).text)
   end
 
   def test_options_route

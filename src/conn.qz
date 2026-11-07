@@ -119,8 +119,13 @@ data Conn(
   # (`localhost` without one), which the proxy in front sets: behind
   # none, a client chooses it, so a URL meant for elsewhere (an email's
   # link) should use a host of the configuration's instead.
+  #
+  # A Host header that is not a host and an optional port (letters,
+  # digits, `.`, `-`, `:`, `[` and `]`) is `Bezel::BadRequest`, so that it
+  # cannot bring a path or a query of its own.
   def url(path: String) -> String
     host = request.host || "localhost"
+    raise BadRequest.new("the Host header is not a host") unless host.match?(/\A[A-Za-z0-9.\-:\[\]]+\z/)
     "#{request.scheme}://#{host}#{path}"
   end
 

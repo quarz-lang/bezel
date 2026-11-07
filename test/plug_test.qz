@@ -210,6 +210,7 @@ class PlugTest < Test::Case
     assert_equal(:json, accept("application/json, text/*;q=0"))
     assert_equal(:json, accept("*/*, text/html;q=0"))
     assert_equal(:json, accept("application/*"))
+    assert_equal(:html, accept("application/xhtml+xml"))
     assert_equal(:json, accept(nil, target: "/?_format=json"))
     assert_raise(Bezel::NotAcceptable) { accept("image/png") }
     assert_raise(Bezel::NotAcceptable) { accept("text/html;q=0") }

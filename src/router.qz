@@ -160,7 +160,8 @@ abstract class Router
         else
           raise ArgumentError.new("#{key}: an Int or a String, not #{v.nil? ? "nil" : v.class.name}")
         end
-        pieces = rest ? text.split("/", -1) : [text]
+        # (A rest may be empty, `/files/{p...}` matching `/files/`.)
+        pieces: Array[String] = rest && text.empty? ? [] : (rest ? text.split("/", -1) : [text])
         pieces.each do |p|
           # (A dot segment would leave the route once a client resolves
           # the path.)
@@ -198,7 +199,10 @@ abstract class Router
       next if params.nil?
       if cr.route.method == method || (method == "HEAD" && cr.route.method == "GET")
         score = HTTP.specificity(cr.segments)
-        if found.nil? || (score <=> best) > 0
+        # (A route of the request's own method beats GET's serving HEAD.)
+        prev = found
+        better_method = !prev.nil? && score == best && cr.route.method == method && prev.route.method != method
+        if prev.nil? || (score <=> best) > 0 || better_method
           found = cr
           found_params = params
           best = score
