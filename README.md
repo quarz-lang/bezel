@@ -173,6 +173,10 @@ type-checked and escaped as hand-written DSL code is:
 - `:for={pattern <- expr}` and `:if={expr}` repeat or guard an element;
   `<.card>` is a component (`Card.new(title: "Help")`, the content its
   `content`), `<:footer>` a slot (a `footer:` argument, a `Bezel::Html`).
+- Code in braces is one expression the compiler can delimit as Quarz
+  will: `/` and `%` are operators with a space on each side
+  (`a.size / 2`) or start a literal right after `(`, `[` or a comma
+  (`gsub(/\s/, "")`); no `#` comments or heredocs.
 - An unknown element or attribute, a boolean attribute given a string,
   an unclosed tag: an error naming the template's line. `<!-- -->` is
   a comment of the template, left out of the page.

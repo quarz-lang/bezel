@@ -92,7 +92,7 @@ class TemplatesTest < Test::Case
       ["<input disabled=\"disabled\">", "v/t.html.bz:1: disabled of <input> is boolean: bare (disabled) or an expression (disabled={...})"],
       ["<td colspan=\"two\"></td>", "v/t.html.bz:1: colspan of <td> needs an integer, not \"two\""],
       ["<p id=\"a\" id=\"b\"></p>", "v/t.html.bz:1: id is given twice"],
-      ["<p>\n{x</p>", "v/t.html.bz:2: { is not closed (a { in a text is written {\"{\"})"],
+      ["<p>\n{x + (y", "v/t.html.bz:2: { is not closed (a { in a text is written {\"{\"})"],
       ["<p>{ }</p>", "v/t.html.bz:1: {} holds no expression"],
       ["<p>x</p>\n{@args x: Int}", "v/t.html.bz:2: {@args ...} comes before the rest of the template"],
       ["{@args h: Int}", "v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)"],
@@ -154,7 +154,6 @@ class TemplatesTest < Test::Case
   def test_braces_skip_regexps
     assert(code_of("<p>{x.gsub(/\"/, \"\")}</p>").include?("h.put((x.gsub(/\"/, \"\")))"))
     assert(code_of("<p>{x.gsub(/}/, \"\")}</p>").include?("h.put((x.gsub(/}/, \"\")))"))
-    assert(code_of("<p>{a / b} \"</p>").include?("h.put((a / b))"))
   end
 
   def test_late_errors_are_template_errors
@@ -197,12 +196,6 @@ class TemplatesTest < Test::Case
     # (Whitespace inside `pre` is kept in components too.)
     assert(code_of("<pre><.card>  a\n\n   b  </.card></pre>").include?("h.text(#{lit("  a\n\n   b  ")})"))
     # (The scanner.)
-    assert(code_of("{@args n: Int}\n<p>{n / 2}{n/2}{1 + @x /2}{N /2}</p>").include?("h.put((n / 2))"))
-    assert(code_of("<p>{xs.reduce(:/)}</p>").include?("h.put((xs.reduce(:/)))"))
-    assert(code_of("<p>{%q(\")}</p>").include?("h.put((%q(\")))"))
-    assert(code_of("<p>{%q|}|}</p>").include?("h.put((%q|}|))"))
-    assert(code_of("<p>{%r{/}}</p>").include?("h.put((%r{/}))"))
-    assert(code_of("<p>{a % b}</p>").include?("h.put((a % b))"))
     assert_equal("v/t.html.bz:1: a # comment cannot be in {...}", error_of("<p>{\"\#{x #c}\"}</p>"))
     # (Component names are in lowercase; long numeric references.)
     assert_equal("v/t.html.bz:1: <.UserCard> is not a component name (<.card>, <.admin.user_card>)", error_of("<.UserCard/>"))
@@ -210,15 +203,6 @@ class TemplatesTest < Test::Case
   end
 
   def test_third_review
-    amb = "the compiler cannot tell how Quarz reads a / or % (or \\) in {...}: write `a / b` or `f(/x/)`, on one line"
-    assert_equal("v/t.html.bz:1: #{amb}", error_of("<p>{items.size /2}</p><p>a/b</p>"))
-    assert_equal("v/t.html.bz:1: #{amb}", error_of("<p>Total: {puts %|}|, 0)); puts(:INJECTED); z = '{'</p>"))
-    assert_equal("v/t.html.bz:1: #{amb}", error_of("<p>{a.empty? /2}</p>"))
-    assert(code_of("<p>{a.empty? / 2}</p>").include?("h.put((a.empty? / 2))"))
-    assert(code_of("<p>{c ? a:/x}/ : b}</p>").include?("h.put((c ? a:/x}/ : b))"))
-    assert(code_of("<p>{x if /}/ =~ y}</p>").include?("h.put((x if /}/ =~ y))"))
-    assert(code_of("<p>{%(\#{f(\")\")})}</p>").include?("h.put((%(\#{f(\")\")})))"))
-    assert(code_of("<p>{%|\#{a || b}|}</p>").include?("h.put((%|\#{a || b}|))"))
     heredoc = "v/t.html.bz:1: a heredoc cannot be in {...} (write `<< x` with a space for the operator)"
     assert_equal(heredoc, error_of("{@args x: String}<p>{<<~end}<b>{x}</b></p>"))
     assert_equal(heredoc, error_of("<p>{raw(<<-X)}</p>"))
@@ -232,30 +216,46 @@ class TemplatesTest < Test::Case
   end
 
   def test_fourth_review
-    amb = "v/t.html.bz:1: the compiler cannot tell how Quarz reads a / or % (or \\) in {...}: write `a / b` or `f(/x/)`, on one line"
     # (`b"..."` does not interpolate: the `}` inside it is its own.)
     assert(code_of("<p>{b\"\#{\".size}</p>").include?("h.put((b\"\#{\".size))"))
     # (After a keyword that is no value, a `/` starts a literal.)
-    assert(code_of("<p>{begin / \"[\"}]/ end}</p>").include?("h.put((begin / \"[\"}]/ end))"))
-    assert(code_of("<p>{x.class /}/}</p>").include?("h.put((x.class /}/))"))
-    assert(code_of("<p>{self / 2}</p>").include?("h.put((self / 2))"))
-    assert_equal(amb, error_of("<p>{total\n  / count}</p>"))
-    assert_equal(amb, error_of("<p>{a \\\n/}/}</p>"))
-    assert(code_of("<p>{1../}/}</p>").include?("h.put((1../}/))"))
-    assert(code_of("<p>{x / /}/}</p>").include?("h.put((x / /}/))"))
-    assert(code_of("<p>{f(\"a\":/}/)}</p>").include?("h.put((f(\"a\":/}/)))"))
-    assert_equal(amb, error_of("<p>{f(a?:/)}/}</p>"))
-    assert_equal(amb, error_of("<p>{1?/}/}</p>"))
-    assert_equal(amb, error_of("<p>{x + @a?/}/}</p>"))
-    assert_equal(amb, error_of("<p>{café /}/}</p>"))
-    assert(code_of("<p>{f(fé:/}/)}</p>").include?("h.put((f(fé:/}/)))"))
-    assert(code_of("<p>{éif / 2}</p>").include?("h.put((éif / 2))"))
-    assert(code_of("<p>{x = %\f}\f}</p>").include?("h.put((x = %\f}\f))"))
-    assert(code_of("<p>{a %= 2}</p>").include?("h.put((a %= 2))"))
     assert_equal("v/t.html.bz:1: :for's pattern is names, commas, parentheses and braces", error_of("<p :for={f(\" <- '\") <- list}>x</p>it's"))
-    assert_equal("v/t.html.bz:1: { is not closed (a { in a text is written {\"{\"})", error_of("{@args / }/"))
+    assert_equal("v/t.html.bz:1: a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal right after (, [ or a comma (`f(/x/)`), on one line; no \\ outside literals", error_of("{@args / }/"))
     assert_equal("v/t.html.bz:1: :for's pattern is names, commas, parentheses and braces", error_of("<p :for={\"a\" <- list}>x</p>"))
     assert(code_of("<p :for={x <- f(\" <- \")}>x</p>").include?("(f(\" <- \")).each do |x|"))
+  end
+
+  # `/` and `%` in code: the subset the compiler delimits as Quarz's
+  # lexer does (an operator spaced after a value, a literal after `(`,
+  # `[`, a comma or the opening brace); the rest is refused.
+  def test_slash_and_percent
+    [
+      "{a / b}", "{a.size / 2}", "{a.empty? / 2}", "{n % 3}", "{N / 2}", "{1.5 / x}", "{self / 2}",
+      "{f(x) / 2}", "{a[0] / 2}", "{\"s\" / 2}", "{éif / 2}", "{a %= 2}", "{a % b}", "{a %b}",
+      "{x.gsub(/\"/, \"\")}", "{x.gsub(/}/, \"\")}", "{x.gsub(/a/i, \"\")}", "{f(x, /}/)}",
+      "{[/a/, /b/]}", "{/}/.match?(x)}", "{%w[a b]}", "{%q(\")}", "{%q|}|}", "{%r{/}i}",
+      "{f(%(\#{g(\")\")}))}", "{f(%|\#{a || b}|)}", "{(/r/i) / 2}", "{xs << y}", "{xs<<1}",
+      "{b\"\#{\".size}", "{f(a: b\"x\")}"
+    ].each do |code|
+      assert(code_of("<p>#{code}</p>").include?("h.put("), code)
+    end
+    amb = "a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal right after (, [ or a comma (`f(/x/)`), on one line; no \\ outside literals"
+    [
+      # (Spacing: `a /b` is a call's argument unless `a` is a local.)
+      "{n/2}", "{a /2}", "{a/ 2}", "{items.size /2}", "{a %|b|}", "{puts %|}|, 0)}",
+      # (Not after a plain value.)
+      "{x if /}/ =~ y}", "{c ? a : /x/}", "{a + /x/}", "{1../}/}", "{x / /}/}", "{begin / \"[\"}]/ end}",
+      "{x.class / 1}", "{def / x}", "{x.def / 1}", "{:if / x}", "{:+ / x}", "{:a / x}", "{@a / 2}",
+      "{@@a / x}", "{$a / x}", "{!@ / x}", "{-@ / x}", "{a.:/ x}", "{1? / x}", "{A? / x}",
+      "{f(1:/\"/)}", "{f(\"a\":/}/)}", "{f(a?:/)}/}", "{/r/if /\"/}", "{/r/i? / 2}", "{%q(s):/}",
+      # (Line breaks and backslashes.)
+      "{total\n  / count}", "{a \\\n/ 2}", "{a = \\x}"
+    ].each do |code|
+      assert_equal("v/t.html.bz:1: #{amb}", error_of("<p>#{code}</p>"), code)
+    end
+    assert_equal("v/t.html.bz:1: `:b\"` in {...} reads as a label or a symbol: put a space after the colon", error_of("<p>{f(a:b\"x\")}</p>"))
+    # (Regular expression flags are the literal's, so `b` here is one.)
+    assert(code_of("<p>{f(/r/b, \"\#{\"}\"}\")}</p>").include?("f(/r/b, \"\#{\"}\"}\")"))
   end
 
   def test_module_sources_are_checked
