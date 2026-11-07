@@ -56,25 +56,41 @@ module Cli::Gen
 
   # Fails when the application declares `name` (`Shop::Post`) already:
   # a line of src/ starting `class`, `module`, `data`, `enum` or `type`
-  # (after `abstract`), naming it whole, or, in a file whose top level
-  # opens `module Shop` (the only place a nested declaration is the
-  # application's own: modules are not reopened), its last part
-  # indented. (A text scan: a heredoc's line may be taken for a
+  # (after `abstract`) and naming it whole, or naming its last part at
+  # the first level inside a top-level `module Shop ... end` (the only
+  # place a nested declaration is the application's own: modules are not
+  # reopened). (A text scan: a heredoc's line may be taken for a
   # declaration, which the message names.)
   def self.undeclared(app: Cli::App, name: String) -> Void
-    head = "(?m)^[ \\t]*(abstract[ \\t]+)?(class|module|data|enum|type)[ \\t]+"
-    tail = "([^A-Za-z0-9_:]|$)"
-    whole = Regexp.new(head + Regexp.escape(name) + tail)
+    decl = "[ \\t]*(abstract[ \\t]+)?(class|module|data|enum|type)[ \\t]+"
+    tail = "([^A-Za-z0-9_:].*)?\\z"
+    whole = Regexp.new("\\A" + decl + Regexp.escape(name) + tail)
     last = name.split("::").last? || name
-    nested = Regexp.new("(?m)^[ \\t]+(abstract[ \\t]+)?(class|module|data|enum|type)[ \\t]+" + Regexp.escape(last) + tail)
-    root_module = Regexp.new("(?m)^module[ \\t]+" + Regexp.escape(app.module_name) + "[ \\t]*$")
+    nested = Regexp.new("\\A" + decl + Regexp.escape(last) + tail)
+    opens = Regexp.new("\\Amodule[ \\t]+" + Regexp.escape(app.module_name) + "[ \\t]*(#.*)?\\z")
     Dir.glob("src/**/*.qz", app.root).each do |f|
       full = File.join(app.root, f)
       # (As the compiler: files only, not a directory or a dangling link.)
       next unless File.file?(full)
-      text = File.read(full)
-      inside = text.match?(root_module) && text.match?(nested)
-      raise Cli::Error.new("#{name} is declared already (#{f})") if text.match?(whole) || inside
+      inside = false
+      level: String? = nil
+      File.read(full).split("\n").each do |raw|
+        line = raw.delete_suffix("\r")
+        found = line.match?(whole)
+        if inside
+          if line.match?(/\Aend\b/)
+            inside = false
+          elsif !line.strip.empty? && !line.strip.start_with?("#")
+            indent = line[0, line.size - line.lstrip.size]
+            level = indent if level.nil?
+            found = true if indent == level && line.match?(nested)
+          end
+        elsif line.match?(opens)
+          inside = true
+          level = nil
+        end
+        raise Cli::Error.new("#{name} is declared already (#{f})") if found
+      end
     end
   end
 
