@@ -32,9 +32,11 @@ class Shop::Endpoint < Bezel::Endpoint
   end
 end
 
-# HOST, PORT, DATABASE_URL, SECRET_KEY_BASE... from the environment,
-# over the application's settings per environment
-Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://localhost/shop_dev")})
+# HOST, PORT, DATABASE_URL, SECRET_KEY_BASE... from the environment, over
+# the application's settings for its BEZEL_ENV (prod when unset: run with
+# BEZEL_ENV=dev when developing)
+Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://localhost/shop_dev"),
+                             prod: Bezel::Settings.new(port: 8080)})
 ```
 
 - **`Bezel::Conn`** is a `data` value: the request, the merged
@@ -55,7 +57,7 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
   backtrace and the request (HTML, or JSON for a JSON `Accept`); in
   `prod` it shows the status only. Headers the plugs set (the request
   id) stay on the error page.
-- **`Bezel::Config`** reads `BEZEL_ENV` (`dev`, `test`, `prod`), `HOST`,
+- **`Bezel::Config`** reads `BEZEL_ENV` (`dev`, `test`, `prod`; `prod` when unset, so that a deploy that forgets it shows no backtraces), `HOST`,
   `PORT`, `DATABASE_URL`, `POOL_SIZE`, `SECRET_KEY_BASE` (required in
   `prod`, 64 bytes or more), `TRUSTED_PROXIES`, `TLS_CERT`/`TLS_KEY` and
   `LOG_LEVEL` over the application's own `Bezel::Settings` per

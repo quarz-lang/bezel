@@ -2,10 +2,17 @@ require "test"
 
 class ConfigTest < Test::Case
   def load(environ: Hash[String, String], settings: Hash[Symbol, Bezel::Settings] = {}) -> Bezel::Config
-    Bezel::Config.load("shop", settings, environ, quiet: true)
+    Bezel::Config.load("shop", settings, {"BEZEL_ENV" => "dev"}.merge(environ), quiet: true)
   end
 
-  def test_defaults
+  def test_unset_env_is_prod
+    e = assert_raise(Bezel::ConfigError) { Bezel::Config.load("shop", environ: Hash[String, String].new, quiet: true) }
+    assert_match(/SECRET_KEY_BASE is required in prod/, e.message)
+    c = Bezel::Config.load("shop", environ: {"SECRET_KEY_BASE" => "s" * 64}, quiet: true)
+    assert_true(c.prod?)
+  end
+
+  def test_dev_defaults
     c = load({})
     assert_equal(:dev, c.env)
     assert_true(c.dev?)

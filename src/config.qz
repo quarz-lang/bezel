@@ -24,7 +24,7 @@ end
 #
 # | Variable | Setting | Default |
 # |---|---|---|
-# | BEZEL_ENV | `env`: `dev`, `test` or `prod` | `dev` |
+# | BEZEL_ENV | `env`: `dev`, `test` or `prod` | `prod`: set `BEZEL_ENV=dev` when developing (`Bezel::App.test` sets `test`) |
 # | HOST, PORT | where the server listens | `0.0.0.0`, `4000` |
 # | DATABASE_URL | the database, a `PG::Pool` behind `Rotor::Repo` | none |
 # | POOL_SIZE | the pool's connections | 10 |
@@ -83,7 +83,7 @@ data Config(
   def self.load(app: String, settings: Hash[Symbol, Settings] = {},
                 environ: Hash[String, String] = ENV, quiet: Bool = false) -> Config
     raise ConfigError.new("the application's name is empty") if app.empty?
-    env_name = Config.var(environ, "BEZEL_ENV") || "dev"
+    env_name = Config.var(environ, "BEZEL_ENV") || "prod"
     env = env_name.to_sym
     unless ENVS.include?(env)
       raise ConfigError.new("BEZEL_ENV must be dev, test or prod, not #{env_name.inspect}")
@@ -133,7 +133,7 @@ data Config(
     if secret
       raise ConfigError.new("SECRET_KEY_BASE must be at least 64 bytes (it has #{secret.bytesize})") if secret.bytesize < 64
     elsif env == :prod
-      raise ConfigError.new("SECRET_KEY_BASE is required in prod (64 bytes or more; `openssl rand -hex 32` gives one)")
+      raise ConfigError.new("SECRET_KEY_BASE is required in prod (64 bytes or more; `openssl rand -hex 32` gives one); BEZEL_ENV is prod unless set to dev or test")
     else
       secret = Config.dev_secret(app)
       STDERR.puts "bezel: SECRET_KEY_BASE is not set; #{env} uses one derived from the application's name, not for production" unless quiet || env == :test
