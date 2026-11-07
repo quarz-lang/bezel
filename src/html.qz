@@ -240,6 +240,11 @@ class HtmlBuilder
     close_tag(tag)
   end
 
+  # The elements whose content the parser reads as text up to their end
+  # tag (raw text and RCDATA, and `noscript`, raw text when scripting is
+  # on).
+  TEXT_CONTAINERS = ["textarea", "title", "noscript", "iframe", "noembed", "noframes", "xmp"]
+
   # :nodoc:
   def self.newline_sensitive?(tag: String) -> Bool = tag == "textarea" || tag == "pre" || tag == "listing"
 
@@ -250,10 +255,16 @@ class HtmlBuilder
   # :nodoc:
   def tag_block(tag: String, attrs: AttrList, block: (() -> Void)?) -> Void
     b = block
-    if b && HtmlBuilder.newline_sensitive?(tag)
+    if b && (HtmlBuilder.newline_sensitive?(tag) || TEXT_CONTAINERS.include?(tag))
       inner = capture(&b)
+      # (Raw text or RCDATA: the parser ends it at its end tag, whatever
+      # wrote it (a script's or style's content, `raw`), and reads the
+      # rest as markup.)
+      if TEXT_CONTAINERS.include?(tag) && inner.source.downcase.include?("</#{tag}")
+        raise ArgumentError.new("the content of <#{tag}> holds </#{tag}: it would end the element")
+      end
       open_tag(tag, attrs)
-      @out << "\n" if HtmlBuilder.starts_with_newline?(inner.source)
+      @out << "\n" if HtmlBuilder.newline_sensitive?(tag) && HtmlBuilder.starts_with_newline?(inner.source)
       append(inner)
     else
       open_tag(tag, attrs)
@@ -298,10 +309,10 @@ class AttrList
                "ping", "manifest", "codebase", "longdesc", "usemap", "icon", "lowsrc", "dynsrc"]
 
   # Attributes `attrs:` refuses: `srcdoc` is a document, run with the
-  # page's origin, which no escaping makes safe; `http-equiv` and
-  # `content` are `meta`'s typed `http_equiv:` and `content:`, which check
-  # a refresh's URL.
-  REFUSED = ["srcdoc", "http-equiv", "content"]
+  # page's origin, which no escaping makes safe. (A `meta` refuses
+  # `http-equiv` and `content` in `attrs:` too: its typed keywords check
+  # a refresh's URL.)
+  REFUSED = ["srcdoc"]
 
   # The attributes as HTML (each with a leading space).
   def source -> String = @buf.to_s
@@ -325,6 +336,17 @@ class AttrList
       end
     end
     str(name, v)
+  end
+
+  # :nodoc:
+  # A `<meta>`'s `attrs:` without `content` and `http-equiv`, which its
+  # typed keywords take (so that a refresh's URL is checked).
+  def meta_attrs(attrs: Hash[String, String]) -> AttrList
+    attrs.each_key do |k|
+      low = k.downcase
+      raise ArgumentError.new("meta: give #{low} as the keyword #{low.gsub("-", "_")}:, not in attrs:") if low == "content" || low == "http-equiv"
+    end
+    self
   end
 
   # A `<meta>`'s `content`: for a refresh (`http_equiv` `refresh`), the
@@ -395,7 +417,7 @@ class AttrList
     attrs.each do |k, v|
       n = AttrList.name!(k)
       low = n.downcase
-      raise ArgumentError.new("#{n}: refused in attrs: (srcdoc runs with the page's origin; give meta's http_equiv: and content: as keywords)") if REFUSED.include?(low)
+      raise ArgumentError.new("#{n}: refused in attrs: (it runs with the page's origin)") if REFUSED.include?(low)
       if URL_NAMES.include?(low)
         url(n, v)
       elsif low == "srcset" || low == "imagesrcset"

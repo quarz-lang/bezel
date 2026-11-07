@@ -273,4 +273,13 @@ class HtmlTest < Test::Case
     out = Bezel.html { |h| h.form_for(cs, action: "/u") { |f| f.text_field(:email) } }.to_s
     assert_true(out.include?("value=\"bad\""))
   end
+
+  def test_text_containers_cannot_be_closed_from_inside
+    assert_raise(ArgumentError) { page { |h| h.noscript { h.style("</noscript><img src=x onerror=alert(1)>") } } }
+    assert_raise(ArgumentError) { page { |h| h.textarea { h.raw("</TEXTAREA><b>") } } }
+    assert_raise(ArgumentError) { page { |h| h.title { h.script("</title><img>") } } }
+    assert_raise(ArgumentError) { page { |h| h.iframe { h.style("</iframe><img>") } } }
+    assert_equal("<noscript><p>Enable JavaScript</p></noscript>", page { |h| h.noscript { h.p("Enable JavaScript") } })
+    assert_equal("<span content=\"x\"></span>", page { |h| h.span(attrs: {"content" => "x"}) })
+  end
 end
