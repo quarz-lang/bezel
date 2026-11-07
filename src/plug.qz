@@ -1,7 +1,7 @@
 # A step of an endpoint's pipeline: takes the connection and returns it
 # changed, as Elixir's Plug does. A plug that answers the request calls
-# `Conn#halt` (or one of `Conn#text`, `#html`, `#json`, `#redirect`,
-# `#send_resp`, which halt), and the plugs after it do not run.
+# `Conn#halt` (or one of `Conn#text`, `Conn#html`, `Conn#json`, `Conn#redirect`,
+# `Conn#send_resp`, which halt), and the plugs after it do not run.
 #
 # Plugs are Shareable values, made once when the endpoint starts and
 # used by every request: their settings are fields, their state per

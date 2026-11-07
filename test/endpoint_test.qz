@@ -1,0 +1,125 @@
+require "test"
+
+class EndpointTestApp < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug]
+    [Bezel::Plug::RequestId.new,
+     Bezel::Plug::Parsers.new,
+     Bezel::Plug::MethodOverride.new,
+     Bezel::Plug::Head.new,
+     Bezel.plug do |conn|
+       case [conn.method, conn.path]
+       in ["GET", "/"] then conn.text("home")
+       in ["GET", "/user"] then conn.text("user #{conn.params.int("id")}")
+       in ["DELETE", "/user"] then conn.put_status(204).text("")
+       in ["GET", "/json"] then conn.json(JSON.parse("{\"a\": 1}"))
+       in ["GET", "/go"] then conn.redirect("/")
+       in ["GET", "/forbidden"] then raise Bezel::Forbidden.new
+       in ["GET", "/boom"] then raise ArgumentError.new("<boom>")
+       else conn
+       end
+     end]
+  end
+
+  def self.on_error(error: Exception, conn: Bezel::Conn) -> Void
+    EndpointTestApp::ERRORS.update { |es| es.push("#{error.class.name} #{conn.path}") }
+  end
+
+  ERRORS = Atom.new(Array[String].new)
+end
+
+class EndpointTest < Test::Case
+  def text_of(res: HTTP::Server::Response) -> String
+    case res.body
+    in HTTP::Content::Text(text:) then text
+    in HTTP::Content::Empty then ""
+    else ""
+    end
+  end
+
+  def prod -> Bezel::App
+    Bezel::App.new(Bezel::Config.load("t", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "k" * 64}))
+  end
+
+  def test_answers
+    res = EndpointTestApp.call(HTTP::Server::Request.get("/"))
+    assert_equal(200, res.status)
+    assert_equal("home", text_of(res))
+    assert_equal("text/plain; charset=utf-8", res.headers["content-type"])
+    assert_equal(22, (res.headers["x-request-id"] || "").size)
+    assert_equal("user 7", text_of(EndpointTestApp.call(HTTP::Server::Request.get("/user?id=7"))))
+    assert_equal(1, JSON.parse(text_of(EndpointTestApp.call(HTTP::Server::Request.get("/json"))))["a"].as_i)
+    go = EndpointTestApp.call(HTTP::Server::Request.get("/go"))
+    assert_equal(302, go.status)
+    assert_equal("/", go.headers["location"])
+    head = EndpointTestApp.call(HTTP::Server::Request.head("/"))
+    assert_equal(200, head.status)
+  end
+
+  def test_method_override_through_the_endpoint
+    req = HTTP::Server::Request.post("/user", "_method=DELETE",
+      HTTP::Headers.of({"Content-Type" => "application/x-www-form-urlencoded"}))
+    assert_equal(204, EndpointTestApp.call(req).status)
+  end
+
+  def test_not_found
+    res = EndpointTestApp.call(HTTP::Server::Request.get("/nothing"))
+    assert_equal(404, res.status)
+    assert_match(/Bezel::NotFound/, text_of(res))
+    assert_match(/no route for GET \/nothing/, text_of(res))
+  end
+
+  def test_http_errors_keep_their_status
+    res = EndpointTestApp.call(HTTP::Server::Request.get("/forbidden"))
+    assert_equal(403, res.status)
+    bad = EndpointTestApp.call(HTTP::Server::Request.get("/user?id=x"))
+    assert_equal(400, bad.status)
+    assert_match(/not an integer/, text_of(bad))
+    query = EndpointTestApp.call(HTTP::Server::Request.get("/?a=%ff"))
+    assert_equal(400, query.status)
+  end
+
+  def test_dev_error_page_escapes_and_reports
+    before = EndpointTestApp::ERRORS.value.size
+    res = EndpointTestApp.call(HTTP::Server::Request.get("/boom?x=%3Cy%3E"))
+    assert_equal(500, res.status)
+    assert_equal("text/html; charset=utf-8", res.headers["content-type"])
+    page = text_of(res)
+    assert_match(/ArgumentError/, page)
+    assert_match(/&lt;boom&gt;/, page)
+    assert_false(page.include?("<boom>"))
+    assert_false(page.include?("<y>"))
+    assert_match(/Backtrace/, page)
+    assert_equal(before + 1, EndpointTestApp::ERRORS.value.size)
+    assert_equal("ArgumentError /boom", EndpointTestApp::ERRORS.value.last)
+    four = EndpointTestApp.call(HTTP::Server::Request.get("/forbidden"))
+    assert_equal(403, four.status)
+    assert_equal(before + 1, EndpointTestApp::ERRORS.value.size)
+  end
+
+  def test_dev_error_json
+    req = HTTP::Server::Request.get("/boom", HTTP::Headers.of({"Accept" => "application/json"}))
+    res = EndpointTestApp.call(req)
+    assert_equal(500, res.status)
+    body = JSON.parse(text_of(res))
+    assert_equal("ArgumentError", body["error"]["class"].as_s)
+    assert_equal("<boom>", body["error"]["message"].as_s)
+    assert_equal(500, body["error"]["status"].as_i)
+  end
+
+  def test_prod_error_pages
+    res = EndpointTestApp.call(HTTP::Server::Request.get("/boom"), prod)
+    assert_equal(500, res.status)
+    page = text_of(res)
+    assert_match(/500 Internal Server Error/, page)
+    assert_false(page.include?("boom"))
+    assert_false(page.include?("ArgumentError"))
+    req = HTTP::Server::Request.get("/nothing", HTTP::Headers.of({"Accept" => "application/json"}))
+    json = JSON.parse(text_of(EndpointTestApp.call(req, prod)))
+    assert_equal(404, json["error"]["status"].as_i)
+    assert_equal("Not Found", json["error"]["message"].as_s)
+  end
+
+  def test_app_name
+    assert_equal("endpoint_test_app", Bezel.app_name(EndpointTestApp))
+  end
+end

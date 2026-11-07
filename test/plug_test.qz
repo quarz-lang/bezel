@@ -1,0 +1,170 @@
+require "test"
+
+class PlugTestTag
+  include Bezel::Plug
+  @tag: String
+  def initialize(@tag: String); end
+  def call(conn: Bezel::Conn) -> Bezel::Conn
+    seen = conn.resp_headers["x-seen"] || ""
+    conn.put_resp_header("x-seen", seen + @tag)
+  end
+end
+
+class PlugTest < Test::Case
+  def req(target: String = "/") -> HTTP::Server::Request = HTTP::Server::Request.get(target)
+
+  def form(target: String, body: String) -> HTTP::Server::Request
+    HTTP::Server::Request.post(target, body, HTTP::Headers.of({"Content-Type" => "application/x-www-form-urlencoded"}))
+  end
+
+  def json_post(target: String, body: String) -> HTTP::Server::Request
+    HTTP::Server::Request.post(target, body, HTTP::Headers.of({"Content-Type" => "application/json"}))
+  end
+
+  def static_dir -> String = File.join(File.dirname(__FILE__), "fixtures", "static")
+
+  def test_run_in_order_and_halt
+    plugs: Array[Bezel::Plug] = [PlugTestTag.new("a"), PlugTestTag.new("b"),
+                                 Bezel.plug { |c| c.halt }, PlugTestTag.new("c")]
+    out = Bezel::Plug.run(plugs, Bezel::Conn.build(req))
+    assert_equal("ab", out.resp_headers["x-seen"])
+    assert_true(out.halted?)
+  end
+
+  def test_pipeline_wraps_the_rest
+    events = Atom.new(Array[String].new)
+    rec = Bezel::Plug::Logger.new(->(e: Bezel::LogEvent) { events.update { |es| es.push(e.to_s) }; nil })
+    inner: Array[Bezel::Plug] = [rec]
+    plugs: Array[Bezel::Plug] = [Bezel::Pipeline.new(inner), Bezel.plug { |c| c.text("x", status: 201) }]
+    out = Bezel::Plug.run(plugs, Bezel::Conn.build(req("/p")))
+    assert_equal(201, out.status)
+    assert_equal(1, events.value.size)
+    assert_match(/\AGET \/p -> 201 in /, events.value[0])
+  end
+
+  def test_request_id
+    out = Bezel::Plug::RequestId.new.call(Bezel::Conn.build(req))
+    id = out.request_id || ""
+    assert_equal(22, id.size)
+    assert_equal(id, out.resp_headers["x-request-id"])
+    given = "abcdefghijklmnopqrstuvwxyz"
+    kept = Bezel::Plug::RequestId.new.call(Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"X-Request-Id" => given}))))
+    assert_equal(given, kept.request_id)
+    bad = Bezel::Plug::RequestId.new.call(Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"X-Request-Id" => "short"}))))
+    assert_false(bad.request_id == "short")
+  end
+
+  def test_logger_reports_exceptions_and_escapes
+    events = Atom.new(Array[String].new)
+    rec = Bezel::Plug::Logger.new(->(e: Bezel::LogEvent) { events.update { |es| es.push(e.to_s) }; nil })
+    plugs: Array[Bezel::Plug] = [rec, Bezel.plug { |c| raise Bezel::Forbidden.new }]
+    assert_raise(Bezel::Forbidden) { Bezel::Plug.run(plugs, Bezel::Conn.build(req("/a%0Ab"))) }
+    assert_match(/\AGET \/a\\x0ab -> 403 in /, events.value[0])
+    boom: Array[Bezel::Plug] = [rec, Bezel.plug { |c| raise "boom" }]
+    assert_raise(RuntimeError) { Bezel::Plug.run(boom, Bezel::Conn.build(req)) }
+    assert_match(/-> 500 in /, events.value[1])
+  end
+
+  def test_logger_silent_above_info
+    events = Atom.new(Array[String].new)
+    rec = Bezel::Plug::Logger.new(->(e: Bezel::LogEvent) { events.update { |es| es.push(e.to_s) }; nil })
+    app = Bezel::App.new(Bezel::Config.load("t", environ: {"BEZEL_ENV" => "test", "LOG_LEVEL" => "warn"}))
+    plugs: Array[Bezel::Plug] = [rec, Bezel.plug { |c| c.text("x") }]
+    Bezel::Plug.run(plugs, Bezel::Conn.build(req, app))
+    assert_equal(0, events.value.size)
+  end
+
+  def test_static_serves_files
+    s = Bezel::Plug::Static.new(at: "/", from: static_dir)
+    out = s.call(Bezel::Conn.build(req("/css/app.css")))
+    assert_true(out.halted?)
+    assert_equal(200, out.status)
+    assert_equal("text/css; charset=utf-8", out.resp_headers["content-type"])
+    assert_equal("public, max-age=0", out.resp_headers["cache-control"])
+    case out.resp_body
+    in HTTP::Content::Binary(bytes:) then assert_equal("body { color: red; }\n", bytes.decode)
+    else flunk("not a binary body")
+    end
+    etag = out.resp_headers["etag"] || ""
+    assert_match(/\AW\/"[0-9a-f]+-[0-9a-f]+"\z/, etag)
+    again = s.call(Bezel::Conn.build(HTTP::Server::Request.get("/css/app.css", HTTP::Headers.of({"If-None-Match" => etag}))))
+    assert_equal(304, again.status)
+    lm = out.resp_headers["last-modified"] || ""
+    assert_match(/ GMT\z/, lm)
+    since = s.call(Bezel::Conn.build(HTTP::Server::Request.get("/css/app.css", HTTP::Headers.of({"If-Modified-Since" => lm}))))
+    assert_equal(304, since.status)
+  end
+
+  def test_static_refuses_and_passes
+    s = Bezel::Plug::Static.new(at: "/assets", from: static_dir, only: ["css", "robots.txt"])
+    ["/assets/.env", "/assets/.hidden/x.txt", "/assets/css/../robots.txt", "/assets/css", "/assets/",
+     "/assets/index.html", "/robots.txt", "/assets/css//app.css", "/assets/nope.css"].each do |path|
+      out = s.call(Bezel::Conn.build(req(path)))
+      assert_false(out.halted?, path)
+    end
+    post = s.call(Bezel::Conn.build(HTTP::Server::Request.post("/assets/robots.txt")))
+    assert_false(post.halted?)
+    assert_true(s.call(Bezel::Conn.build(req("/assets/robots.txt"))).halted?)
+    head = s.call(Bezel::Conn.build(HTTP::Server::Request.head("/assets/robots.txt")))
+    assert_equal(200, head.status)
+  end
+
+  def test_static_encoded_traversal
+    s = Bezel::Plug::Static.new(at: "/", from: File.join(static_dir, "css"))
+    out = s.call(Bezel::Conn.build(req("/%2e%2e/robots.txt")))
+    assert_false(out.halted?)
+    out2 = s.call(Bezel::Conn.build(req("/..%2frobots.txt")))
+    assert_false(out2.halted?)
+  end
+
+  def test_parsers_form_and_json
+    p = Bezel::Plug::Parsers.new
+    c = p.call(Bezel::Conn.build(form("/u?id=1&a=q", "user[name]=Ann&a=b")))
+    assert_equal("Ann", c.params["user"].fetch("name"))
+    assert_equal("b", c.params.fetch("a"))
+    assert_equal("1", c.params.fetch("id"))
+    assert_false(c.body_params.key?("id"))
+    j = p.call(Bezel::Conn.build(json_post("/u", "{\"n\": 5}")))
+    assert_equal(5, j.params.int("n"))
+  end
+
+  def test_parsers_errors
+    p = Bezel::Plug::Parsers.new(max_body: 4)
+    e = assert_raise(Bezel::PayloadTooLarge) { p.call(Bezel::Conn.build(form("/", "a=12345"))) }
+    assert_equal(413, e.as(HTTP::Error).status)
+    j = Bezel::Plug::Parsers.new
+    assert_raise(Bezel::BadRequest) { j.call(Bezel::Conn.build(json_post("/", "{nope"))) }
+    strict = Bezel::Plug::Parsers.new(pass: ["text/*"])
+    xml = HTTP::Server::Request.post("/", "<a/>", HTTP::Headers.of({"Content-Type" => "application/xml"}))
+    e2 = assert_raise(Bezel::UnsupportedMediaType) { strict.call(Bezel::Conn.build(xml)) }
+    assert_equal(415, e2.as(HTTP::Error).status)
+    txt = HTTP::Server::Request.post("/", "hi", HTTP::Headers.of({"Content-Type" => "text/plain"}))
+    assert_false(strict.call(Bezel::Conn.build(txt)).halted?)
+    loose = Bezel::Plug::Parsers.new
+    assert_equal("<a/>", loose.call(Bezel::Conn.build(xml)).request.body.read)
+    assert_raise(ArgumentError) { Bezel::Plug::Parsers.new(parsers: [:multipart]) }
+  end
+
+  def test_method_override
+    plugs: Array[Bezel::Plug] = [Bezel::Plug::Parsers.new, Bezel::Plug::MethodOverride.new]
+    assert_equal("PATCH", Bezel::Plug.run(plugs, Bezel::Conn.build(form("/x", "_method=patch"))).method)
+    assert_equal("POST", Bezel::Plug.run(plugs, Bezel::Conn.build(form("/x", "_method=get"))).method)
+    assert_equal("POST", Bezel::Plug.run(plugs, Bezel::Conn.build(form("/x?_method=delete", ""))).method)
+    get = HTTP::Server::Request.get("/x?_method=delete")
+    assert_equal("GET", Bezel::Plug.run(plugs, Bezel::Conn.build(get)).method)
+  end
+
+  def test_head
+    c = Bezel::Plug::Head.new.call(Bezel::Conn.build(HTTP::Server::Request.head("/")))
+    assert_equal("GET", c.method)
+  end
+
+  def test_timeout
+    t = Bezel::Plug::Timeout.new(20.ms)
+    slow: Array[Bezel::Plug] = [t, Bezel.plug { |c| Task.sleep(2.seconds); c.text("late") }]
+    e = assert_raise(Bezel::TimeoutError) { Bezel::Plug.run(slow, Bezel::Conn.build(req)) }
+    assert_equal(503, e.as(HTTP::Error).status)
+    fast: Array[Bezel::Plug] = [t, Bezel.plug { |c| c.text("ok") }]
+    assert_equal(200, Bezel::Plug.run(fast, Bezel::Conn.build(req)).status)
+  end
+end

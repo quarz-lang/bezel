@@ -1,0 +1,70 @@
+require "test"
+
+class ConfigTest < Test::Case
+  def load(environ: Hash[String, String], settings: Hash[Symbol, Bezel::Settings] = {}) -> Bezel::Config
+    Bezel::Config.load("shop", settings, environ, quiet: true)
+  end
+
+  def test_defaults
+    c = load({})
+    assert_equal(:dev, c.env)
+    assert_true(c.dev?)
+    assert_equal("0.0.0.0", c.host)
+    assert_equal(4000, c.port)
+    assert_nil(c.database_url)
+    assert_equal(10, c.pool_size)
+    assert_equal(:info, c.log_level)
+    assert_equal(Bezel::Config.dev_secret("shop"), c.secret_key_base)
+    assert_equal(64, c.secret_key_base.size)
+    assert_nil(c.tls)
+  end
+
+  def test_environment_over_settings
+    s = Bezel::Settings.new(host: "127.0.0.1", port: 5000, database_url: "postgres://localhost/dev", log_level: :debug)
+    c = load({"PORT" => "6000", "TRUSTED_PROXIES" => "10.0.0.0/8, ::1"}, {dev: s})
+    assert_equal("127.0.0.1", c.host)
+    assert_equal(6000, c.port)
+    assert_equal("postgres://localhost/dev", c.database_url)
+    assert_equal(["10.0.0.0/8", "::1"], c.trusted_proxies)
+    assert_equal(:debug, c.log_level)
+    assert_true(c.log?(:debug))
+    t = load({"BEZEL_ENV" => "test"}, {dev: s})
+    assert_equal(4000, t.port)
+  end
+
+  def test_prod_needs_a_secret
+    e = assert_raise(Bezel::ConfigError) { load({"BEZEL_ENV" => "prod"}) }
+    assert_match(/SECRET_KEY_BASE is required/, e.message)
+    short = assert_raise(Bezel::ConfigError) { load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "x" * 63}) }
+    assert_match(/at least 64 bytes/, short.message)
+    assert_false(short.message.include?("xxx"))
+    ok = load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "s" * 64})
+    assert_true(ok.prod?)
+    assert_false(ok.inspect.include?("ssss"))
+    assert_match(/secret_key_base: <hidden>/, ok.inspect)
+  end
+
+  def test_inspect_hides_the_database_url
+    c = load({"DATABASE_URL" => "postgres://u:pw@db/x"})
+    assert_false(c.inspect.include?("pw"))
+    assert_match(/database_url: \(set\)/, c.to_s)
+  end
+
+  def test_bad_values
+    assert_raise(Bezel::ConfigError) { load({"BEZEL_ENV" => "staging"}) }
+    assert_raise(Bezel::ConfigError) { load({"PORT" => "http"}) }
+    assert_raise(Bezel::ConfigError) { load({"PORT" => "70000"}) }
+    assert_raise(Bezel::ConfigError) { load({"POOL_SIZE" => "0"}) }
+    assert_raise(Bezel::ConfigError) { load({"LOG_LEVEL" => "loud"}) }
+    e = assert_raise(Bezel::ConfigError) { load({"TLS_CERT" => "c.pem"}) }
+    assert_match(/TLS_KEY is missing/, e.message)
+    assert_raise(Bezel::ConfigError) { Bezel::Config.load("", environ: Hash[String, String].new, quiet: true) }
+  end
+
+  def test_levels
+    c = load({"LOG_LEVEL" => "WARN"})
+    assert_equal(:warn, c.log_level)
+    assert_false(c.log?(:info))
+    assert_true(c.log?(:error))
+  end
+end

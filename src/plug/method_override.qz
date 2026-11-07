@@ -1,4 +1,4 @@
-# Lets an HTML form send `PUT`, `PATCH` or `DELETE`: a `POST` whose body
+# Lets an HTML form send PUT, PATCH or DELETE: a POST whose body
 # has `_method` set to one of them (in any case) gets that method. It
 # reads the body's parameters, so it comes after `Bezel::Plug::Parsers`;
 # the query's `_method` is not believed (a link could carry it).

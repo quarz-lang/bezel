@@ -4,7 +4,7 @@
 # In `dev` and `test` the page shows the exception's class and message,
 # its backtrace, and the request: method, path, parameters, session.
 # In `prod` it shows the status's reason only. Both come as HTML, or as
-# JSON when the request's `Accept` asks for JSON and not HTML.
+# JSON when the request's Accept asks for JSON and not HTML.
 module ErrorPage
   # The response to `error` raised for `conn`, with `status`.
   def self.response(conn: Conn, error: Exception, status: Int) -> HTTP::Server::Response
@@ -18,7 +18,7 @@ module ErrorPage
     end
   end
 
-  # Whether `conn`'s `Accept` asks for JSON and not HTML.
+  # Whether `conn`'s Accept asks for JSON and not HTML.
   def self.wants_json?(conn: Conn) -> Bool
     accept = conn.header("accept") || ""
     accept.include?("json") && !accept.include?("text/html")

@@ -1,11 +1,11 @@
 # Serves `endpoint` until the process is told to stop: loads the
 # configuration (`Bezel::Config.load`, the application's name from the
-# endpoint's namespace, `MyApp::Endpoint` giving `my_app`, unless
+# endpoint's namespace, MyApp::Endpoint giving `my_app`, unless
 # `config` is given), opens the database's pool when there is a
-# `DATABASE_URL`, and runs an `HTTP::Server` with the endpoint's handler
-# on `HOST`:`PORT` (HTTPS with `TLS_CERT` and `TLS_KEY`). `SIGTERM`
+# DATABASE_URL, and runs an `HTTP::Server` with the endpoint's handler
+# on HOST:PORT (HTTPS with TLS_CERT and TLS_KEY). SIGTERM
 # shuts it down gracefully: no new connections, the requests in flight
-# given `grace` to finish, then cancelled; `SIGINT` (Ctrl-C) does the
+# given `grace` to finish, then cancelled; SIGINT (Ctrl-C) does the
 # same with one second. Returns once the server has stopped and the pool
 # is closed.
 #
@@ -44,7 +44,7 @@ public def server(endpoint: Type[Endpoint], app: App, *, port: Int? = nil) -> HT
 end
 
 # The application's name for `endpoint`: its outermost namespace in
-# snake_case (`MyApp::Endpoint` is `my_app`).
+# snake_case (MyApp::Endpoint is `my_app`).
 public def app_name(endpoint: Type[Endpoint]) -> String
   Rotor::Inflector.underscore(endpoint.name.partition("::")[0])
 end

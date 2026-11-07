@@ -1,5 +1,5 @@
-# Runs a `HEAD` request as a `GET`, so that the routes and actions of
-# `GET` answer it (the server sends no body for it).
+# Runs a HEAD request as a GET, so that the routes and actions of
+# GET answer it (the server sends no body for it).
 class Plug::Head
   include Plug
 

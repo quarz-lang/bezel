@@ -1,0 +1,36 @@
+require "test"
+
+class ServerTestApp < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug]
+    [Bezel::Plug::RequestId.new,
+     Bezel::Plug::Parsers.new,
+     Bezel.plug do |conn|
+       if conn.path == "/echo"
+         conn.json(JSON.parse("{\"name\": #{JSON.generate(conn.params.fetch("name"))}}"))
+       else
+         conn
+       end
+     end]
+  end
+end
+
+class ServerTest < Test::Case
+  def test_through_a_real_server
+    app = Bezel::App.new(Bezel::Config.load("server_test", environ: {"BEZEL_ENV" => "test", "HOST" => "127.0.0.1"}))
+    server = Bezel.server(ServerTestApp, app, port: 0)
+    port = server.local_address.port
+    Task.scope do |s|
+      s.spawn { server.serve }
+      client = HTTP::Client.new
+      res = client.post("http://127.0.0.1:#{port}/echo", "name=Ann", "application/x-www-form-urlencoded")
+      assert_equal(200, res.status)
+      assert_equal("Ann", res.json["name"].as_s)
+      assert_equal(22, (res.headers["x-request-id"] || "").size)
+      missing = client.get("http://127.0.0.1:#{port}/nothing")
+      assert_equal(404, missing.status)
+      missing.close
+      client.close
+      server.shutdown(timeout: 1.second)
+    end
+  end
+end

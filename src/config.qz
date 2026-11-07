@@ -1,7 +1,7 @@
 # What an application's `config/<env>.qz` gives for one environment
-# (`MyApp::Config.dev` returns one): every setting optional, the
+# (MyApp::Config.dev returns one): every setting optional, the
 # environment variables taking precedence over it. Secrets are not here:
-# `SECRET_KEY_BASE` comes from the environment only.
+# SECRET_KEY_BASE comes from the environment only.
 data Settings(
   # The address to listen on.
   host: String? = nil,
@@ -24,14 +24,14 @@ end
 #
 # | Variable | Setting | Default |
 # |---|---|---|
-# | `BEZEL_ENV` | `env`: `dev`, `test` or `prod` | `dev` |
-# | `HOST`, `PORT` | where the server listens | `0.0.0.0`, `4000` |
-# | `DATABASE_URL` | the database, a `PG::Pool` behind `Rotor::Repo` | none |
-# | `POOL_SIZE` | the pool's connections | 10 |
-# | `SECRET_KEY_BASE` | the key sessions and tokens derive theirs from, 64 bytes or more | required in `prod`; derived from the application's name in `dev` and `test`, with a warning |
-# | `TRUSTED_PROXIES` | proxies, separated by commas | none |
-# | `TLS_CERT`, `TLS_KEY` | paths of the certificate chain and its key (PEM): HTTPS | none (behind a proxy) |
-# | `LOG_LEVEL` | `debug`, `info`, `warn` or `error` | `info` |
+# | BEZEL_ENV | `env`: `dev`, `test` or `prod` | `dev` |
+# | HOST, PORT | where the server listens | `0.0.0.0`, `4000` |
+# | DATABASE_URL | the database, a `PG::Pool` behind `Rotor::Repo` | none |
+# | POOL_SIZE | the pool's connections | 10 |
+# | SECRET_KEY_BASE | the key sessions and tokens derive theirs from, 64 bytes or more | required in `prod`; derived from the application's name in `dev` and `test`, with a warning |
+# | TRUSTED_PROXIES | proxies, separated by commas | none |
+# | TLS_CERT, TLS_KEY | paths of the certificate chain and its key (PEM): HTTPS | none (behind a proxy) |
+# | LOG_LEVEL | `debug`, `info`, `warn` or `error` | `info` |
 #
 # A value that does not parse, or a missing one that is required, is a
 # `Bezel::ConfigError` when the configuration is loaded, before the
@@ -117,7 +117,7 @@ data Config(
     Config.new(app, env, host, port, db, pool_size, secret, proxies, cert, key, level)
   end
 
-  # The secret `dev` and `test` use without `SECRET_KEY_BASE`: a digest
+  # The secret `dev` and `test` use without SECRET_KEY_BASE: a digest
   # of the application's name, the same on every run so that sessions
   # survive a restart.
   def self.dev_secret(app: String) -> String

@@ -1,17 +1,17 @@
 # Serves the files under the directory `from` at the path `at`
 # (`at: "/", from: "priv/static"` serves `priv/static/app.css` as
-# `/app.css`), for `GET` and `HEAD`; any other request, or a path with no
+# `/app.css`), for GET and HEAD; any other request, or a path with no
 # such file, goes on to the next plug. A directory is never listed.
 #
 # Refused (passed on, so the router answers them): a path segment that
-# is empty, `.` or `..`, that begins with `.` (`.env`, `.git`), or that
+# is empty, `.` or `..`, that begins with `.` (.env, .git), or that
 # holds `\`, a NUL or a control character. With `only:`, the first
 # segment must be one of those names (`["css", "js", "favicon.ico"]`).
 #
 # Each file is answered with its `Content-Type` (by its extension), an
-# `ETag` (from its size and modification time), `Last-Modified` and
+# ETag (from its size and modification time), `Last-Modified` and
 # `Cache-Control` (`cache_control:`); a request whose `If-None-Match`
-# has the `ETag`, or (without `If-None-Match`) whose `If-Modified-Since`
+# has the ETag, or (without `If-None-Match`) whose `If-Modified-Since`
 # is the `Last-Modified` sent, is answered `304 Not Modified`.
 class Plug::Static
   include Plug
