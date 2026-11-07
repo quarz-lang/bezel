@@ -225,7 +225,9 @@ module Templates
     pending: Templates::Node? = nil
     nodes.each do |n|
       last = pending
-      if n.kind == :text && last
+      # (Not when the first ends in what could start a character
+      # reference: `&amp<!-- -->;` is no `&amp;`.)
+      if n.kind == :text && last && !last.name.match?(/&[#A-Za-z0-9]*\z/)
         pending = last.with_text(last.name + n.name)
       else
         out << last if last
@@ -482,24 +484,16 @@ class Templates::Parser
   # the commas outside brackets and literals.
   def self.param_names(args: String) -> Array[String]
     cs = "(#{args})".chars
+    commas = Array::Builder[Int].new
+    # (The args were checked whole already: `matching` finds the commas
+    # outside brackets and literals as it scans.)
+    none: Array[String] = []
+    return none if Templates::Parser.matching(cs, 0, commas) != cs.size - 1
     parts = Array::Builder[String].new
-    depth = 0
     start = 1
-    j = 1
-    while j < cs.size - 1
-      c = cs[j]
-      if c == "(" || c == "[" || c == "{"
-        depth += 1
-      elsif c == ")" || c == "]" || c == "}"
-        depth -= 1
-      elsif c == "\"" || c == "'"
-        e = Templates::Parser.string_end(cs, j, c == "\"")
-        j = e if e > j
-      elsif c == "," && depth == 0
-        parts << cs[start...j].join
-        start = j + 1
-      end
-      j += 1
+    commas.to_a.each do |c|
+      parts << cs[start...c].join
+      start = c + 1
     end
     parts << cs[start...(cs.size - 1)].join
     out = Array::Builder[String].new
@@ -548,7 +542,7 @@ class Templates::Parser
   # read either way, -4 at a heredoc. (What the scanner cannot read as
   # Quarz's lexer does is refused: else code could run on past the
   # braces, into the generated code of the template's text.)
-  def self.matching(cs: Array[String], open: Int) -> Int
+  def self.matching(cs: Array[String], open: Int, commas: Array::Builder[Int]? = nil) -> Int
     stack = [cs[open]? || ""]
     j = open + 1
     # (The last character that is not a space, and whether a literal
@@ -573,7 +567,7 @@ class Templates::Parser
         # `x:b"` could be a label or a symbol: refused.)
         b_start = j > open + 1 && j - 1 > lit_end && cs[j - 1] == "b" && !Templates::Parser.ident_char?(cs[j - 2]) && cs[j - 2] != "@" && cs[j - 2] != "$"
         return -5 if b_start && cs[j - 2] == ":"
-        j = Templates::Parser.string_end(cs, j, c == "\"" && !b_start)
+        j = Templates::Parser.string_end(cs, j, c == "\"" && !b_start, c == "\"" && !b_start)
         return j if j < 0
         lit_end = j
         ended_literal = true
@@ -585,7 +579,7 @@ class Templates::Parser
           return -3 if how == :ambiguous
           if how == :literal
             regexp = c == "/" || cs[j + 1]? == "r"
-            k = c == "/" ? Templates::Parser.string_end(cs, j, true) : Templates::Parser.percent_end(cs, j)
+            k = c == "/" ? Templates::Parser.string_end(cs, j, true, false) : Templates::Parser.percent_end(cs, j)
             return k if k < 0
             # (The lexer takes the letters after a regular expression as
             # its flags.)
@@ -598,6 +592,9 @@ class Templates::Parser
       when "<"
         return -4 if cs[j + 1]? == "<" && (cs[j + 2]? || "").match?(/\A[~\-"'`]\z/)
         return -4 if cs[j + 1]? == "<" && Templates::Parser.ident_char?(cs[j + 2]? || " ") && !(cs[j + 2]? || "").match?(/\A[0-9]\z/)
+      when ","
+        cm = commas
+        cm << j if cm && stack.size == 1
       when "#" then return -2
       # (A line continuation, or a backslash outside a literal.)
       when "\\" then return -3
@@ -732,8 +729,9 @@ class Templates::Parser
       elsif paired && c == d
         depth += 1
       elsif c == "\\"
-        return -6 unless Templates::Parser.escape_ok?(cs, j)
-        j += 2
+        n = Templates::Parser.escape_size(cs, j, interpolates && letter != "r")
+        return -6 if n < 0
+        j += n
         next
       elsif interpolates && c == "#" && cs[j + 1]? == "{"
         j = Templates::Parser.matching(cs, j + 1)
@@ -744,30 +742,33 @@ class Templates::Parser
     -1
   end
 
-  # Whether the escape at `j` is one the lexer reads as the compiler
-  # does (two characters): not a `\u{` without hex digits up to its `}`,
-  # after which the lexer skips ahead.
-  def self.escape_ok?(cs: Array[String], j: Int) -> Bool
-    return true unless cs[j + 1]? == "u" && cs[j + 2]? == "{"
+  # The size of the escape at `j` as the lexer reads it: two
+  # characters, or a whole `\u{...}` where `unicode` (strings that
+  # decode escapes: `"..."`, `%Q`, `%()`), whose `}` is the escape's,
+  # not a closing delimiter; -1 for a `\u{` without hexadecimal digits
+  # up to its `}`, after which the lexer skips ahead.
+  def self.escape_size(cs: Array[String], j: Int, unicode: Bool) -> Int
+    return 2 unless unicode && cs[j + 1]? == "u" && cs[j + 2]? == "{"
     k = j + 3
     digits = 0
     while k < cs.size && (cs[k].match?(/\A[0-9A-Fa-f]\z/) || cs[k] == " ")
       digits += 1 if cs[k] != " "
       k += 1
     end
-    digits > 0 && cs[k]? == "}"
+    digits > 0 && cs[k]? == "}" ? k - j + 1 : -1
   end
 
   # The index of the quote (or `/`) closing the string (or regular
   # expression) opened at `open`, or -1.
-  def self.string_end(cs: Array[String], open: Int, interpolates: Bool) -> Int
+  def self.string_end(cs: Array[String], open: Int, interpolates: Bool, unicode: Bool) -> Int
     q = cs[open]
     j = open + 1
     while j < cs.size
       c = cs[j]
       if c == "\\"
-        return -6 unless Templates::Parser.escape_ok?(cs, j)
-        j += 2
+        n = Templates::Parser.escape_size(cs, j, unicode)
+        return -6 if n < 0
+        j += n
         next
       end
       return j if c == q

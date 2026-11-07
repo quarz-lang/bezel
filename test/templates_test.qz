@@ -290,6 +290,22 @@ class TemplatesTest < Test::Case
     end
   end
 
+  def test_seventh_review
+    # (A `\\u{...}` in a string that decodes escapes is one escape, its
+    # `}` included.)
+    assert(code_of("<p>{%Q}\\u{41}}}</p><p>x</p>").include?("h.put((%Q}\\u{41}}))"))
+    # (The reviewer's `{%Q}\\u{41}}` is the literal alone, its brace open.)
+    assert_equal("v/t.html.bz:1: { is not closed (a { in a text is written {\"{\"})", error_of("<p>{%Q}\\u{41}}"))
+    assert(code_of("<p>{%Q}\\u{41}} + \"a\"}</p>").include?("h.put((%Q}\\u{41}} + \"a\"))"))
+    assert(code_of("<p>{%q}\\u{41}}</p>").include?("h.put((%q}\\u{41}))"))
+    assert(code_of("<p>{f(/\\u{z}/)}</p>").include?("(f(/\\u{z}/))"))
+    # (Parameters past a default holding a bracket in a literal.)
+    assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of("{@args a: String = %q|(|, h: Int}"))
+    assert(code_of("{@args a: Regex = (/\\(/), conn: Bezel::Conn}").include?("Bezel.html(conn) do |h|"))
+    # (No character reference across a comment.)
+    assert(code_of("<p>Tom &amp<!-- c -->; Jerry</p>").include?("h.text(\"Tom &amp\")"))
+  end
+
   def test_module_sources_are_checked
     a = Bezel::Templates::Source.new("v/a b.html.bz", "a", "<p>a</p>")
     assert_equal({"v/a b.html.bz" => Bezel::Templates.digest("<p>a</p>")}, Bezel::Templates.digests(Bezel::Templates.compile_module("V", [a])))
