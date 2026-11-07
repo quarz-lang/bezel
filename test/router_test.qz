@@ -93,6 +93,35 @@ class RtAdminBare < RtAdminBase
   def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "bare #{conn.assign(:admin)}")
 end
 
+# The login pages under a base that requires login: `skip` exempts two
+# actions; a grandchild with a bare statement keeps the skip.
+class RtLoginBase < Bezel::Controller
+  controller do
+    plug :require_login
+    plug :stamp
+  end
+
+  private def require_login(conn: Bezel::Conn) -> Bezel::Conn
+    conn.header("x-user") ? conn : conn.text("login first", status: 401)
+  end
+
+  private def stamp(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:stamp, "s")
+end
+
+class RtSessions < RtLoginBase
+  controller do
+    skip :require_login, only: [:new, :create]
+  end
+
+  def new(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "login form #{conn.assign?(:stamp)}")
+  def create(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "logged in #{conn.assign?(:stamp)}")
+  def delete(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "logged out #{conn.assign?(:stamp)}")
+end
+
+class RtSessionsMore < RtSessions
+  controller
+end
+
 # A subclass with an action of its own but no statement: its superclass's
 # dispatch does not know it.
 class RtPagesMore < RtPages
@@ -276,6 +305,22 @@ class RouterTest < Test::Case
     assert_equal("me", text_of(get("/admin/probe")))
   end
 
+  def test_skip_an_inherited_plug
+    c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    body = ->(out: Bezel::Conn) { (out.resp_body.as(HTTP::Content::Text)).text }
+    [RtSessions, RtSessionsMore].each do |k|
+      ctl = k.make
+      assert_equal("login form s", body.call(ctl.dispatch(:new, c)))
+      assert_equal("logged in s", body.call(ctl.dispatch(:create, c)))
+      out = ctl.dispatch(:delete, c)
+      assert_equal(401, out.status)
+      assert_equal("login first", body.call(out))
+      user = Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"X-User" => "ann"})))
+      assert_equal("logged out s", body.call(ctl.dispatch(:delete, user)))
+    end
+    assert_equal([:require_login, :stamp], RtSessions.controller_plugs.map(&:method))
+  end
+
   def test_three_levels_declared_subclass_first
     assert_equal([:base_mark, :mid_mark, :leaf_mark], RtLeaf.controller_plugs.map(&:method))
     c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
@@ -327,6 +372,13 @@ class RouterTest < Test::Case
     assert(!out.success?)
     assert_match(/`Pages` has no method `requre_login`/, out.stderr)
     assert_match(/Others: plug :check names :hom, which is not an action \(:home\)/, out.stderr)
+  end
+
+  def test_a_skip_naming_no_plug_is_a_compile_error
+    out = check("controller_skip")
+    assert(!out.success?)
+    assert_match(/`controller` raised ArgumentError: skip :requre_login: no plug of that name \(:require_login\)/, out.stderr)
+    assert_match(/Sessions: skip :require_login names :nwe, which is not an action/, out.stderr)
   end
 
   def test_route_helper_keywords_are_checked

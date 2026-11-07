@@ -54,17 +54,21 @@ class Controller
   # (`plug :require_login, except: [:index]`): methods of the controller
   # (private ones too) taking and returning a `Conn`, run in order before
   # the action they apply to, until one halts, after the plugs the
-  # superclass's `controller` statement declared. A plug method that
-  # does not exist or has another signature, or an action named in
-  # `only:` or `except:` that does not exist, is a compile error here.
+  # superclass's `controller` statement declared. `skip :require_login,
+  # only: [:new, :create]` keeps an inherited (or earlier) plug of that
+  # name from running before those actions (all, without `only:` or
+  # `except:`), as Rails' `skip_before_action`. A plug method that does
+  # not exist or has another signature, a `skip` naming no plug, or an
+  # action named in `only:` or `except:` that does not exist, is a
+  # compile error here.
   #
   # A subclass of a controller writes its own `controller` statement
   # (bare, or with plugs of its own) for actions of its own: the
   # superclass's dispatch knows the superclass's actions only.
   static def self.controller(&block: ControllerSpec.() -> Void) -> Void
-    spec = ControllerSpec.new
+    spec = ControllerSpec.new(controller_plugs)
     spec.instance_exec(&block)
-    Controller.generate(self, controller_plugs + spec.plugs)
+    Controller.generate(self, spec.plugs)
   end
 
   # Whether `m` has an action's shape: public (as `methods` lists them),
@@ -114,9 +118,15 @@ class Controller
   # :nodoc:
   static def self.generate[T <: Controller](cls: Meta::ClassDef[T], plugs: Array[ControllerPlug]) -> Void
     actions = cls.methods.select { |m| Controller.action?(m) }.map(&:name)
+    listed = actions.map(&:inspect).join(", ")
     plugs.each do |p|
       (p.only + p.except).each do |a|
-        raise ArgumentError.new("#{cls.name}: plug #{p.method.inspect} names #{a.inspect}, which is not an action (#{actions.map(&:inspect).join(", ")})") unless actions.include?(a)
+        raise ArgumentError.new("#{cls.name}: plug #{p.method.inspect} names #{a.inspect}, which is not an action (#{listed})") unless actions.include?(a)
+      end
+      p.skips.each do |sk|
+        (sk.only + sk.except).each do |a|
+          raise ArgumentError.new("#{cls.name}: skip #{p.method.inspect} names #{a.inspect}, which is not an action (#{listed})") unless actions.include?(a)
+        end
       end
     end
     # The plugs: `__bezel_plug_<i>(action, conn)` runs plug i when it
@@ -129,13 +139,10 @@ class Controller
     i = n - 1
     while i >= 0
       p = plugs[i]
-      only = p.only
-      except = p.except
       h = cls.method_ref[(Conn) -> Conn](p.method)
       nxt = cls.method_ref[(Symbol, Conn) -> Conn]("__bezel_plug_#{i + 1}".to_sym)
       cls.def_method("__bezel_plug_#{i}".to_sym, [:action, :conn], visibility: :private) do |a: Symbol, c: Conn| -> Conn
-        applies = (only.empty? || only.include?(a)) && !except.include?(a)
-        out = applies ? h.bind(self).call(c) : c
+        out = p.applies?(a) ? h.bind(self).call(c) : c
         out.halted? ? out : nxt.bind(self).call(a, out)
       end
       i -= 1
@@ -172,17 +179,32 @@ class Controller
   end
 end
 
-# A controller's plug, as its `controller` block declares it.
-data ControllerPlug = (method: Symbol, only: Array[Symbol], except: Array[Symbol])
+# A controller's plug, as its `controller` block declares it, with the
+# `skip`s of subclasses' blocks.
+data ControllerPlug(method: Symbol, only: Array[Symbol], except: Array[Symbol], skips: Array[PlugSkip] = [])
+  # Whether the plug runs before `action`.
+  def applies?(action: Symbol) -> Bool
+    (only.empty? || only.include?(action)) && !except.include?(action) && !skips.any? { |s| s.covers?(action) }
+  end
+end
+
+# A `skip` of a plug: before the actions `only` names (all when it and
+# `except` are empty), but those `except` names.
+data PlugSkip(only: Array[Symbol], except: Array[Symbol])
+  # Whether the skip keeps the plug from running before `action`.
+  def covers?(action: Symbol) -> Bool = (only.empty? || only.include?(action)) && !except.include?(action)
+end
 
 # What a controller's `controller` block runs on.
 class ControllerSpec
   include DslScope
 
-  var @plugs: Array[ControllerPlug] = []
+  var @plugs: Array[ControllerPlug]
 
-  # A spec without plugs.
-  def initialize; end
+  # A spec whose plugs begin with `inherited` (the superclass's).
+  def initialize(inherited: Array[ControllerPlug] = [])
+    @plugs = inherited
+  end
 
   # The plugs, in order.
   def plugs -> Array[ControllerPlug] = @plugs
@@ -192,5 +214,20 @@ class ControllerSpec
   def plug(method: Symbol, *, only: Array[Symbol] = [], except: Array[Symbol] = []) -> Void
     raise ArgumentError.new("plug #{method.inspect}: only: and except: together") if !only.empty? && !except.empty?
     @plugs = @plugs.push(ControllerPlug.new(method, only, except))
+  end
+
+  # Keeps the plugs named `method` (inherited, or declared before in
+  # this block) from running before the actions `only` names (all when
+  # it and `except` are empty), but those `except` names. A `skip`
+  # naming no plug is an `ArgumentError` (a compile error at the
+  # statement).
+  def skip(method: Symbol, *, only: Array[Symbol] = [], except: Array[Symbol] = []) -> Void
+    raise ArgumentError.new("skip #{method.inspect}: only: and except: together") if !only.empty? && !except.empty?
+    unless @plugs.any? { |p| p.method == method }
+      known = @plugs.map { |p| p.method.inspect }.uniq
+      raise ArgumentError.new("skip #{method.inspect}: no plug of that name (#{known.empty? ? "none" : known.join(", ")})")
+    end
+    sk = PlugSkip.new(only, except)
+    @plugs = @plugs.map { |p| p.method == method ? p.with(skips: p.skips.push(sk)) : p }
   end
 end

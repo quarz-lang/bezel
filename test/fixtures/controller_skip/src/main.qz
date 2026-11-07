@@ -1,0 +1,20 @@
+class Base < Bezel::Controller
+  controller do
+    plug :require_login
+  end
+  private def require_login(conn: Bezel::Conn) -> Bezel::Conn = conn
+end
+
+class Login < Base
+  controller do
+    skip :requre_login, only: [:new]
+  end
+  def new(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "form")
+end
+
+class Sessions < Base
+  controller do
+    skip :require_login, only: [:nwe]
+  end
+  def new(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "form")
+end
