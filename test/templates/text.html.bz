@@ -11,3 +11,4 @@
 </p>
 <p>{raw(html)} and {"{"}braces{"}"}</p>
 <p>{Bezel::Html.raw("<em>safe</em>")}</p>
+<p title={code if n > 0}>{code.gsub(/[<"}]/, "") + "#{n / 3}"} &copy;&nbsp;2026 &mdash;&#x21;</p>

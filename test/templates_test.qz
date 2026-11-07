@@ -115,6 +115,73 @@ class TemplatesTest < Test::Case
     end
   end
 
+  def lit(text: String) -> String = Bezel::Templates.literal(text)
+
+  # The code `text` compiles to (the statements in the block).
+  def code_of(text: String) -> String
+    Bezel::Templates.compile(Bezel::Templates::Source.new("v/t.html.bz", "t", text))
+  end
+
+  def test_entities
+    assert(code_of("<p title=\"a&copy;b\">&copy; &mdash;&#8212;&#x2014;</p>").include?("h.p(#{lit("\u00a9 \u2014\u2014\u2014")}, title: #{lit("a\u00a9b")})"))
+    assert_equal("v/t.html.bz:2: &foo; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<p>\nx &foo; y</p>"))
+    assert_equal("v/t.html.bz:1: &#0; is not a character", error_of("<p>&#0;</p>"))
+    assert_equal("v/t.html.bz:1: &#xD800; is not a character", error_of("<p title=\"&#xD800;\"></p>"))
+    assert_equal("v/t.html.bz:1: &#99999999; is not a character", error_of("<p>&#99999999;</p>"))
+    # (Without a semicolon, an ampersand is text.)
+    assert(code_of("<p>a & b &copy 1</p>").include?("h.p(\"a & b &copy 1\")"))
+  end
+
+  def test_whitespace_is_ascii
+    assert(code_of("<p>a\n&nbsp;&nbsp;b&#10;&#32;c</p>").include?("h.p(#{lit("a\n\u00a0\u00a0b\n c")})"))
+    assert(code_of("&nbsp;<p>x</p>").include?("h.text(#{lit("\u00a0")})"))
+  end
+
+  def test_the_template_is_trimmed
+    out = code_of("\n  Hello\n  world\n")
+    assert(out.include?("h.text(#{lit("Hello\nworld")})"))
+    assert(code_of("<p>x</p>\n  tail\n").include?("h.text(#{lit("\ntail")})"))
+    assert(code_of("<!DOCTYPE html>\nHello").include?("h.doctype\n      h.text(\"Hello\")"))
+  end
+
+  def test_code_is_one_expression
+    assert(code_of("<div title={a if b}>x</div>").include?("h.div(\"x\", title: (a if b))"))
+    assert(code_of("<p :if={a and b}>x</p>").include?("if (a and b)"))
+    assert(code_of("<.panel title={a, b}/>").include?("Panel.new(title: (a, b))"))
+    assert_equal("v/t.html.bz:1: a # comment cannot be in {...}", error_of("<p>{x # note}</p>"))
+  end
+
+  def test_braces_skip_regexps
+    assert(code_of("<p>{x.gsub(/\"/, \"\")}</p>").include?("h.put((x.gsub(/\"/, \"\")))"))
+    assert(code_of("<p>{x.gsub(/}/, \"\")}</p>").include?("h.put((x.gsub(/}/, \"\")))"))
+    assert(code_of("<p>{a / b} \"</p>").include?("h.put((a / b))"))
+  end
+
+  def test_late_errors_are_template_errors
+    assert_equal("v/t.html.bz:1: colspan of <td> needs an integer, not \"99999999999999999999\"", error_of("<td colspan=\"99999999999999999999\"></td>"))
+    assert_equal("v/t.html.bz:2: a <script> cannot hold <!--: it hides its end tag", error_of("<p></p>\n<script><!-- x --></script>"))
+    assert_equal("v/t.html.bz:1: a <script> cannot hold <script: it hides its end tag", error_of("<script>document.write(\"<script>\")</script>"))
+  end
+
+  def test_end_tags_end_at_the_name
+    assert(code_of("<script>a</scripts></script>").include?("h.script(\"a</scripts>\")"))
+    assert(code_of("<title>a</titles></title >").include?("h.text(\"</titles>\")"))
+  end
+
+  def test_h_cannot_be_a_parameter
+    ["{@args *h: Array[Int]}", "{@args **h: Hash[Symbol, Int]}", "{@args &h: () -> Void}", "{@args a: Int, h: Int}"].each do |t|
+      assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of(t))
+    end
+    assert(code_of("{@args hh: Int}").include?("def self.t(hh: Int)"))
+  end
+
+  def test_module_sources_are_checked
+    a = Bezel::Templates::Source.new("v/a b.html.bz", "a", "<p>a</p>")
+    assert_equal({"v/a b.html.bz" => Bezel::Templates.digest("<p>a</p>")}, Bezel::Templates.digests(Bezel::Templates.compile_module("V", [a])))
+    assert_raise(ArgumentError) { Bezel::Templates.compile_module("V", [a, Bezel::Templates::Source.new("v/b", "a", "")]) }
+    assert_raise(ArgumentError) { Bezel::Templates.compile_module("V", [Bezel::Templates::Source.new("v/a\nputs 1", "a", "")]) }
+  end
+
   def test_names_are_checked
     assert_raise(ArgumentError) { Bezel::Templates.compile(Bezel::Templates::Source.new("t", "Show", "")) }
     assert_raise(ArgumentError) { Bezel::Templates.compile_module("user_view", []) }
@@ -126,11 +193,11 @@ class TemplatesTest < Test::Case
 
   def test_braces_skip_strings
     out = Bezel::Templates.compile(Bezel::Templates::Source.new("t", "t", "<p>{\"}\" + \"\#{\"{\"}\" + '}'}</p>"))
-    assert(out.include?("h.put(\"}\" + \"\#{\"{\"}\" + '}')"))
+    assert(out.include?("h.put((\"}\" + \"\#{\"{\"}\" + '}'))"))
   end
 
   def test_raw_only_as_a_whole_call
     out = Bezel::Templates.compile(Bezel::Templates::Source.new("t", "t", "<p>{raw(a) + raw(b)}</p>"))
-    assert(out.include?("h.put(raw(a) + raw(b))"))
+    assert(out.include?("h.put((raw(a) + raw(b)))"))
   end
 end

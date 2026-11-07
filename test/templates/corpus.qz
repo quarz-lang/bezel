@@ -5,7 +5,7 @@
 # test/templates/basic.html.bz sha256:027762560b7b102906c2895c587c4330e82d850c2deca2ca34da6136f96d2c6d
 # test/templates/components.html.bz sha256:d1d49e1fab9fc9dc6fc85349379578c86f36e6aba87f2fa4e36c242663eb5a8a
 # test/templates/layout.html.bz sha256:5bd2974161486d5cdfdbbbfc5e315805cc3ff755f93afb2c6e8e28dded7a2d97
-# test/templates/text.html.bz sha256:fdda2c913005479379b920f205cd1b7301836e2a47d5b5295769d6fb8a7b1ecf
+# test/templates/text.html.bz sha256:9e6d0fab04774b8928fc986b56acdcf7eebdc2b9d2f2cc6662f506e887df838f
 
 # The views of test/templates/attrs.html.bz, test/templates/basic.html.bz, test/templates/components.html.bz, test/templates/layout.html.bz, test/templates/text.html.bz.
 module Corpus
@@ -18,7 +18,7 @@ module Corpus
         h.text("\n")
         h.input(type: "checkbox", checked: true)
         h.text("\n")
-        h.div(id: "box", class_name: ["box", kind], data: {"id" => "7", "kind" => kind || "none"}, aria: {"label" => "Box"}, attrs: {"hx-get" => "/more", "x-on:click" => "open = true"}) do  # attrs.html.bz:5
+        h.div(id: "box", class_name: (["box", kind]), data: {"id" => "7", "kind" => (kind || "none")}, aria: {"label" => "Box"}, attrs: {"hx-get" => "/more", "x-on:click" => "open = true"}) do  # attrs.html.bz:5
           h.text("\n")
           h.a("A <link>", href: "/a?x=1&y=2", target: "_blank")
           h.text("\n")
@@ -74,10 +74,10 @@ module Corpus
   # Renders test/templates/components.html.bz.
   def self.components(user: User, notes: Array[String]) -> Bezel::Html
     Bezel.html do |h|
-      slot_1 = h.capture do
+      __bz_slot_1 = h.capture do
         h.a("Edit", href: "/users/#{user.id}")  # components.html.bz:5
       end
-      h.component(Panel.new(title: user.name, class_name: "wide", footer: slot_1)) do  # components.html.bz:2
+      h.component(Panel.new(title: user.name, class_name: "wide", footer: __bz_slot_1)) do  # components.html.bz:2
         h.p do
           h.put(user.email)  # components.html.bz:3
         end
@@ -96,7 +96,7 @@ module Corpus
       end
       h.text("\n")
       notes.each_with_index.to_a.each do |n, i|  # components.html.bz:12
-        h.component(Panel.new(title: "Note #{i.to_s}")) do  # components.html.bz:12
+        h.component(Panel.new(title: ("Note #{i.to_s}"))) do  # components.html.bz:12
           h.put(n)  # components.html.bz:12
         end
       end
@@ -132,7 +132,7 @@ module Corpus
           h.text("\n")
           h.form(action: "/logout", method: "post") do
             h.text("\n")
-            h.input(type: "hidden", name: "_csrf_token", value: conn.csrf_token || "")  # layout.html.bz:13
+            h.input(type: "hidden", name: "_csrf_token", value: (conn.csrf_token || ""))  # layout.html.bz:13
             h.text("\n")
             h.button("Log out", type: "submit")
             h.text("\n")
@@ -182,6 +182,11 @@ module Corpus
       h.text("\n")
       h.p do
         h.put(Bezel::Html.raw("<em>safe</em>"))  # text.html.bz:13
+      end
+      h.text("\n")
+      h.p(title: (code if n > 0)) do  # text.html.bz:14
+        h.put((code.gsub(/[<"}]/, "") + "#{n / 3}"))  # text.html.bz:14
+        h.text(" © 2026 —!")
       end
     end
   end
