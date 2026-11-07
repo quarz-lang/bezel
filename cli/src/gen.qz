@@ -1,4 +1,7 @@
-# `bezel gen controller|model|migration|resource`.
+# `bezel gen controller|model|migration|resource`. Each generator makes
+# its files and routes first, then writes them: when a later step fails
+# (a template elsewhere that does not compile), what it wrote is taken
+# back.
 module Cli::Gen
   # The field types `gen model` and `gen resource` take, as Quarz types.
   TYPES = {"string" => "String", "text" => "String", "integer" => "Int", "int" => "Int", "float" => "Float",
@@ -6,6 +9,9 @@ module Cli::Gen
 
   # A model's field: its name, Quarz type, and whether it is long text.
   data Field = (name: String, type: String, text: Bool)
+
+  # The line of the router `gen` adds its routes before.
+  MARKER = "# bezel gen: routes"
 
   # Runs the command.
   def self.command(args: Array[String], app: Cli::App, out: IO) -> Int
@@ -43,34 +49,62 @@ module Cli::Gen
     end
   end
 
-  # Adds `lines` to the router after its `# bezel gen: routes` line; when
-  # it has none, prints them for the user to add.
-  def self.routes(app: Cli::App, lines: Array[String], out: IO) -> Void
-    path = File.join(app.root, "src", "router.qz")
-    marker = "# bezel gen: routes"
-    text = File.exist?(path) ? File.read(path) : ""
-    at = text.index(marker)
-    if at.nil?
-      out.puts "Add to the router (src/router.qz has no `#{marker}` line):"
-      lines.each { |l| out.puts "  #{l}" }
-      return
+  # Writes `files` (path from the root, content), none of which may
+  # exist, adds `routes` to the router, then recompiles the templates
+  # and the migrations' list when `files` holds some; takes everything
+  # back when a step fails.
+  def self.apply(app: Cli::App, files: Array[[String, String]], routes: Array[String], out: IO) -> Void
+    files.each { |f| raise Cli::Error.new("#{f[0]} exists already") if File.exist?(File.join(app.root, f[0])) }
+    router = File.join(app.root, "src", "router.qz")
+    old_router = File.exist?(router) ? File.read(router) : nil
+    new_router = routes.empty? ? nil : Cli::Gen.with_routes(old_router || "", routes)
+    created = Array::Builder[String].new
+    begin
+      files.each do |f|
+        Cli.create(app.root, f[0], f[1], out)
+        created << f[0]
+      end
+      nr = new_router
+      if nr
+        File.write(router, nr)
+        out.puts "  update  src/router.qz"
+      end
+      Cli::Views.write(app, out) if files.any? { |f| f[0].end_with?(".html.bz") }
+      none: Array[String] = []
+      Cli::Migrations.command(none, app, out) if files.any? { |f| f[0].start_with?("src/migrations/") }
+    rescue Exception => e
+      created.to_a.each { |p| File.delete(File.join(app.root, p)) if File.exist?(File.join(app.root, p)) }
+      orig = old_router
+      File.write(router, orig) if orig && !new_router.nil?
+      raise e
     end
+    if !routes.empty? && new_router.nil?
+      out.puts "Add to the router (src/router.qz has no `#{MARKER}` line):"
+      routes.each { |l| out.puts "  #{l}" }
+    end
+  end
+
+  # `text` (the router) with `lines` added before its marker line, at its
+  # indentation; nil when it has no marker.
+  def self.with_routes(text: String, lines: Array[String]) -> String?
+    at = text.index(MARKER)
+    return nil if at.nil?
     line_start = (text[0, at].rindex("\n") || -1) + 1
     indent = text[line_start, at - line_start]
-    eol = text.index("\n", at) || text.size
+    return nil unless indent.strip.empty?
     added = lines.map { |l| "#{indent}#{l}\n" }.join
-    File.write(path, text[0, eol + 1] + added + text[(eol + 1)..])
-    out.puts "  update  src/router.qz"
+    text[0, line_start] + added + text[line_start, text.size - line_start]
   end
 
   # `gen controller NAME [ACTION...]`.
   def self.controller(args: Array[String], app: Cli::App, out: IO) -> Int
     n = Cli::Gen.name_of(args.first?, "controller")
+    raise Cli::Error.new("#{n}: src/views/#{n}/ is not for a controller's templates") if n == "generated" || n == "layouts"
     actions = args.size > 1 ? args[1...args.size] : ["index"]
     actions.each do |a|
       raise Cli::Error.new("#{a.inspect} is not an action name (snake_case)") unless a.match?(/\A[a-z][a-z0-9_]*\z/)
     end
-    Cli::Gen.absent(app, ["src/controllers/#{n}_controller.qz"] + actions.map { |a| "src/views/#{n}/#{a}.html.bz" })
+    raise Cli::Error.new("an action is given twice") unless actions.uniq.size == actions.size
     m = app.module_name
     cls = "#{m}::#{Cli.camel(n)}Controller"
     view = "#{m}::#{Cli.camel(n)}View"
@@ -79,14 +113,15 @@ module Cli::Gen
         "    render(conn, #{m}::LayoutsView.app(conn, #{Cli.camel(n).inspect}, #{view}.#{a}(conn)))\n" +
         "  end\n"
     end
-    Cli.create(app.root, "src/controllers/#{n}_controller.qz",
-               "# The #{n} pages.\nclass #{cls} < Bezel::Controller\n  controller\n\n#{defs.join("\n")}end\n", out)
+    files: Array[[String, String]] = [["src/controllers/#{n}_controller.qz",
+                                       "# The #{n} pages.\nclass #{cls} < Bezel::Controller\n  controller\n\n#{defs.join("\n")}end\n"]]
     actions.each do |a|
-      Cli.create(app.root, "src/views/#{n}/#{a}.html.bz",
-                 "{@args conn: Bezel::Conn}\n<h1>#{Cli.camel(n)}: #{a}</h1>\n<p>This page is src/views/#{n}/#{a}.html.bz.</p>\n", out)
+      tpl: [String, String] = ["src/views/#{n}/#{a}.html.bz",
+                               "{@args conn: Bezel::Conn}\n<h1>#{Cli.camel(n)}: #{a}</h1>\n<p>This page is src/views/#{n}/#{a}.html.bz.</p>\n"]
+      files = files.push(tpl)
     end
-    Cli::Views.write(app, out)
-    Cli::Gen.routes(app, actions.map { |a| "get \"/#{n}#{a == "index" ? "" : "/#{a}"}\", #{cls}, :#{a}" }, out)
+    routes = actions.map { |a| "get \"/#{n}#{a == "index" ? "" : "/#{a}"}\", #{cls}, :#{a}" }
+    Cli::Gen.apply(app, files, routes, out)
     0
   end
 
@@ -107,7 +142,8 @@ module Cli::Gen
     end
     given = names.to_a
     raise Cli::Error.new("gen migration takes one NAME") unless given.size == 1
-    Cli::Gen.migration(app, Cli::Gen.name_of(given[0], "migration"), "", version, out)
+    none: Array[String] = []
+    Cli::Gen.apply(app, [Cli::Gen.migration(app, Cli::Gen.name_of(given[0], "migration"), "", version)], none, out)
     0
   end
 
@@ -119,14 +155,9 @@ module Cli::Gen
     (now > latest ? now : latest + 1).to_s
   end
 
-  # Fails when one of `paths` (from the root) exists: checked before a
-  # generator writes anything.
-  def self.absent(app: Cli::App, paths: Array[String]) -> Void
-    paths.each { |p| raise Cli::Error.new("#{p} exists already") if File.exist?(File.join(app.root, p)) }
-  end
-
-  # Writes the migration `name` (its `change` body `body`) and the list.
-  def self.migration(app: Cli::App, name: String, body: String, version: String?, out: IO) -> Void
+  # The migration `name` (its `change` body `body`): its path and
+  # content.
+  def self.migration(app: Cli::App, name: String, body: String, version: String?) -> [String, String]
     found = Cli::Migrations.found(app)
     v = version || Cli::Gen.next_version(found)
     raise Cli::Error.new("#{v.inspect} is not a version (14 digits, a UTC time)") unless v.match?(/\A[0-9]{14}\z/)
@@ -141,22 +172,20 @@ module Cli::Gen
               "  def change -> Void\n" +
               body +
               "  end\nend\n"
-    Cli.create(app.root, "src/migrations/#{v}_#{name}.qz", content, out)
-    none: Array[String] = []
-    Cli::Migrations.command(none, app, out)
+    ["src/migrations/#{v}_#{name}.qz", content]
   end
 
-  # `gen model NAME [FIELD:TYPE...]`.
+  # `gen model NAME [FIELD:TYPE...]` (NAME singular).
   def self.model(args: Array[String], app: Cli::App, out: IO) -> Int
-    n = Rotor::Inflector.singularize(Cli::Gen.name_of(args.first?, "model"))
+    n = Cli::Gen.name_of(args.first?, "model")
     fields = Cli::Gen.fields(args.size > 1 ? args[1...args.size] : Array[String].new)
-    Cli::Gen.write_model(app, n, fields, nil, out)
+    none: Array[String] = []
+    Cli::Gen.apply(app, Cli::Gen.model_files(app, n, fields), none, out)
     0
   end
 
-  # Writes the model `n`, its changeset and its migration.
-  def self.write_model(app: Cli::App, n: String, fields: Array[Field], version: String?, out: IO) -> Void
-    Cli::Gen.absent(app, ["src/models/#{n}.qz"])
+  # The model `n`, with its changeset, and its migration.
+  def self.model_files(app: Cli::App, n: String, fields: Array[Field]) -> Array[[String, String]]
     m = app.module_name
     cls = "#{m}::#{Cli.camel(n)}"
     table = Rotor::Inflector.pluralize(n)
@@ -182,24 +211,28 @@ module Cli::Gen
     body = "    create_table :#{table} do |t|\n" +
            fields.map { |f| "      t.column :#{f.name}, #{f.type}\n" }.join +
            "      t.timestamps\n    end\n"
-    Cli::Gen.migration(app, "create_#{table}", body, version, out)
-    Cli.create(app.root, "src/models/#{n}.qz", content, out)
+    [Cli::Gen.migration(app, "create_#{table}", body, nil), ["src/models/#{n}.qz", content]]
   end
 
-  # `gen resource NAME [FIELD:TYPE...]`: the model, its migration, a
-  # controller of the seven actions, its views (DSL code in
+  # `gen resource NAME [FIELD:TYPE...]` (NAME singular): the model, its
+  # migration, a controller of the seven actions, its views (DSL code in
   # src/views/<plural>_view.qz) and `resources` in the router.
   def self.resource(args: Array[String], app: Cli::App, out: IO) -> Int
-    n = Rotor::Inflector.singularize(Cli::Gen.name_of(args.first?, "resource"))
+    n = Cli::Gen.name_of(args.first?, "resource")
     fields = Cli::Gen.fields(args.size > 1 ? args[1...args.size] : Array[String].new)
     raise Cli::Error.new("gen resource needs at least one FIELD:TYPE") if fields.empty?
     plural = Rotor::Inflector.pluralize(n)
     raise Cli::Error.new("#{n}: its plural is the same word; name it otherwise") if plural == n
-    Cli::Gen.absent(app, ["src/controllers/#{plural}_controller.qz", "src/views/#{plural}_view.qz", "src/views/#{plural}"])
-    Cli::Gen.write_model(app, n, fields, nil, out)
-    Cli.create(app.root, "src/controllers/#{plural}_controller.qz", Cli::Resource.controller(app, n, plural), out)
-    Cli.create(app.root, "src/views/#{plural}_view.qz", Cli::Resource.views(app, n, plural, fields), out)
-    Cli::Gen.routes(app, ["resources \"/#{plural}\", #{app.module_name}::#{Cli.camel(plural)}Controller"], out)
+    # (The router names a resource's routes from its path's plural.)
+    back = Rotor::Inflector.singularize(plural)
+    unless back == n
+      raise Cli::Error.new("#{n}: the router would name its routes `#{back}` (from the plural `#{plural}`); give a name whose plural singularizes back to it")
+    end
+    ctl: [String, String] = ["src/controllers/#{plural}_controller.qz", Cli::Resource.controller(app, n, plural)]
+    views: [String, String] = ["src/views/#{plural}_view.qz", Cli::Resource.views(app, n, plural, fields)]
+    files = Cli::Gen.model_files(app, n, fields).push(ctl).push(views)
+    raise Cli::Error.new("src/views/#{plural}/ exists already") if File.exist?(File.join(app.root, "src", "views", plural))
+    Cli::Gen.apply(app, files, ["resources \"/#{plural}\", #{app.module_name}::#{Cli.camel(plural)}Controller"], out)
     0
   end
 end

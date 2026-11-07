@@ -41,7 +41,12 @@ public def main(argv: Array[String], endpoint: Type[Endpoint], settings: Hash[Sy
       r.route_table.each { |route| out.puts route.to_s }
       0
     when "migrate", "rollback", "status"
-      Tasks.migrations(cmd, Tasks.options(cmd, rest), config || Config.load(app_name(endpoint), settings), migrations, out)
+      opts = Tasks.options(cmd, rest)
+      # (Checked before the configuration loads: a usage error first.)
+      Tasks.int(opts, "--to")
+      Tasks.int(opts, "--steps")
+      Tasks.int(opts, "--lock-timeout")
+      Tasks.migrations(cmd, opts, config || Tasks.config(app_name(endpoint), settings), migrations, out)
     else
       raise Tasks::UsageError.new("unknown command #{cmd.inspect}")
     end
@@ -49,7 +54,7 @@ public def main(argv: Array[String], endpoint: Type[Endpoint], settings: Hash[Sy
     STDERR.puts "bezel: #{e.message}"
     STDERR.puts Tasks::USAGE
     2
-  rescue Rotor::MigrationError, ArgumentError, ConfigError => e
+  rescue Rotor::MigrationError, ArgumentError, ConfigError, PG::Error => e
     STDERR.puts "bezel: #{e.message}"
     1
   end
@@ -63,8 +68,10 @@ module Tasks
   end
 
   # The usage `Bezel.main` prints.
-  USAGE = "usage: (no arguments) | server | routes | migrate [--to VERSION] | rollback [--steps N | --to VERSION] | status\n" +
-          "       migrate, rollback, status: [--allow-out-of-order] [--lock-timeout MS] [--table NAME]"
+  USAGE = "usage: (no arguments) | server | routes\n" +
+          "       migrate [--to VERSION] [--allow-out-of-order] [--lock-timeout MS] [--table NAME]\n" +
+          "       rollback [--steps N | --to VERSION] [--lock-timeout MS] [--table NAME]\n" +
+          "       status [--table NAME]"
 
   # The options each command takes, with whether they take a value.
   OPTIONS = {
@@ -72,6 +79,15 @@ module Tasks
     "rollback" => {"--steps" => true, "--to" => true, "--lock-timeout" => true, "--table" => true},
     "status" => {"--table" => true}
   }
+
+  # The configuration of a migration command: as `Config.load` makes it,
+  # but without needing SECRET_KEY_BASE in prod, which migrations do not
+  # use (a placeholder stands for it, used by nothing).
+  def self.config(app: String, settings: Hash[Symbol, Settings]) -> Config
+    env = Process.env
+    env = env.put("SECRET_KEY_BASE", "-" * 64) unless env.key?("SECRET_KEY_BASE")
+    Config.load(app, settings, environ: env)
+  end
 
   # Refuses arguments to a command that takes none.
   def self.no_options(cmd: String, rest: Array[String]) -> Void

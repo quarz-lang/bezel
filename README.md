@@ -252,18 +252,20 @@ bezel test
 ```
 
 - The application's `src/main.qz` calls `Bezel.main(ARGV, Shop::Endpoint, settings, router:, migrations:)`:
-  without arguments it serves; `routes`, `migrate [--to V]`,
-  `rollback [--steps N | --to V]` and `status` (`--allow-out-of-order`,
-  `--lock-timeout MS`, `--table NAME`) are what `bezel` runs in it
-  (`quarz run -- routes`).
+  without arguments it serves; `routes`, `migrate [--to V]
+  [--allow-out-of-order] [--lock-timeout MS] [--table NAME]`,
+  `rollback [--steps N | --to V] [--lock-timeout MS] [--table NAME]` and
+  `status [--table NAME]` are what `bezel` runs in it
+  (`quarz run -- routes`); the migration commands need no
+  SECRET_KEY_BASE.
 - Migrations are `src/migrations/<version>_<name>.qz`, each a
   `Shop::Migrations::<Name> < Rotor::Migration`; `gen` writes them with a
   UTC timestamp and rewrites the list `Shop::Migrations.all`.
 - `bezel gen` adds its routes after the router's `# bezel gen: routes`
   line. `bezel server` (restart on change) waits for quarz-lang/quarz#385,
   and the output of `routes`, `migrate` and `test` comes when they end
-  until then; `gen resource`'s code compiles once quarz-lang/quarz#386 is
-  fixed. divider and `gen job` come with divider (#20).
+  until then; `gen resource`'s code compiles once quarz-lang/quarz#386
+  and quarz-lang/quarz#387 are fixed. divider and `gen job` come with divider (#20).
 
 ## License
 

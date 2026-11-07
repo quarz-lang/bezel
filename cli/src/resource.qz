@@ -131,7 +131,7 @@ module Cli::Resource
       "        h.text(\" \")\n" +
       "        h.a(\"Back\", href: #{r}.#{plural}_path)\n" +
       "      end\n" +
-      "      h.link(\"Delete\", to: #{r}.#{n}_path(id: #{n}.id), method: :delete, confirm: \"Delete this #{human}?\")\n" +
+      "      h.link(\"Delete\", to: #{r}.#{n}_path(id: #{n}.id), method: :delete)\n" +
       "    end\n" +
       "  end\n\n" +
       "  # The form of a new #{human} or an edited one, posting to `action`.\n" +

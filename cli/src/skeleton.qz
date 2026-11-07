@@ -7,6 +7,13 @@ module Cli::Skeleton
   ROTOR_GIT = "https://github.com/quarz-lang/rotor"
   PG_GIT = "https://github.com/quarz-lang/pg"
 
+  # Modules an application's cannot be named like: the standard
+  # library's and its dependencies' (a clash fails to compile).
+  TAKEN = ["Bezel", "Rotor", "PG", "Test", "Time", "Duration", "File", "Dir", "IO", "Set", "Array", "Hash", "String",
+           "Int", "Float", "Bool", "Symbol", "Object", "Kernel", "Process", "Signal", "Task", "Channel", "Atom", "Math",
+           "Random", "Regexp", "Range", "Bytes", "JSON", "HTTP", "URI", "Socket", "TLS", "Crypto", "Digest", "Base64",
+           "Meta", "Nil", "Enumerable", "Comparable", "Exception", "Main", "Cli", "Type", "Proc", "Struct"]
+
   # Runs the command.
   def self.command(args: Array[String], cwd: String, out: IO) -> Int
     name: String? = nil
@@ -28,6 +35,13 @@ module Cli::Skeleton
     n = name
     raise Cli::Error.new("new needs the application's NAME") if n.nil?
     raise Cli::Error.new("#{n.inspect}: an application's name is snake_case (shop, my_shop)") unless n.match?(/\A[a-z][a-z0-9_]*\z/)
+    if TAKEN.include?(Cli.camel(n))
+      raise Cli::Error.new("#{n}: its module #{Cli.camel(n)} is a standard or dependency's name; choose another")
+    end
+    b = bezel
+    if b && !File.file?(File.join(b, "Cog.toml"))
+      raise Cli::Error.new("--bezel #{b}: no Cog.toml there (the bezel checkout's root)")
+    end
     root = File.join(cwd, n)
     raise Cli::Error.new("#{n} exists already") if File.exist?(root)
     app = Cli::App.new(root, n, Cli.camel(n))

@@ -99,7 +99,7 @@ class CliTest < Test::Case
       assert(read(root, "src/controllers/about_controller.qz").include?("render(conn, Shop::LayoutsView.app(conn, \"About\", Shop::AboutView.team(conn)))"))
       assert(read(root, "src/views/generated/about.qz").include?("def self.team(conn: Bezel::Conn) -> Bezel::Html"))
       router = read(root, "src/router.qz")
-      assert(router.include?("      # bezel gen: routes\n      get \"/about\", Shop::AboutController, :index\n      get \"/about/team\", Shop::AboutController, :team\n"))
+      assert(router.include?("      get \"/about\", Shop::AboutController, :index\n      get \"/about/team\", Shop::AboutController, :team\n      # bezel gen: routes\n"))
       assert_equal(1, bezel(["gen", "controller", "about"], root)[0])
 
       assert_equal(0, bezel(["gen", "migration", "AddThings", "--version", "20261108000001"], root)[0])
@@ -107,7 +107,7 @@ class CliTest < Test::Case
       assert_equal(1, bezel(["gen", "migration", "other", "--version", "20261108000001"], root)[0])
       assert_equal(1, bezel(["gen", "migration", "add_things"], root)[0])
 
-      assert_equal(0, bezel(["gen", "model", "tags", "name:string", "weight:float", "note:text", "seen:boolean", "at:time"], root)[0])
+      assert_equal(0, bezel(["gen", "model", "tag", "name:string", "weight:float", "note:text", "seen:boolean", "at:time"], root)[0])
       model = read(root, "src/models/tag.qz")
       assert(model.include?("class Shop::Tag < Rotor::Model\n  table \"tags\" do\n    column :id, Int, primary: true\n    column :name, String\n    column :weight, Float\n"))
       assert(model.include?("Rotor::Changeset.cast(Shop::Tag, params, [:name, :weight, :note, :seen, :at])"))
@@ -144,10 +144,55 @@ class CliTest < Test::Case
       assert(v.include?("          f.checkbox(:published)\n"))
       assert_equal(1, bezel(["gen", "resource", "post", "title:string"], root)[0])
       assert_equal(1, bezel(["gen", "resource", "comment"], root)[0])
-      # (The generated application compiles once quarz-lang/quarz#386 is
-      # fixed: a rotor model's `table` reaches the controller's `delete`.)
+      # (The generated application compiles once quarz-lang/quarz#386 and
+      # #387 are fixed: a rotor model's `table` reaches the controller's
+      # `delete`, and a controller's statement its actions, which call
+      # the router's helpers.)
       res = quarz_check(root)
-      omit("quarz-lang/quarz#386: the resource's code does not compile yet") unless res.success?
+      omit("quarz-lang/quarz#386, #387: the resource's code does not compile yet") unless res.success?
+    ensure
+      Dir.rm_rf(File.dirname(root))
+    end
+  end
+
+  def test_review_cases
+    dir = CliTest.tmp
+    begin
+      assert_equal(1, bezel(["new", "test", "--bezel", CliTest.repo], dir)[0])
+      assert_equal(1, bezel(["new", "time", "--bezel", CliTest.repo], dir)[0])
+      assert_equal(1, bezel(["new", "shop", "--bezel", dir], dir)[0])
+      assert(!File.exist?(File.join(dir, "shop")))
+    ensure
+      Dir.rm_rf(dir)
+    end
+    root = new_app
+    begin
+      # (Names whose plural the router would read back otherwise.)
+      assert_equal(1, bezel(["gen", "resource", "movie", "title:string"], root)[0])
+      assert(!File.exist?(File.join(root, "src/models/movie.qz")))
+      # (A singular name stays as given.)
+      assert_equal(0, bezel(["gen", "model", "status", "name:string"], root)[0])
+      assert(read(root, "src/models/status.qz").include?("class Shop::Status < Rotor::Model"))
+      assert_equal(1, bezel(["gen", "controller", "generated"], root)[0])
+      # (A broken template elsewhere: nothing is left behind.)
+      Dir.mkdir_p(File.join(root, "src/views/wip"))
+      File.write(File.join(root, "src/views/wip/a.html.bz"), "<p>\n<b>x</p>")
+      router = read(root, "src/router.qz")
+      assert_equal(1, bezel(["gen", "controller", "contact"], root)[0])
+      assert(!File.exist?(File.join(root, "src/controllers/contact_controller.qz")))
+      assert(!File.exist?(File.join(root, "src/views/contact/index.html.bz")))
+      assert_equal(router, read(root, "src/router.qz"))
+      File.delete(File.join(root, "src/views/wip/a.html.bz"))
+      assert_equal(0, bezel(["gen", "controller", "contact"], root)[0])
+      # (A hand-written file among the generated ones stays.)
+      File.write(File.join(root, "src/views/generated/helpers.qz"), "# mine\n")
+      assert_equal(0, bezel(["templates"], root)[0])
+      assert(File.exist?(File.join(root, "src/views/generated/helpers.qz")))
+      # (The marker on the router's last line, without a line break.)
+      parts = read(root, "src/router.qz").partition("# bezel gen: routes")
+      File.write(File.join(root, "src/router.qz"), parts[0] + parts[1])
+      assert_equal(0, bezel(["gen", "controller", "faq"], root)[0])
+      assert(read(root, "src/router.qz").end_with?("      get \"/faq\", Shop::FaqController, :index\n      # bezel gen: routes"))
     ensure
       Dir.rm_rf(File.dirname(root))
     end
@@ -165,7 +210,7 @@ class CliTest < Test::Case
       File.write(File.join(root, "src/views/extra/x.html.bz"), "<p>\n<b>x</p>")
       assert_equal(1, bezel(["templates"], root)[0])
       File.delete(File.join(root, "src/views/extra/x.html.bz"))
-      File.write(File.join(root, "src/views/generated/old.qz"), "")
+      File.write(File.join(root, "src/views/generated/old.qz"), "# Generated by `bezel templates` from the templates below: do not edit;\n")
       assert_equal(1, bezel(["templates", "--check"], root)[0])
       assert_equal([0, "  remove  src/views/generated/old.qz\n"], bezel(["templates"], root))
     ensure
