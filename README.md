@@ -264,8 +264,8 @@ bezel test
 - `bezel gen` adds its routes before the router's `# bezel gen: routes`
   line. `bezel server` (restart on change) waits for quarz-lang/quarz#385,
   and the output of `routes`, `migrate` and `test` comes when they end
-  until then; `gen resource`'s code compiles once quarz-lang/quarz#386
-  and quarz-lang/quarz#387 are fixed. divider and `gen job` come with divider (#20).
+  until then; `gen resource`'s code compiles once quarz-lang/quarz#387
+  is fixed. divider and `gen job` come with divider (#20).
 
 ## License
 
