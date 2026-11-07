@@ -26,14 +26,22 @@ data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: 
   def delete(key: String) -> Session = with(values: values.delete(key), changed: true, dropped: false)
 
   # An empty session, whose cookie is to be dropped (logging out).
-  def drop -> Session = Session.new({}, true, true, loaded)
+  # The CSRF secret goes too, replaced by a fresh one when the session had
+  # one, so that a page rendered after `drop` has a token that holds.
+  def drop -> Session
+    fresh: Hash[String, String] = values.key?("_csrf_token") ? {"_csrf_token" => Plug::CSRF.new_secret} : {}
+    Session.new(fresh, true, true, loaded)
+  end
 
-  # The session with a fresh identity, after a login: the same values
-  # but its CSRF secret (`Plug::CSRF` makes a new one on the next
-  # request), so that a session an attacker planted before the login
-  # does not carry a secret they know. (A server-side store would change
-  # its id here too.)
-  def renew -> Session = with(values: values.delete("_csrf_token"), changed: true, dropped: false)
+  # The session with a new CSRF secret (when it had one): the values
+  # stay, so that a page rendered after it carries a token of the new
+  # secret. Against a session planted before a login, `drop` then `put`
+  # the user's id: `renew` keeps whatever else the planted cookie held.
+  # (A server-side store would change its id here too.)
+  def renew -> Session
+    v = values.key?("_csrf_token") ? values.put("_csrf_token", Plug::CSRF.new_secret) : values
+    with(values: v, changed: true, dropped: false)
+  end
 end
 
 # The flash: messages kept for the next request (`put`), and those the
@@ -125,9 +133,16 @@ data Conn(
   # The configuration.
   def config -> Config = app.config
 
-  # The CSRF token forms of this request carry, or nil: what the CSRF
-  # plug (bezel#6) assigns to `:csrf_token`.
-  def csrf_token -> String? = assigns[:csrf_token]?.as?(String)
+  # The CSRF token forms of this request carry, or nil: the session's
+  # CSRF secret (`Plug::CSRF` makes one), masked afresh at each call, so
+  # that it follows a `renew` or `drop` in this request; else the
+  # `:csrf_token` assign.
+  def csrf_token -> String?
+    text = session["_csrf_token"]
+    secret = text ? Plug::CSRF.decode(text) : nil
+    return Plug::CSRF.mask(secret) if secret && secret.size == 32
+    assigns[:csrf_token]?.as?(String)
+  end
 
   # `path` (a route helper's) as a URL of this request's scheme and host:
   # `Conn#url(Router.user_path(id: 1))`. The host is the request's Host header

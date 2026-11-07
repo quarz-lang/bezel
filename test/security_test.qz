@@ -15,6 +15,8 @@ class SecEndpoint < Bezel::Endpoint
        in ["GET", "/logout"] then conn.put_session(conn.session.drop).text("out")
        in ["GET", "/relogin"] then conn.put_session(conn.session.drop).put_session("user_id", "9").put_flash(:info, "welcome").text("re")
        in ["GET", "/renew"] then conn.put_session(conn.session.renew).text("renewed")
+       in ["GET", "/renew-token"] then (c2 = conn.put_session(conn.session.renew); c2.text(c2.csrf_token || ""))
+       in ["GET", "/drop-token"] then (c3 = conn.put_session(conn.session.drop); c3.text(c3.csrf_token || ""))
        in ["GET", "/secret"] then conn.text(conn.session["_csrf_token"] || "-")
        in ["GET", "/big"] then conn.put_session("blob", "x" * 5000).text("big")
        in ["GET", "/flash"] then conn.put_flash(:info, "saved").redirect("/next")
@@ -294,5 +296,29 @@ class SecurityTest < Test::Case
     assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Host" => "shop.example:80", "Origin" => "http://shop.example"}).status)
     assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Host" => "shop.example", "Origin" => "http://shop.example:80"}).status)
     assert_equal(403, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Host" => "shop.example", "Origin" => "http://shop.example:8080"}).status)
+  end
+
+  def test_tokens_rendered_after_renew_or_drop_hold
+    jar = SecJar.new
+    jar.request("GET", "/me")
+    token = text_of(jar.request("GET", "/renew-token"))
+    assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}").status)
+    token2 = text_of(jar.request("GET", "/drop-token"))
+    assert_false(token2.empty?)
+    assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token2}").status)
+  end
+
+  def test_host_names_are_ascii_and_ports_real
+    ["Kiosk.example", "bücher.example", "shop.example:65536", "shop.example:080"].each do |bad|
+      assert_raise(Bezel::Forbidden) { host(bad) }
+    end
+    assert_false(host("shop.example:65535").halted?)
+  end
+
+  def test_cookie_store_arguments
+    assert_raise(ArgumentError) { Bezel::Session::CookieStore.new(key: "_m", max_age: -5) }
+    store = Bezel::Session::CookieStore.new(key: "_m")
+    conn = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    assert_raise(ArgumentError) { store.save(conn, Bezel::Session.new({"_bezel_expires" => "1"}, true)) }
   end
 end

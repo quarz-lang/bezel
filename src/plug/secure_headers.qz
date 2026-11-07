@@ -73,7 +73,12 @@ class Plug::HostAuthorization
   # `host` without its port (`[::1]:80` is `[::1]`), or nil when it is
   # not a host with an optional port of digits.
   def self.strip_port(host: String) -> String?
-    m = host.match(/\A(\[[0-9A-Fa-f:.]+\]|[^:\[\]\/?#@\s]+)(:[0-9]{1,5})?\z/)
-    m ? m[1] : nil
+    # (ASCII names only: browsers send IDNs as punycode, and a Unicode
+    # downcase would let another host match.)
+    m = host.match(/\A(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+)(:([1-9][0-9]{0,4}))?\z/)
+    return nil if m.nil?
+    port = m[3]
+    return nil if port && port.to_i > 65_535
+    m[1]
   end
 end

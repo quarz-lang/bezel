@@ -26,7 +26,8 @@ end
 # from a copy someone kept. With `max_age`, the cookie holds its expiry
 # (set when it is written), and an older one reads as empty: the
 # session ends `max_age` after its last change, whatever the browser
-# keeps. What must be revocable belongs in the database, the session
+# keeps (turning `max_age` on reads the cookies written before as empty:
+# their sessions end). What must be revocable belongs in the database, the session
 # holding its id. A cookie name with the `__Host-` prefix (with
 # `secure: true`) keeps sibling subdomains from planting one.
 class Session::CookieStore
@@ -47,6 +48,7 @@ class Session::CookieStore
   def initialize(*, key: String, max_age: Int? = nil, secure: Bool? = nil, same_site: String = "Lax",
                  domain: String? = nil)
     raise ArgumentError.new("same_site: Lax, Strict or None, not #{same_site.inspect}") unless ["Lax", "Strict", "None"].include?(same_site)
+    raise ArgumentError.new("max_age must not be negative") if max_age && max_age < 0
     @key = key
     @max_age = max_age
     @secure = secure
@@ -71,7 +73,10 @@ class Session::CookieStore
 
   def save(conn: Conn, session: Session) -> Conn
     secure = @secure.nil? ? !conn.config.dev? : @secure == true
-    if session.dropped || session.values.reject { |k, v| k == EXPIRES }.empty?
+    raise ArgumentError.new("#{EXPIRES} is the cookie store's own key, not a session value") if session.values.key?(EXPIRES)
+    # (Empty, the cookie goes; a dropped session with new values, a CSRF
+    # secret or a login's, is written as a new one.)
+    if session.values.empty?
       return conn unless session.changed || session.dropped
       return conn.add_resp_header("set-cookie", Cookies.set_cookie(@key, "", max_age: 0, secure: secure, same_site: @same_site, domain: @domain))
     end
@@ -90,7 +95,7 @@ class Session::CookieStore
 
   # :nodoc:
   def encode(conn: Conn, values: Hash[String, String]) -> String
-    v = values.delete(EXPIRES)
+    v = values
     age = @max_age
     v = v.put(EXPIRES, (Time.now.to_i + age).to_s) if age
     Base64.urlsafe_encode(cipher(conn).encrypt(JSON.generate(v), aad: @key), padding: false)

@@ -41,8 +41,9 @@ class Plug::CSRF
     secret_text = conn.session[KEY]
     secret = secret_text ? Plug::CSRF.decode(secret_text) : nil
     if secret.nil? || secret.size != 32
-      secret = Crypto.random_bytes(32)
-      conn = conn.put_session(KEY, Base64.urlsafe_encode(secret, padding: false))
+      text = Plug::CSRF.new_secret
+      conn = conn.put_session(KEY, text)
+      secret = Plug::CSRF.decode(text) || Bytes.new
     end
     if UNSAFE.include?(conn.method)
       Plug::CSRF.check_origin(conn)
@@ -50,8 +51,12 @@ class Plug::CSRF
       raise InvalidCSRFToken.new("CSRF token missing") if given.nil? || given.empty?
       raise InvalidCSRFToken.new unless Plug::CSRF.valid?(secret, given)
     end
-    conn.assign(:csrf_token, Plug::CSRF.mask(secret))
+    conn
   end
+
+  # A new secret: 32 random bytes, URL-safe Base64 (what the session
+  # keeps).
+  def self.new_secret -> String = Base64.urlsafe_encode(Crypto.random_bytes(32), padding: false)
 
   # `secret` masked with a fresh pad: the pad and the secret XORed with
   # it, in URL-safe Base64.
