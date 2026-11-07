@@ -9,20 +9,41 @@ data App(config: Config, pool: PG::Pool? = nil)
   end
 end
 
-# The session's values, which the session plug (bezel#6) loads from
-# and writes to its store; empty without that plug.
-data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: Bool = false)
+# The session's values, which `Plug::Session` loads from its store
+# (`Session::Store`) and writes back when they changed; empty, and not
+# `loaded`, without that plug. Values are strings (an application
+# stores ids, not objects).
+data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: Bool = false, loaded: Bool = false)
   # The value of `key`, or nil.
   def [](key: String) -> String? = values[key]?
 
   # The session with `key` set to `value`.
-  def put(key: String, value: String) -> Session = with(values: values.put(key, value), changed: true)
+  # (After `drop`, a value put starts a new session: logging in after
+  # dropping the old one.)
+  def put(key: String, value: String) -> Session = with(values: values.put(key, value), changed: true, dropped: false)
 
   # The session without `key`.
-  def delete(key: String) -> Session = with(values: values.delete(key), changed: true)
+  def delete(key: String) -> Session = with(values: values.delete(key), changed: true, dropped: false)
 
-  # An empty session, whose cookie is to be dropped (logging out).
-  def drop -> Session = Session.new({}, true, true)
+  # The session dropped (logging out): none of its values kept, but a
+  # fresh CSRF secret when it had one; a store deletes its cookie when
+  # nothing is left, else writes the new one.
+  # The CSRF secret goes too, replaced by a fresh one when the session had
+  # one, so that a page rendered after `drop` has a token that holds.
+  def drop -> Session
+    fresh: Hash[String, String] = values.key?("_csrf_token") ? {"_csrf_token" => Plug::CSRF.new_secret} : {}
+    Session.new(fresh, true, true, loaded)
+  end
+
+  # The session with a new CSRF secret (when it had one): the values
+  # stay, so that a page rendered after it carries a token of the new
+  # secret. Against a session planted before a login, `drop` then `put`
+  # the user's id: `renew` keeps whatever else the planted cookie held.
+  # (A server-side store would change its id here too.)
+  def renew -> Session
+    v = values.key?("_csrf_token") ? values.put("_csrf_token", Plug::CSRF.new_secret) : values
+    with(values: v, changed: true, dropped: false)
+  end
 end
 
 # The flash: messages kept for the next request (`put`), and those the
@@ -114,9 +135,16 @@ data Conn(
   # The configuration.
   def config -> Config = app.config
 
-  # The CSRF token forms of this request carry, or nil: what the CSRF
-  # plug (bezel#6) assigns to `:csrf_token`.
-  def csrf_token -> String? = assigns[:csrf_token]?.as?(String)
+  # The CSRF token forms of this request carry, or nil: the session's
+  # CSRF secret (`Plug::CSRF` makes one), masked afresh at each call, so
+  # that it follows a `renew` or `drop` in this request; else the
+  # `:csrf_token` assign.
+  def csrf_token -> String?
+    text = session["_csrf_token"]
+    secret = text ? Plug::CSRF.decode(text) : nil
+    return Plug::CSRF.mask(secret) if secret && secret.size == 32
+    assigns[:csrf_token]?.as?(String)
+  end
 
   # `path` (a route helper's) as a URL of this request's scheme and host:
   # `Conn#url(Router.user_path(id: 1))`. The host is the request's Host header

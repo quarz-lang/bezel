@@ -1,0 +1,79 @@
+# Keys derived from the application's SECRET_KEY_BASE, one per purpose
+# (the session cookie's, the tokens'): PBKDF2-SHA256 of the secret with
+# the purpose as the salt. Derived once per secret and purpose, then
+# kept for the process.
+#
+# ```
+# k = Bezel::Keys.derive("s" * 64, "bezel session")
+# k.size                                          # => 32
+# k == Bezel::Keys.derive("s" * 64, "bezel session")   # => true
+# k == Bezel::Keys.derive("s" * 64, "bezel token")     # => false
+# ```
+module Keys
+  # PBKDF2's iterations: the secret is random and long, so these only
+  # separate the purposes (as Rails' key generator).
+  ITERATIONS = 1000
+
+  # The keys derived so far, by secret and purpose.
+  CACHE = Atom.new(Hash[String, Bytes].new)
+
+  # A 32-byte key for `purpose` from `secret`.
+  def self.derive(secret: String, purpose: String) -> Bytes
+    id = Digest::SHA256.hexdigest("#{purpose}\0#{secret}")
+    known = CACHE.value[id]?
+    return known if known
+    key = Digest::PBKDF2.sha256(secret, purpose, ITERATIONS, 32)
+    CACHE.update { |h| h.put(id, key) }
+    key
+  end
+
+  # Whether `a` and `b` are equal, in a time that depends on their
+  # lengths only (not on where they differ): for comparing secrets.
+  def self.same?(a: Bytes | String, b: Bytes | String) -> Bool
+    x = a.is_a?(String) ? a.to_bytes : a
+    y = b.is_a?(String) ? b.to_bytes : b
+    return false unless x.size == y.size
+    diff = 0
+    i = 0
+    while i < x.size
+      diff = diff | (x[i] ^ y[i])
+      i += 1
+    end
+    diff == 0
+  end
+end
+
+# Request cookies and `Set-Cookie` values.
+module Cookies
+  # The cookies of a Cookie header (`a=1; b=2`): name to value, the
+  # first of a name kept (the most specific, as browsers send them).
+  def self.parse(header: String?) -> Hash[String, String]
+    out: Hash[String, String] = {}
+    return out if header.nil?
+    header.split(";").each do |pair|
+      name, eq, value = pair.strip.partition("=")
+      next if eq.empty? || name.empty? || out.key?(name)
+      v = value.strip
+      v = v[1, v.size - 2] if v.size >= 2 && v.start_with?("\"") && v.end_with?("\"")
+      out = out.put(name, v)
+    end
+    out
+  end
+
+  # A `Set-Cookie` value: `name=value` and its attributes. `name` must be
+  # a token and `value` cookie characters (no spaces, quotes, commas,
+  # semicolons or backslashes): `ArgumentError` otherwise.
+  def self.set_cookie(name: String, value: String, *, path: String = "/", max_age: Int? = nil,
+                      http_only: Bool = true, secure: Bool = false, same_site: String? = "Lax",
+                      domain: String? = nil) -> String
+    raise ArgumentError.new("cookie name #{name.inspect} is not a token") unless name.match?(/\A[!#$%&'*+\-.^_`|~0-9A-Za-z]+\z/)
+    raise ArgumentError.new("cookie #{name}: the value has a character cookies cannot hold") unless value.match?(/\A[!#-+\--:<-\[\]-~]*\z/)
+    out = "#{name}=#{value}; Path=#{path}"
+    out += "; Domain=#{domain}" if domain
+    out += "; Max-Age=#{max_age}" if max_age
+    out += "; HttpOnly" if http_only
+    out += "; Secure" if secure
+    out += "; SameSite=#{same_site}" if same_site
+    out
+  end
+end

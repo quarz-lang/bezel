@@ -1,0 +1,84 @@
+# Sets the response headers that keep browsers from misreading or
+# framing the application's pages: `X-Content-Type-Options: nosniff`,
+# `X-Frame-Options` (SAMEORIGIN by default), `Referrer-Policy`
+# (`strict-origin-when-cross-origin`), and, when given, a
+# `Content-Security-Policy` and `Strict-Transport-Security` (`hsts:`,
+# a max-age in seconds; only for an application served over HTTPS).
+# A header the application sets itself later in the pipeline wins.
+class Plug::SecureHeaders
+  include Plug
+
+  @frame_options: String?
+  @referrer_policy: String?
+  @csp: String?
+  @hsts: Int?
+
+  # The plug; nil leaves a header out.
+  def initialize(*, frame_options: String? = "SAMEORIGIN", referrer_policy: String? = "strict-origin-when-cross-origin",
+                 csp: String? = nil, hsts: Int? = nil)
+    @frame_options = frame_options
+    @referrer_policy = referrer_policy
+    @csp = csp
+    @hsts = hsts
+  end
+
+  def call(conn: Conn) -> Conn
+    c = conn.put_resp_header("x-content-type-options", "nosniff")
+    fo = @frame_options
+    c = c.put_resp_header("x-frame-options", fo) if fo
+    rp = @referrer_policy
+    c = c.put_resp_header("referrer-policy", rp) if rp
+    csp = @csp
+    c = c.put_resp_header("content-security-policy", csp) if csp
+    hsts = @hsts
+    c = c.put_resp_header("strict-transport-security", "max-age=#{hsts}; includeSubDomains") if hsts
+    c
+  end
+end
+
+# Refuses a request whose Host header is not one of the application's
+# hosts (a 403), against DNS rebinding and links built from a forged
+# Host (`Conn#url`). A host is a name (`shop.example`), a name with a
+# leading dot for it and its subdomains (`.shop.example`), or an
+# address; the port is ignored and case does not matter.
+#
+# ```
+# p = Bezel::Plug::HostAuthorization.new(["shop.example", ".cdn.example"])
+# ok = HTTP::Server::Request.get("/", HTTP::Headers.of({"Host" => "img.cdn.example:8080"}))
+# p.call(Bezel::Conn.build(ok)).halted?             # => false
+# ```
+class Plug::HostAuthorization
+  include Plug
+
+  @hosts: Array[String]
+
+  # The plug, allowing `hosts`.
+  def initialize(@hosts: Array[String])
+    raise ArgumentError.new("HostAuthorization needs at least one host") if @hosts.empty?
+  end
+
+  def call(conn: Conn) -> Conn
+    given = conn.request.host
+    raise Forbidden.new("blocked host") if given.nil? || given.empty?
+    host = Plug::HostAuthorization.strip_port(given)&.downcase
+    raise Forbidden.new("blocked host: not a host and port") if host.nil?
+    ok = @hosts.any? do |h|
+      want = h.downcase
+      want.start_with?(".") ? (host == want.delete_prefix(".") || host.end_with?(want)) : host == want
+    end
+    raise Forbidden.new("blocked host #{host.inspect}: add it to the allowed hosts") unless ok
+    conn
+  end
+
+  # `host` without its port (`[::1]:80` is `[::1]`), or nil when it is
+  # not a host with an optional port of digits.
+  def self.strip_port(host: String) -> String?
+    # (ASCII names only: browsers send IDNs as punycode, and a Unicode
+    # downcase would let another host match.)
+    m = host.match(/\A(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+)(:([1-9][0-9]{0,4}))?\z/)
+    return nil if m.nil?
+    port = m[3]
+    return nil if port && port.to_i > 65_535
+    m[1]
+  end
+end
