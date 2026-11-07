@@ -1,0 +1,119 @@
+require "test"
+
+class TkHome < Bezel::Controller
+  controller
+
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+end
+
+class TkRouter < Bezel::Router
+  routes do
+    get "/", TkHome, :home, as: "home"
+    get "/about", TkHome, :home
+  end
+end
+
+class TkEndpoint < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [TkRouter.new]
+end
+
+class TkCreateItems < Rotor::Migration
+  version 20261108000001
+
+  def change -> Void
+    create_table :tk_items do |t|
+      t.column :name, String
+    end
+  end
+end
+
+class TkAddSize < Rotor::Migration
+  version 20261108000002
+
+  def change -> Void
+    add_column :tk_items, :size, Int, default: 0
+  end
+end
+
+# `Bezel.main`: the commands `bezel` runs in an application.
+class TasksTest < Test::Case
+  # What `Bezel.main(argv, ...)` printed and returned.
+  def run_main(argv: Array[String], config: Bezel::Config? = nil) -> [Int, String]
+    path = File.join(Dir.tmpdir, "bezel-tasks-#{Process.pid}-#{Random.rand(1_000_000)}.txt")
+    begin
+      status = File.open(path, "w") do |io|
+        Bezel.main(argv, TkEndpoint, router: TkRouter, migrations: [TkCreateItems, TkAddSize], config: config, out: io)
+      end
+      [status, File.read(path)]
+    ensure
+      File.delete(path) if File.exist?(path)
+    end
+  end
+
+  def config(url: String?) -> Bezel::Config
+    env = {"BEZEL_ENV" => "test"}
+    env = env.put("DATABASE_URL", url) if url
+    Bezel::Config.load("tk", environ: env)
+  end
+
+  # Drops what the migrations made at `url`.
+  def drop(url: String) -> Void
+    c = PG.connect(url)
+    begin
+      c.exec("DROP TABLE IF EXISTS tk_items, schema_migrations, other_versions")
+    ensure
+      c.close
+    end
+  end
+
+  def test_routes
+    status, out = run_main(["routes"])
+    assert_equal(0, status)
+    assert_equal(["home  GET     /  TkHome#home", "GET     /about  TkHome#home"], out.lines.map(&:strip))
+  end
+
+  def test_usage_errors
+    assert_equal(2, run_main(["nope"])[0])
+    assert_equal(2, run_main(["routes", "x"])[0])
+    assert_equal(2, run_main(["migrate", "--steps", "1"])[0])
+    assert_equal(2, run_main(["rollback", "--steps", "1", "--to", "2"])[0])
+    assert_equal(2, run_main(["migrate", "--to"])[0])
+    assert_equal(2, run_main(["migrate", "--to", "x"], config(nil))[0])
+    assert_equal(2, run_main(["status", "--table", "a", "--table", "b"])[0])
+  end
+
+  def test_no_database
+    assert_equal(1, run_main(["status"], config(nil))[0])
+    # (A database that does not answer: a message, not a trace.)
+    assert_equal(1, run_main(["status"], config("postgres://127.0.0.1:1/x"))[0])
+  end
+
+  def test_migrate_status_rollback
+    PG::Testing.with_cluster do |url|
+      # (PG_TEST_URL's server is shared, and kept between runs: the tables
+      # are dropped before and after.)
+      drop(url)
+      c = config(url)
+      status, out = run_main(["status"], c)
+      assert_equal(0, status)
+      assert_equal(["pending 20261108000001  TkCreateItems", "pending 20261108000002  TkAddSize"], out.lines.map(&:chomp))
+      status, out = run_main(["migrate", "--to", "20261108000001"], c)
+      assert_equal(0, status)
+      assert_equal("Migrated 1: 20261108000001\n", out)
+      status, out = run_main(["migrate", "--lock-timeout", "5000"], c)
+      assert_equal([0, "Migrated 1: 20261108000002\n"], [status, out])
+      assert_equal("Nothing to migrate.\n", run_main(["migrate"], c)[1])
+      status, out = run_main(["rollback", "--steps", "2"], c)
+      assert_equal([0, "Rolled back 2: 20261108000002, 20261108000001\n"], [status, out])
+      assert_equal("Nothing to roll back.\n", run_main(["rollback"], c)[1])
+      # (Another versions table.)
+      assert_equal(0, run_main(["migrate", "--table", "other_versions"], c)[0])
+      assert_equal(["pending 20261108000001  TkCreateItems", "pending 20261108000002  TkAddSize"], run_main(["status"], c)[1].lines.map(&:chomp))
+      assert_equal(["up      20261108000001  TkCreateItems", "up      20261108000002  TkAddSize"],
+                   run_main(["status", "--table", "other_versions"], c)[1].lines.map(&:chomp))
+      drop(url)
+    end
+  rescue PG::Testing::Unavailable => e
+    omit(e.message)
+  end
+end

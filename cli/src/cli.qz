@@ -1,0 +1,126 @@
+# The `bezel` command: generators and tasks for a bezel application.
+module Cli
+  # What `bezel help` prints.
+  USAGE = <<~TEXT
+    usage: bezel COMMAND [ARGS]
+
+      new NAME [--bezel PATH]        a new application in the directory NAME
+      gen controller NAME [ACTION...] a controller with an action and a template per ACTION (index)
+      gen model NAME [FIELD:TYPE...]  a rotor model, its changeset and its migration
+      gen migration NAME              an empty migration
+      gen resource NAME [FIELD:TYPE...] a model, its migration, a controller of the seven
+                                      actions, its views, and its routes
+      templates [--check]            compile src/views/*/*.html.bz into src/views/generated/
+      migrations [--check]           write src/migrations.qz, the list of src/migrations/
+      routes                         print the routes
+      migrate [--to VERSION]         run the pending migrations (DATABASE_URL)
+      rollback [--steps N | --to VERSION]
+      status                         each migration, up or pending
+      test [ARGS...]                 run the tests (quarz test)
+
+    FIELD:TYPE types: string, text, integer, float, boolean, time. Commands but
+    `new` run in the application around the current directory (its Cog.toml).
+    `bezel server` waits for quarz-lang/quarz#385; meanwhile run
+    `BEZEL_ENV=dev quarz run`.
+  TEXT
+
+  # The application a command runs in: its directory, its cog's name and
+  # the module its code lives in (`shop` and `Shop`).
+  data App = (root: String, name: String, module_name: String)
+
+  # A failure to report (`bezel: <message>`, status 1).
+  class Error < StandardError
+  end
+
+  # Runs `bezel` with `argv` in the directory `cwd`; the exit status.
+  def self.run(argv: Array[String], cwd: String, out: IO = STDOUT) -> Int
+    cmd = argv.first? || "help"
+    rest = argv.empty? ? argv : argv[1...argv.size]
+    begin
+      case cmd
+      when "new" then Cli::Skeleton.command(rest, cwd, out)
+      when "gen" then Cli::Gen.command(rest, Cli.app(cwd), out)
+      when "templates" then Cli::Views.command(rest, Cli.app(cwd), out)
+      when "migrations" then Cli::Migrations.command(rest, Cli.app(cwd), out)
+      when "routes", "migrate", "rollback", "status"
+        Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", cmd] + rest, out)
+      when "test" then Cli.in_app(Cli.app(cwd), [Cli.quarz, "test"] + rest, out)
+      when "help", "--help", "-h"
+        out.print USAGE
+        0
+      else
+        STDERR.puts "bezel: unknown command #{cmd.inspect}"
+        STDERR.print USAGE
+        2
+      end
+    rescue Cli::Error => e
+      STDERR.puts "bezel: #{e.message}"
+      1
+    rescue Bezel::Templates::Error => e
+      STDERR.puts "bezel: #{e.message}"
+      1
+    rescue SystemCallError, IOError => e
+      STDERR.puts "bezel: #{e.message}"
+      1
+    end
+  end
+
+  # The `quarz` the tasks run: $QUARZ, or `quarz` on the PATH.
+  def self.quarz -> String = ENV["QUARZ"]? || "quarz"
+
+  # The application around `cwd`.
+  def self.app(cwd: String) -> Cli::App
+    dir = File.expand_path(cwd)
+    while true
+      manifest = File.join(dir, "Cog.toml")
+      if File.file?(manifest) && File.directory?(File.join(dir, "src"))
+        m = File.read(manifest).match(/^\s*name\s*=\s*"([^"]+)"/m)
+        raise Cli::Error.new("#{manifest} has no name") if m.nil?
+        name = m[1] || ""
+        return Cli::App.new(dir, name, Cli.camel(name))
+      end
+      parent = File.dirname(dir)
+      raise Cli::Error.new("no application here: no directory with a Cog.toml and src/ around #{cwd}") if parent == dir
+      dir = parent
+    end
+  end
+
+  # `shop_admin` or `shop-admin` as `ShopAdmin`.
+  def self.camel(name: String) -> String = name.split(/[_\-]/).reject(&:empty?).map(&:capitalize).join
+
+  # `ShopAdmin` or `shop-admin` as `shop_admin`.
+  def self.snake(name: String) -> String = Rotor::Inflector.underscore(name).gsub("-", "_")
+
+  # `s` quoted for `sh`.
+  def self.quote(s: String) -> String = "'" + s.gsub("'", "'\\''") + "'"
+
+  # Runs `command` in the application's directory, then prints what it
+  # printed; its status. (The output comes when it ends: streaming
+  # waits for quarz-lang/quarz#385.)
+  def self.in_app(app: Cli::App, command: Array[String], out: IO) -> Int
+    res = Process.sh("cd #{Cli.quote(app.root)} && exec #{command.map { |c| Cli.quote(c) }.join(" ")}")
+    out.print res.stdout
+    STDERR.print res.stderr
+    res.status < 0 ? 1 : res.status
+  end
+
+  # Writes `content` to `path` under `root`, which must not exist yet.
+  def self.create(root: String, path: String, content: String, out: IO) -> Void
+    full = File.join(root, path)
+    raise Cli::Error.new("#{path} exists already") if File.exist?(full)
+    Dir.mkdir_p(File.dirname(full))
+    File.write(full, content)
+    out.puts "  create  #{path}"
+  end
+
+  # Writes `content` to `path` under `root` when it differs from what is
+  # there.
+  def self.update(root: String, path: String, content: String, out: IO) -> Void
+    full = File.join(root, path)
+    return if File.exist?(full) && File.read(full) == content
+    verb = File.exist?(full) ? "update" : "create"
+    Dir.mkdir_p(File.dirname(full))
+    File.write(full, content)
+    out.puts "  #{verb}  #{path}"
+  end
+end

@@ -1,0 +1,2 @@
+# The `bezel` command (`quarz build -o bezel` in cli/ makes the executable).
+exit(Cli.run(ARGV, Dir.pwd))
