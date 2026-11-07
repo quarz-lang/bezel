@@ -94,7 +94,7 @@ def body_of(tag: String) -> String
     when "u" then ".url(\"#{html_name}\", #{name})"
     when "d" then ".url(\"#{html_name}\", #{name}, true)"
     when "x" then ".srcset(\"#{html_name}\", #{name})"
-    when "m" then ".meta_content(#{name})"
+    when "m" then ".meta_content(#{name}, http_equiv)"
     else ".str(\"#{html_name}\", #{name})"
     end
   end

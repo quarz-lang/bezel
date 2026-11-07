@@ -1,9 +1,9 @@
 # Writes the fields of a form over a rotor changeset (`HtmlBuilder#form_for`):
 # each field is named `<prefix>[<field>]` (`user[email]`), with the id
 # `<prefix>_<field>`, and shows the value the changeset holds: its
-# change, else the model's; for a permitted field with errors, the input
-# as given (so that a value that did not cast, or failed a validation,
-# shows as typed). `errors` writes the changeset's errors on a
+# change, else the model's; for a permitted field with errors and no
+# change (a value that did not cast, or a blank required one), the input
+# as given, so that it shows as typed. `errors` writes the changeset's errors on a
 # field.
 #
 # ```
@@ -164,7 +164,8 @@ class FormBuilder
 
   # :nodoc:
   # What a form shows of each field: the value the changeset would give
-  # the model, or, for a permitted field with errors, the input as given.
+  # the model, or, for a permitted field with errors and no change, the
+  # input as given.
   def self.values_of[M <: Rotor::Model](cs: Rotor::Changeset[M]) -> Hash[Symbol, String]
     out: Hash[Symbol, String] = {}
     cs.data.to_h.each do |k, v|
@@ -177,7 +178,8 @@ class FormBuilder
     end
     failed = cs.errors.map(&:field)
     cs.permitted.each do |f|
-      next unless failed.include?(f)
+      # (A field with a change shows it, valid or not: put_change's too.)
+      next unless failed.include?(f) && !cs.changes.key?(f)
       key = f.to_s
       next unless cs.params.key?(key)
       out = out.put(f, FormBuilder.show(cs.params[key]?) || "")

@@ -249,4 +249,28 @@ class HtmlTest < Test::Case
     assert_true(out.include?("value=\"ANN\""))
     assert_false(out.include?("value=\"x\""))
   end
+
+  def test_second_review_fixes
+    # A refresh's URL with or without url=, quoted, and only for a refresh.
+    ["0;javascript:alert(1)", "0; 'javascript:alert(1)'", "1, URL = \"javascript:x\""].each do |c|
+      assert_raise(ArgumentError) { page { |h| h.meta(http_equiv: "Refresh", content: c) } }
+    end
+    assert_equal("<meta name=\"description\" content=\"see url=javascript:void now\">",
+                 page { |h| h.meta(name: "description", content: "see url=javascript:void now") })
+    assert_raise(ArgumentError) { page { |h| h.meta(http_equiv: "refresh", attrs: {"content" => "0;url=javascript:x"}) } }
+    assert_raise(ArgumentError) { page { |h| h.meta(attrs: {"http-equiv" => "refresh"}, content: "0;url=javascript:x") } }
+    assert_equal("<meta content=\"5\" http-equiv=\"refresh\">", page { |h| h.meta(http_equiv: "refresh", content: "5") })
+    # CR LF, and a block's content.
+    assert_equal("<textarea>\n\r\nhello</textarea>", page { |h| h.textarea("\r\nhello") })
+    assert_equal("<pre>\n\nhello</pre>", page { |h| h.pre { h.text("\nhello") } })
+    assert_equal("<pre><b>x</b></pre>", page { |h| h.pre { h.b("x") } })
+    # <style> refuses only its end tag.
+    assert_equal("<style>/* <!-- <script> */ a{}</style>", page { |h| h.style("/* <!-- <script> */ a{}") })
+    assert_raise(ArgumentError) { page { |h| h.style("</STYLE>") } }
+    # A change that fails shows as changed.
+    u = HtUser.load({id: 1, name: "Ann", email: "ok@x", age: 1, admin: false, role: "member", bio: nil})
+    cs = Rotor::Changeset.cast(u, {"email" => "ok@x.y"}, [:email]).put_change(:email, "bad").validate_format(:email, /@/)
+    out = Bezel.html { |h| h.form_for(cs, action: "/u") { |f| f.text_field(:email) } }.to_s
+    assert_true(out.include?("value=\"bad\""))
+  end
 end

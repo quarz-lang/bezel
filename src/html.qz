@@ -235,27 +235,44 @@ class HtmlBuilder
     open_tag(tag, attrs)
     # (The parser drops a newline right after `<textarea>` or `<pre>`: one
     # more keeps the content's own.)
-    @out << "\n" if (tag == "textarea" || tag == "pre" || tag == "listing") && content.start_with?("\n")
+    @out << "\n" if HtmlBuilder.newline_sensitive?(tag) && HtmlBuilder.starts_with_newline?(content)
     text(content)
     close_tag(tag)
   end
 
   # :nodoc:
+  def self.newline_sensitive?(tag: String) -> Bool = tag == "textarea" || tag == "pre" || tag == "listing"
+
+  # :nodoc:
+  # (The parser reads CR LF and a lone CR as LF.)
+  def self.starts_with_newline?(s: String) -> Bool = s.start_with?("\n") || s.start_with?("\r")
+
+  # :nodoc:
   def tag_block(tag: String, attrs: AttrList, block: (() -> Void)?) -> Void
-    open_tag(tag, attrs)
-    block&.call
+    b = block
+    if b && HtmlBuilder.newline_sensitive?(tag)
+      inner = capture(&b)
+      open_tag(tag, attrs)
+      @out << "\n" if HtmlBuilder.starts_with_newline?(inner.source)
+      append(inner)
+    else
+      open_tag(tag, attrs)
+      b&.call
+    end
     close_tag(tag)
   end
 
   # :nodoc:
   # `<script>` and `<style>` hold raw text: `content` must not close
-  # them (`</script`, case-insensitive), nor hold `<!--` or `<script`,
-  # after which a script element's end tag no longer ends it (the
-  # tokenizer's escaped states), or the rest of the page would change
-  # meaning. JSON for a script escapes `<` as `\u003c`.
+  # them (`</script`, `</style`, case-insensitive), and a script's
+  # must not hold `<!--` or `<script`, after which its end tag no longer
+  # ends it (the tokenizer's escaped states), or the rest of the page
+  # would change meaning. JSON for a script escapes `<` as `\u003c`.
   def tag_raw_text(tag: String, attrs: AttrList, content: String) -> Void
     low = content.downcase
-    ["</#{tag}", "<!--", "<script"].each do |bad|
+    # (`<style>` is raw text without escaped states: only its end tag.)
+    bads = tag == "script" ? ["</script", "<!--", "<script"] : ["</#{tag}"]
+    bads.each do |bad|
       raise ArgumentError.new("the content of <#{tag}> holds #{bad}: it could end the element or hide its end") if low.include?(bad)
     end
     open_tag(tag, attrs)
@@ -281,8 +298,10 @@ class AttrList
                "ping", "manifest", "codebase", "longdesc", "usemap", "icon", "lowsrc", "dynsrc"]
 
   # Attributes `attrs:` refuses: `srcdoc` is a document, run with the
-  # page's origin, which no escaping makes safe.
-  REFUSED = ["srcdoc"]
+  # page's origin, which no escaping makes safe; `http-equiv` and
+  # `content` are `meta`'s typed `http_equiv:` and `content:`, which check
+  # a refresh's URL.
+  REFUSED = ["srcdoc", "http-equiv", "content"]
 
   # The attributes as HTML (each with a leading space).
   def source -> String = @buf.to_s
@@ -308,14 +327,27 @@ class AttrList
     str(name, v)
   end
 
-  # A `<meta>`'s `content`: a refresh's `url=` checked as a URL.
-  def meta_content(value: String?) -> AttrList
+  # A `<meta>`'s `content`: for a refresh (`http_equiv` `refresh`), the
+  # URL after the delay (`5; url=/next`, `0;'/next'`, read as the HTML
+  # standard's declarative refresh does) checked as a URL.
+  def meta_content(value: String?, http_equiv: String?) -> AttrList
     v = value
-    if v
-      m = v.match(/url\s*=\s*['"]?([^'"]*)/i)
-      HtmlBuilder.check_url("content", (m[1] || "").strip) if m
+    if v && (http_equiv || "").strip.downcase == "refresh"
+      url = AttrList.refresh_url(v)
+      HtmlBuilder.check_url("content", url) if url
     end
     str("content", v)
+  end
+
+  # The URL of a refresh's `content`, or nil for none: after the delay
+  # (digits and dots), a `;` or `,`, an optional `url=`, optional quotes.
+  def self.refresh_url(content: String) -> String?
+    m = content.match(/\A\s*[0-9.]*\s*[;,]?\s*(url\s*=\s*)?(.*)\z/im)
+    return nil if m.nil?
+    rest = (m[2] || "").strip
+    rest = rest.delete_prefix("'").delete_suffix("'") if rest.start_with?("'")
+    rest = rest.delete_prefix("\"").delete_suffix("\"") if rest.start_with?("\"")
+    rest.strip.empty? ? nil : rest.strip
   end
 
   # :nodoc:
@@ -363,7 +395,7 @@ class AttrList
     attrs.each do |k, v|
       n = AttrList.name!(k)
       low = n.downcase
-      raise ArgumentError.new("#{n}: refused (a document of its own runs with the page's origin)") if REFUSED.include?(low)
+      raise ArgumentError.new("#{n}: refused in attrs: (srcdoc runs with the page's origin; give meta's http_equiv: and content: as keywords)") if REFUSED.include?(low)
       if URL_NAMES.include?(low)
         url(n, v)
       elsif low == "srcset" || low == "imagesrcset"
