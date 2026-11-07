@@ -156,11 +156,11 @@ A browser pipeline adds sessions and protection:
 
 ```ruby
 def self.browser -> Array[Bezel::Plug]
-  [Bezel::Plug::Session.new(key: "_shop"),      # an encrypted cookie (AES-256-GCM)
+  [Bezel::Plug::HostAuthorization.new(["shop.example"]),
+   Bezel::Plug::SecureHeaders.new,               # first: error pages get them too
+   Bezel::Plug::Session.new(key: "_shop"),      # an encrypted cookie (AES-256-GCM)
    Bezel::Plug::Flash.new,
-   Bezel::Plug::CSRF.new,                        # forms from Bezel.html(conn) carry the token
-   Bezel::Plug::SecureHeaders.new,
-   Bezel::Plug::HostAuthorization.new(["shop.example"])]
+   Bezel::Plug::CSRF.new]                        # forms from Bezel.html(conn) carry the token
 end
 ```
 
@@ -175,8 +175,11 @@ end
   `_csrf_token` or `X-CSRF-Token`, and a request from another origin
   (`Origin`, `Sec-Fetch-Site`) is refused.
 - `Bezel::Password.hash/verify` (PBKDF2-SHA256, 600,000 iterations) and
-  `Bezel::Token.sign/verify` (HMAC, expiring, bound to a purpose) for
-  links sent by mail.
+  `Bezel::Token.sign/verify` (HMAC, expiring, bound to a purpose, and to
+  a `fingerprint` such as the password hash so that a reset link stops
+  working once used) for links sent by mail.
+- `conn.session.renew` after a login drops the CSRF secret; `drop` then
+  `put` starts a new session.
 
 An endpoint is tested without a socket:
 

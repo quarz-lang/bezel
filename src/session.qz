@@ -23,8 +23,12 @@ end
 #
 # The values can be read by nobody without the secret, but the cookie as
 # a whole can be replayed: logging out drops it from the browser, not
-# from a copy someone kept. What must be revocable belongs in the
-# database, the session holding its id.
+# from a copy someone kept. With `max_age`, the cookie holds its expiry
+# (set when it is written), and an older one reads as empty: the
+# session ends `max_age` after its last change, whatever the browser
+# keeps. What must be revocable belongs in the database, the session
+# holding its id. A cookie name with the `__Host-` prefix (with
+# `secure: true`) keeps sibling subdomains from planting one.
 class Session::CookieStore
   include Session::Store
 
@@ -61,9 +65,13 @@ class Session::CookieStore
     Session.new(values || {}, false, false, true)
   end
 
+  # The key of the expiry kept in the cookie with `max_age` (seconds since
+  # the epoch), never one of the session's values.
+  EXPIRES = "_bezel_expires"
+
   def save(conn: Conn, session: Session) -> Conn
     secure = @secure.nil? ? !conn.config.dev? : @secure == true
-    if session.dropped || session.values.empty?
+    if session.dropped || session.values.reject { |k, v| k == EXPIRES }.empty?
       return conn unless session.changed || session.dropped
       return conn.add_resp_header("set-cookie", Cookies.set_cookie(@key, "", max_age: 0, secure: secure, same_site: @same_site, domain: @domain))
     end
@@ -82,7 +90,10 @@ class Session::CookieStore
 
   # :nodoc:
   def encode(conn: Conn, values: Hash[String, String]) -> String
-    Base64.urlsafe_encode(cipher(conn).encrypt(JSON.generate(values), aad: @key), padding: false)
+    v = values.delete(EXPIRES)
+    age = @max_age
+    v = v.put(EXPIRES, (Time.now.to_i + age).to_s) if age
+    Base64.urlsafe_encode(cipher(conn).encrypt(JSON.generate(v), aad: @key), padding: false)
   end
 
   # :nodoc:
@@ -99,7 +110,11 @@ class Session::CookieStore
         s = v.as_s?
         out = out.put(k, s) if s
       end
-      out
+      # (A cookie past its max_age is refused here too, not only by the
+      # browser: a copy kept elsewhere expires.)
+      exp = out[EXPIRES]?
+      return nil if @max_age && (exp.nil? || !exp.match?(/\A[0-9]{1,12}\z/) || Time.now.to_i >= exp.to_i)
+      out.delete(EXPIRES)
     rescue Crypto::AuthenticationError, ArgumentError, JSON::ParseError
       nil
     end
@@ -120,7 +135,8 @@ end
 # Loads the request's session from `store` (`conn.session`) and, once the
 # rest of the pipeline has answered, saves it when it changed (a cookie
 # store sets its cookie). Not saved when a plug raised: the error page
-# leaves the session as it was.
+# leaves the session as it was (so a first visit's CSRF secret is made
+# again on the next request).
 #
 # ```
 # s = Bezel::Plug::Session.new(key: "_shop")

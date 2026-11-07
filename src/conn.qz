@@ -18,18 +18,22 @@ data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: 
   def [](key: String) -> String? = values[key]?
 
   # The session with `key` set to `value`.
-  def put(key: String, value: String) -> Session = with(values: values.put(key, value), changed: true)
+  # (After `drop`, a value put starts a new session: logging in after
+  # dropping the old one.)
+  def put(key: String, value: String) -> Session = with(values: values.put(key, value), changed: true, dropped: false)
 
   # The session without `key`.
-  def delete(key: String) -> Session = with(values: values.delete(key), changed: true)
+  def delete(key: String) -> Session = with(values: values.delete(key), changed: true, dropped: false)
 
   # An empty session, whose cookie is to be dropped (logging out).
   def drop -> Session = Session.new({}, true, true, loaded)
 
-  # The session with a fresh identity: the same values, written anew.
-  # (A cookie store has no identity to renew; a server-side store would
-  # change its id here, after a login.)
-  def renew -> Session = with(changed: true)
+  # The session with a fresh identity, after a login: the same values
+  # but its CSRF secret (`Plug::CSRF` makes a new one on the next
+  # request), so that a session an attacker planted before the login
+  # does not carry a secret they know. (A server-side store would change
+  # its id here too.)
+  def renew -> Session = with(values: values.delete("_csrf_token"), changed: true, dropped: false)
 end
 
 # The flash: messages kept for the next request (`put`), and those the

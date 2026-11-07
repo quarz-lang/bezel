@@ -60,7 +60,8 @@ class Plug::HostAuthorization
   def call(conn: Conn) -> Conn
     given = conn.request.host
     raise Forbidden.new("blocked host") if given.nil? || given.empty?
-    host = Plug::HostAuthorization.strip_port(given).downcase
+    host = Plug::HostAuthorization.strip_port(given)&.downcase
+    raise Forbidden.new("blocked host: not a host and port") if host.nil?
     ok = @hosts.any? do |h|
       want = h.downcase
       want.start_with?(".") ? (host == want.delete_prefix(".") || host.end_with?(want)) : host == want
@@ -69,12 +70,10 @@ class Plug::HostAuthorization
     conn
   end
 
-  # `host` without its port (`[::1]:80` is `[::1]`).
-  def self.strip_port(host: String) -> String
-    if host.start_with?("[")
-      close = host.index("]")
-      return close ? host[0, close + 1] : host
-    end
-    host.partition(":")[0]
+  # `host` without its port (`[::1]:80` is `[::1]`), or nil when it is
+  # not a host with an optional port of digits.
+  def self.strip_port(host: String) -> String?
+    m = host.match(/\A(\[[0-9A-Fa-f:.]+\]|[^:\[\]\/?#@\s]+)(:[0-9]{1,5})?\z/)
+    m ? m[1] : nil
   end
 end

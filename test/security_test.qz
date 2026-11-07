@@ -13,6 +13,9 @@ class SecEndpoint < Bezel::Endpoint
        in ["GET", "/login"] then conn.put_session("user_id", conn.params.fetch("id")).text("in")
        in ["GET", "/me"] then conn.text("user #{conn.session["user_id"] || "-"}")
        in ["GET", "/logout"] then conn.put_session(conn.session.drop).text("out")
+       in ["GET", "/relogin"] then conn.put_session(conn.session.drop).put_session("user_id", "9").put_flash(:info, "welcome").text("re")
+       in ["GET", "/renew"] then conn.put_session(conn.session.renew).text("renewed")
+       in ["GET", "/secret"] then conn.text(conn.session["_csrf_token"] || "-")
        in ["GET", "/big"] then conn.put_session("blob", "x" * 5000).text("big")
        in ["GET", "/flash"] then conn.put_flash(:info, "saved").redirect("/next")
        in ["GET", "/next"] then conn.text("flash #{conn.flash[:info] || "-"}")
@@ -226,5 +229,70 @@ class SecurityTest < Test::Case
     assert_equal({"a" => "1", "b" => "x y"}, Bezel::Cookies.parse("a=1; b=\"x y\"; a=2; junk"))
     assert_raise(ArgumentError) { Bezel::Cookies.set_cookie("a b", "x") }
     assert_raise(ArgumentError) { Bezel::Cookies.set_cookie("a", "x;y") }
+  end
+
+  def test_drop_then_put_starts_a_new_session
+    jar = SecJar.new
+    jar.request("GET", "/login?id=7")
+    jar.request("GET", "/relogin")
+    assert_equal("flash welcome", text_of(jar.request("GET", "/next")))
+    assert_equal("user 9", text_of(jar.request("GET", "/me")))
+  end
+
+  def test_renew_rotates_the_csrf_secret
+    jar = SecJar.new
+    first = text_of(jar.request("GET", "/secret"))
+    assert_false(first == "-")
+    jar.request("GET", "/renew")
+    second = text_of(jar.request("GET", "/secret"))
+    assert_false(second == "-")
+    assert_false(first == second)
+  end
+
+  def test_max_age_is_kept_in_the_cookie
+    store = Bezel::Session::CookieStore.new(key: "_m", max_age: 3600)
+    conn = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    saved = store.save(conn, Bezel::Session.new({"a" => "1"}, true))
+    cookie = (saved.resp_headers["set-cookie"] || "").partition(";")[0]
+    back = store.load(Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Cookie" => cookie}))))
+    assert_equal({"a" => "1"}, back.values)
+    expired = Bezel::Session::CookieStore.new(key: "_m", max_age: 0)
+    saved0 = expired.save(conn, Bezel::Session.new({"a" => "1"}, true))
+    cookie0 = (saved0.resp_headers["set-cookie"] || "").partition(";")[0]
+    assert_true(expired.load(Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Cookie" => cookie0})))).values.empty?)
+    # A store without max_age reads a cookie with an expiry it did not set as values.
+    plain = Bezel::Session::CookieStore.new(key: "_m")
+    assert_equal({"a" => "1"}, plain.load(Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Cookie" => cookie})))).values)
+  end
+
+  def test_password_bounds
+    good = Bezel::Password.hash("pw", iterations: 1000)
+    ["$pbkdf2-sha256$0000$AAAAAAAAAAAAAAAAAAAAAA$" + "A" * 43, "$pbkdf2-sha256$0999$AAAAAAAAAAAAAAAAAAAAAA$" + "A" * 43,
+     "$pbkdf2-sha256$999999999$AAAAAAAAAAAAAAAAAAAAAA$" + "A" * 43, good + "A"].each do |bad|
+      assert_false(Bezel::Password.verify("pw", bad))
+    end
+    assert_raise(ArgumentError) { Bezel::Password.hash("pw", iterations: 10_000_000) }
+  end
+
+  def test_token_fingerprint
+    c = Bezel::Config.load("t", environ: {"BEZEL_ENV" => "test"}, quiet: true)
+    t = Bezel::Token.sign(c, "reset", "42", expires_in: 1.hour, fingerprint: "hash-1")
+    assert_equal("42", Bezel::Token.verify(c, "reset", t, fingerprint: "hash-1"))
+    assert_nil(Bezel::Token.verify(c, "reset", t, fingerprint: "hash-2"))
+    assert_nil(Bezel::Token.verify(c, "reset", t))
+  end
+
+  def test_host_with_a_bad_port_is_refused
+    ["shop.example:evil.com", "shop.example:", "Shop.Example:abc", "shop.example:123456", "shop.example/x"].each do |bad|
+      assert_raise(Bezel::Forbidden) { host(bad) }
+    end
+  end
+
+  def test_origin_with_a_default_port
+    jar = SecJar.new
+    token = text_of(jar.request("GET", "/token", headers: {"Host" => "shop.example:80"}))
+    assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Host" => "shop.example:80", "Origin" => "http://shop.example"}).status)
+    assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Host" => "shop.example", "Origin" => "http://shop.example:80"}).status)
+    assert_equal(403, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Host" => "shop.example", "Origin" => "http://shop.example:8080"}).status)
   end
 end

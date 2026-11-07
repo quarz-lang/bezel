@@ -18,8 +18,10 @@ end
 #   `_csrf_token` or the header `X-CSRF-Token`, else `InvalidCSRFToken`
 #   (403).
 # - As a second check, such a request whose Origin is another origin
-#   than the request's (its scheme and Host), or whose `Sec-Fetch-Site` is
-#   `cross-site`, is refused even with a token.
+#   than the request's (its scheme and Host header, default ports aside),
+#   or whose `Sec-Fetch-Site` is `cross-site`, is refused even with a
+#   token. Behind a proxy, the proxy must pass the Host the browser used
+#   (and X-Forwarded-Proto from a trusted proxy gives the scheme).
 #
 # GET, HEAD and OPTIONS are not checked: they must not change anything.
 class Plug::CSRF
@@ -78,6 +80,16 @@ class Plug::CSRF
   end
 
   # :nodoc:
+  # `scheme://host:port` in lowercase, the scheme's default port dropped
+  # (`http://a:80` is `http://a`).
+  def self.origin_of(url: String) -> String
+    o = url.downcase.delete_suffix("/")
+    o = o.delete_suffix(":80") if o.start_with?("http://")
+    o = o.delete_suffix(":443") if o.start_with?("https://")
+    o
+  end
+
+  # :nodoc:
   # Refuses a request from another origin (Origin, Sec-Fetch-Site).
   def self.check_origin(conn: Conn) -> Void
     if conn.header("sec-fetch-site")&.downcase == "cross-site"
@@ -86,8 +98,7 @@ class Plug::CSRF
     origin = conn.header("origin")
     return if origin.nil?
     host = conn.request.host
-    expected = host ? "#{conn.request.scheme}://#{host}".downcase : nil
-    if origin == "null" || expected.nil? || origin.downcase.delete_suffix("/") != expected
+    if origin == "null" || host.nil? || Plug::CSRF.origin_of(origin) != Plug::CSRF.origin_of("#{conn.request.scheme}://#{host}")
       raise InvalidCSRFToken.new("request from another origin refused")
     end
   end
