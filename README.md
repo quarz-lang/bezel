@@ -190,11 +190,11 @@ page = Bezel::Testing.html_response(res, 200)          # a parsed page
 page.has_element?("form[action=\"/users\"] input[name=\"user[email]\"]")
 page.has_text?("Users")
 
-c = Bezel::Testing::Client.new(Shop::Endpoint)         # keeps cookies
-c.login_as({"user_id" => "7"})                          # needs the session cookie's name or a first request
+c = Bezel::Testing::Client.new(Shop::Endpoint, session_key: "_shop")   # keeps cookies
+c.login_as({"user_id" => "7"})                          # the session cookie, as a login writes it
 c.post("/users", params: {"user[email]" => "ann@example.com"})
-c.follow_redirect
-c.flash[:info]                                          # => "Welcome"
+c.flash[:info]                                          # => "Welcome", for the next request
+c.follow_redirect                                       # which shows it (and takes it)
 Bezel::Testing.json_response(c.get("/api/users"), 200)
 ```
 

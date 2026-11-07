@@ -139,15 +139,17 @@ module Testing
   def self.fail(message: String) -> Nothing = raise Test::AssertionFailed.new(message)
 end
 
-# A browser for tests: requests to one endpoint, keeping the cookies the
-# responses set (Max-Age=0 deletes one), sending them with the next.
+# A browser for tests: requests to one endpoint (the Host
+# `www.example.com`), keeping the cookies the responses set (a Max-Age
+# of zero or less deletes one; Expires is not read), sending them with
+# the next.
 #
 # ```quarz no_run
 # c = Bezel::Testing::Client.new(TApp)
 # c.post("/login", params: {"email" => "ann@example.com", "password" => "secret"})
-# c.follow_redirect(c.last)
+# c.flash[:info]                # => "Welcome": the next request shows it, and takes it
+# c.follow_redirect
 # c.session["user_id"]          # => "1"
-# c.flash[:info]                # => "Welcome"
 # ```
 class Testing::Client
   include Unshareable
@@ -157,6 +159,7 @@ class Testing::Client
   var @cookies: Hash[String, String] = {}
   var @session_key: String?
   var @last: HTTP::Server::Response? = nil
+  @host: String = "www.example.com"
 
   # A client of `endpoint` in `app`; `session_key` names the session's
   # cookie (found by itself among the cookies otherwise: the one that
@@ -194,17 +197,39 @@ class Testing::Client
   def delete(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
              headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("DELETE", path, params, json, headers)
 
-  # A GET of where `res` redirects to (a path of the application).
+  # A GET of where `res` redirects to: a path of the application, or a
+  # URL of the client's host (`Test::AssertionFailed` for another host);
+  # the fragment is dropped.
   def follow_redirect(res: HTTP::Server::Response = last) -> HTTP::Server::Response
-    get(Testing.redirected_to(res, nil))
+    location = Testing.redirected_to(res, nil).partition("#")[0]
+    m = location.match(/\A[A-Za-z][A-Za-z0-9+.\-]*:\/\/([^\/?]*)(.*)\z/)
+    if m
+      host = m[1] || ""
+      Testing.fail("the redirect leaves the application: #{location}") unless host.downcase == @host.downcase
+      path = m[2] || ""
+      location = path.empty? ? "/" : path
+    end
+    Testing.fail("the redirect is not a path: #{location}") unless location.start_with?("/") && !location.start_with?("//")
+    get(location)
   end
 
   # A request of `method` to `target` with `body` and `headers` (the
   # cookies and a Host added).
   def request(method: String, target: String, body: String = "", headers: Hash[String, String] = {}) -> HTTP::Server::Response
-    h = headers
-    h = h.put("Host", "www.example.com") unless h.any? { |k, v| k.downcase == "host" }
-    h = h.put("Cookie", @cookies.map { |k, v| "#{k}=#{v}" }.join("; ")) unless @cookies.empty?
+    h: Hash[String, String] = {}
+    given_cookie: String? = nil
+    headers.each do |k, v|
+      if k.downcase == "cookie"
+        given_cookie = v
+      else
+        h = h.put(k, v)
+      end
+    end
+    h = h.put("Host", @host) unless h.any? { |k, v| k.downcase == "host" }
+    # (A Cookie header given goes first, the jar's after it.)
+    jar = @cookies.map { |k, v| "#{k}=#{v}" }.join("; ")
+    parts = [given_cookie || "", jar].reject(&:empty?)
+    h = h.put("Cookie", parts.join("; ")) unless parts.empty?
     res = @endpoint.call(HTTP::Server::Request.build(method, target, HTTP::Headers.of(h), body), @app)
     take(res)
     @last = res
@@ -243,7 +268,9 @@ class Testing::Client
     key = session_key || raise ArgumentError.new("login_as needs the session's cookie: give session_key:, or make a request first")
     merged = session
     values.each { |k, v| merged = merged.put(k, v) }
-    store = Session::CookieStore.new(key: key)
+    # (With an expiry a day ahead: a store with max_age needs one, and
+    # one without it ignores it.)
+    store = Session::CookieStore.new(key: key, max_age: 86_400)
     conn = Conn.bare(HTTP::Server::Request.get("/"), @app)
     @cookies = @cookies.put(key, store.encode(conn, merged))
     nil
@@ -283,7 +310,9 @@ class Testing::Client
       pair = sc.partition(";")[0]
       name, eq, value = pair.partition("=")
       next if eq.empty?
-      if sc.downcase.include?("max-age=0") || value.empty?
+      # (Max-Age zero or less deletes it; an Expires date is not read.)
+      age = sc.match(/;\s*max-age\s*=\s*(-?[0-9]+)/i)
+      if age && (age[1] || "0").to_i <= 0
         @cookies = @cookies.delete(name)
       else
         @cookies = @cookies.put(name, value)

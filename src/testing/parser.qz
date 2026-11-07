@@ -1,8 +1,10 @@
 # :nodoc:
-# The tolerant HTML reader of `Testing::Doc`.
+# The tolerant HTML reader of `Testing::Doc`: the source cut into tokens
+# by one regular expression (linear), then a tree built from them, with
+# HTML's implied end tags for the common cases (`p`, `li`, `tr`, `td`,
+# `th`, `dt`, `dd`, `option`).
 class Testing::Parser
   @src: String
-  var @pos: Int = 0
 
   # Elements without content.
   VOID = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]
@@ -10,127 +12,114 @@ class Testing::Parser
   # Elements whose content is text up to their end tag.
   TEXT = ["script", "style", "textarea", "title"]
 
+  # A comment, a doctype or processing instruction, an end tag, a start
+  # tag, a lone `<`, or text.
+  TOKEN = /<!--.*?(?:-->|\z)|<![^>]*>?|<\?[^>]*>?|<\/[A-Za-z][^>]*>?|<[A-Za-z][A-Za-z0-9\-]*(?:"[^"]*"|'[^']*'|[^'">])*>?|<|[^<]+/m
+
+  # An attribute in a start tag.
+  ATTR = /([^\s"'>\/=]+)(?:\s*=\s*(?:"([^"]*)"?|'([^']*)'?|([^\s>]*)))?/
+
+  # The elements a start tag closes when one is open at the top (the
+  # implied end tags).
+  CLOSES = {
+    "p" => ["p"], "li" => ["li"], "dt" => ["dt", "dd"], "dd" => ["dt", "dd"], "option" => ["option"],
+    "tr" => ["td", "th", "tr"], "td" => ["td", "th"], "th" => ["td", "th"],
+    "div" => ["p"], "ul" => ["p"], "ol" => ["p"], "table" => ["p"], "form" => ["p"], "h1" => ["p"],
+    "h2" => ["p"], "h3" => ["p"], "h4" => ["p"], "h5" => ["p"], "h6" => ["p"], "section" => ["p"],
+    "pre" => ["p"], "blockquote" => ["p"], "hr" => ["p"]
+  }
+
   def initialize(@src: String); end
 
   # The tree of the source, under a root node.
   def parse -> Testing::Node
+    tokens = Array::Builder[String].new
+    @src.gsub(TOKEN) { |t| tokens << t; "" }
     root = Testing::Node.new("", {})
-    stack: Array[Testing::Node] = [root]
-    while @pos < @src.size
-      lt = @src.index("<", @pos)
-      if lt.nil?
-        text_node(stack, @src[@pos, @src.size - @pos])
-        @pos = @src.size
-        break
+    stack = Array::Builder[Testing::Node].new
+    stack << root
+    raw_tag: String? = nil
+    raw_node = root
+    raw = String::Builder.new
+    tokens.to_a.each do |t|
+      rt = raw_tag
+      if rt
+        # (Inside script, style, textarea or title: text up to its end tag.)
+        if t.start_with?("</") && Testing::Parser.end_name(t) == rt
+          inner = raw.to_s
+          raw_node.add(Testing::Node.new("", {}, Testing::Parser.decode(inner))) unless inner.empty?
+          raw_tag = nil
+        else
+          raw << t
+        end
+        next
       end
-      text_node(stack, @src[@pos, lt - @pos]) if lt > @pos
-      @pos = lt
-      if @src[@pos, 4] == "<!--"
-        close = @src.index("-->", @pos + 4)
-        @pos = close ? close + 3 : @src.size
-      elsif @src[@pos, 2] == "<!" || @src[@pos, 2] == "<?"
-        close = @src.index(">", @pos)
-        @pos = close ? close + 1 : @src.size
-      elsif @src[@pos, 2] == "</"
-        close = @src.index(">", @pos)
-        name = @src[@pos + 2, (close || @src.size) - @pos - 2].strip.downcase
-        @pos = close ? close + 1 : @src.size
+      if t.start_with?("<!") || t.start_with?("<?")
+        next
+      elsif t.start_with?("</")
+        name = Testing::Parser.end_name(t)
         i = stack.size - 1
         while i > 0 && stack[i].tag != name
           i -= 1
         end
-        stack = stack.first(i) if i > 0
-      else
-        tag, attrs, self_closing = read_tag
-        if tag.empty?
-          text_node(stack, "<")
-          @pos += 1
-          next
+        while i > 0 && stack.size > i
+          stack.pop
+        end
+      elsif t.size > 1 && t.start_with?("<")
+        tag, attrs, self_closing = Testing::Parser.start_tag(t)
+        closes = CLOSES[tag]?
+        if closes
+          while stack.size > 1 && closes.include?(stack.last&.tag || "")
+            stack.pop
+          end
         end
         node = Testing::Node.new(tag, attrs)
-        stack.last?&.add(node)
-        if TEXT.include?(tag)
-          stop = @src.downcase.index("</#{tag}", @pos)
-          finish = stop || @src.size
-          inner = @src[@pos, finish - @pos]
-          node.add(Testing::Node.new("", {}, Testing::Parser.decode(inner))) unless inner.empty?
-          close = stop ? @src.index(">", stop) : nil
-          @pos = close ? close + 1 : @src.size
+        stack.last&.add(node)
+        if TEXT.include?(tag) && !self_closing
+          raw_tag = tag
+          raw_node = node
+          raw = String::Builder.new
         elsif !VOID.include?(tag) && !self_closing
-          stack = stack.push(node)
+          stack << node
         end
+      else
+        stack.last&.add(Testing::Node.new("", {}, Testing::Parser.decode(t)))
       end
     end
+    rest = raw.to_s
+    raw_node.add(Testing::Node.new("", {}, Testing::Parser.decode(rest))) if raw_tag && !rest.empty?
     root
   end
 
-  # :nodoc:
-  def text_node(stack: Array[Testing::Node], raw: String) -> Void
-    return if raw.empty?
-    stack.last?&.add(Testing::Node.new("", {}, Testing::Parser.decode(raw)))
+  # The name of an end tag token, lowercase.
+  def self.end_name(token: String) -> String
+    token[2, token.size - 2].delete_suffix(">").strip.downcase
   end
 
-  # :nodoc:
-  # The tag at `@pos` (`<`): its name, attributes and whether it ends
-  # with `/>`; an empty name when `<` starts no tag.
-  def read_tag -> [String, Hash[String, String], Bool]
-    m = @src[@pos, @src.size - @pos].match(/\A<([A-Za-z][A-Za-z0-9\-]*)/)
-    return ["", Hash[String, String].new, false] if m.nil?
-    name = (m[1] || "").downcase
-    @pos += name.size + 1
+  # The name, attributes and `/>` of a start tag token.
+  def self.start_tag(token: String) -> [String, Hash[String, String], Bool]
+    m = token.match(/\A<([A-Za-z][A-Za-z0-9\-]*)/)
+    name = m ? (m[1] || "") : ""
+    body = token[name.size + 1, token.size - name.size - 1]
+    self_closing = body.end_with?("/>")
     attrs: Hash[String, String] = {}
-    self_closing = false
-    while @pos < @src.size
-      skip_space
-      c = @src[@pos]
-      if c == ">"
-        @pos += 1
-        break
-      elsif c == "/"
-        self_closing = true
-        @pos += 1
-        next
+    body.delete_suffix(">").gsub(ATTR) do |a|
+      am = a.match(ATTR)
+      if am
+        n = (am[1] || "").downcase
+        v = am[2] || am[3] || am[4] || ""
+        attrs = attrs.put(n, Testing::Parser.decode(v)) unless attrs.key?(n) || n.empty?
       end
-      am = @src[@pos, @src.size - @pos].match(/\A([^\s=>\/]+)/)
-      if am.nil?
-        @pos += 1
-        next
-      end
-      aname = (am[1] || "").downcase
-      @pos += aname.size
-      skip_space
-      value = ""
-      if @pos < @src.size && @src[@pos] == "="
-        @pos += 1
-        skip_space
-        q = @pos < @src.size ? @src[@pos] : ""
-        if q == "\"" || q == "'"
-          close = @src.index(q, @pos + 1) || @src.size
-          value = @src[@pos + 1, close - @pos - 1]
-          @pos = close + 1
-        else
-          vm = @src[@pos, @src.size - @pos].match(/\A([^\s>]*)/)
-          v = vm ? (vm[1] || "") : ""
-          value = v
-          @pos += v.size
-        end
-      end
-      attrs = attrs.put(aname, Testing::Parser.decode(value)) unless attrs.key?(aname)
+      ""
     end
-    [name, attrs, self_closing]
+    [name.downcase, attrs, self_closing]
   end
 
-  # :nodoc:
-  def skip_space -> Void
-    while @pos < @src.size && @src[@pos].match?(/\s/)
-      @pos += 1
-    end
-  end
-
-  # `text` with its character references decoded.
+  # `text` with its character references decoded (a reference that is no
+  # character is left as it is).
   def self.decode(text: String) -> String
     return text unless text.include?("&")
-    text.gsub(/&(#[0-9]+|#[xX][0-9A-Fa-f]+|amp|lt|gt|quot|apos|nbsp);/) do |ref|
+    text.gsub(/&(#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|amp|lt|gt|quot|apos|nbsp);/) do |ref|
       body = ref[1, ref.size - 2]
       case body
       when "amp" then "&"
@@ -138,10 +127,10 @@ class Testing::Parser
       when "gt" then ">"
       when "quot" then "\""
       when "apos" then "'"
-      when "nbsp" then " "
+      when "nbsp" then "\u00a0"
       else
         code = body.start_with?("#x") || body.start_with?("#X") ? body[2, body.size - 2].to_i(16) : body[1, body.size - 1].to_i
-        code > 0 && code <= 0x10FFFF ? code.chr : ref
+        code > 0 && code <= 0x10FFFF && !(code >= 0xD800 && code <= 0xDFFF) ? code.chr : ref
       end
     end
   end
@@ -193,17 +182,45 @@ class Testing::Selector
     out
   end
 
-  # Whether `node`, under `scope`, matches: its own part the last, and
-  # the earlier ones its ancestors, in order.
-  def matches?(node: Testing::Node, scope: Testing::Node) -> Bool
+  # Whether `node`, below `ancestors` (outermost first), matches: its own
+  # part the last, and the earlier ones its ancestors, in order.
+  def matches?(node: Testing::Node, ancestors: Array::Builder[Testing::Node]) -> Bool
     return false unless @steps[@steps.size - 1].matches?(node)
-    path = scope.path_to(node) || Array[Testing::Node].new
     i = @steps.size - 2
-    path.each do |anc|
-      break if i < 0
-      i -= 1 if @steps[i].matches?(anc)
+    j = ancestors.size - 1
+    while i >= 0 && j >= 0
+      i -= 1 if @steps[i].matches?(ancestors[j])
+      j -= 1
     end
     i < 0
+  end
+
+  # `text` split at the commas outside brackets and quotes.
+  def self.split_list(text: String) -> Array[String]
+    out: Array[String] = []
+    cur = String::Builder.new
+    depth = 0
+    quote = ""
+    text.each_char do |c|
+      if quote != ""
+        quote = "" if c == quote
+        cur << c
+      elsif c == "\"" || c == "'"
+        quote = c
+        cur << c
+      elsif c == "["
+        depth += 1
+        cur << c
+      elsif c == "]"
+        depth -= 1
+        cur << c
+      elsif depth == 0 && c == ","
+        out = out.push(cur.to_s)
+      else
+        cur << c
+      end
+    end
+    out.push(cur.to_s)
   end
 end
 

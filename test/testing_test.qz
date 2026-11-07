@@ -39,6 +39,35 @@ class TtRouter < Bezel::Router
   end
 end
 
+class TtAged < Bezel::Controller
+  controller
+  def who(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "user #{conn.session["user_id"] || "-"}")
+  def hop(conn: Bezel::Conn) -> Bezel::Conn = conn.redirect("http://www.example.com/aged#top")
+  def away(conn: Bezel::Conn) -> Bezel::Conn = conn.redirect("https://evil.example/who")
+  def cookies(conn: Bezel::Conn) -> Bezel::Conn = text(conn, conn.header("cookie") || "")
+  def setter(conn: Bezel::Conn) -> Bezel::Conn
+    conn.add_resp_header("set-cookie", "keep=1; Max-Age=05").add_resp_header("set-cookie", "gone=1; Max-Age=-1")
+        .add_resp_header("set-cookie", "blank=; Path=/").text("set")
+  end
+end
+
+class TtAgedRouter < Bezel::Router
+  def self.aged -> Array[Bezel::Plug] = [Bezel::Plug::Session.new(key: "_aged", max_age: 3600)]
+  routes do
+    scope "/", pipeline: :aged do
+      get "/aged", TtAged, :who
+      get "/hop", TtAged, :hop
+      get "/away", TtAged, :away
+      get "/cookies", TtAged, :cookies
+      get "/setter", TtAged, :setter
+    end
+  end
+end
+
+class TtAgedApp < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [TtAgedRouter.new]
+end
+
 class TtApp < Bezel::Endpoint
   def self.plugs -> Array[Bezel::Plug] = [Bezel::Plug::Parsers.new, TtRouter.new]
   def self.on_error(error: Exception, conn: Bezel::Conn) -> Void = nil
@@ -129,5 +158,61 @@ class TestingTest < Test::Case
     assert_equal(302, c.post("/items", params: {"item[name]" => "x", "_csrf_token" => token}).status)
     prod = Bezel::App.new(Bezel::Config.load("t", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "p" * 64}, quiet: true), nil, true)
     assert_equal(500, Bezel::Testing.post(TtApp, "/items", params: {"item[name]" => "x"}, app: prod).status)
+  end
+
+  def test_parser_review_fixes
+    # Inline text joins without spaces; script, style and title stay out.
+    doc = Bezel::Testing::Doc.parse("<title>T</title><p>Hello, <b>Ann</b>!</p><p>a<em>b</em>c</p><script>secretjs()</script>")
+    assert_true(doc.has_text?("Hello, Ann!"))
+    assert_true(doc.has_text?("abc"))
+    assert_false(doc.has_text?("secretjs"))
+    assert_equal("T", node(doc, "title").text)
+    # Implied end tags.
+    nested = Bezel::Testing::Doc.parse("<p>a<p>b<ul><li>x<li>y</ul><table><tr><td>1<td>2<tr><td>3</table>")
+    assert_false(nested.has_element?("p p"))
+    assert_false(nested.has_element?("li li"))
+    assert_false(nested.has_element?("tr tr"))
+    assert_equal(3, nested.select("td").size)
+    # Malformed input does not raise.
+    ["<a ", "<", "&#99999999999999999999999;", "&#xD800;", "<!--", "<p class=\"x", "</", "<script>x"].each do |bad|
+      assert_nothing_raised { Bezel::Testing::Doc.parse(bad).text }
+    end
+    assert_equal("&#xD800;", Bezel::Testing::Doc.parse("<p>&#xD800;</p>").text)
+    # Raw text after characters whose lowercase is longer.
+    u = Bezel::Testing::Doc.parse("<p>İİİİİİ</p><textarea>abc</textarea><i>after</i>")
+    assert_equal("abc", node(u, "textarea").text)
+    assert_true(u.has_element?("i"))
+    # A comma in a quoted value.
+    assert_true(Bezel::Testing::Doc.parse("<input value=\"c,d\">").has_element?("input[value=\"c,d\"], p"))
+  end
+
+  def test_parser_is_linear
+    page = "<div>" + (0...4000).map { |i| "<div class=\"row\"><span>#{i}</span></div>" }.join + "</div>"
+    started = Time.monotonic
+    doc = Bezel::Testing::Doc.parse(page)
+    assert_equal(4000, doc.select("div.row span").size)
+    assert_true(doc.has_element?("span"))
+    assert_compare(Time.monotonic - started, :<, 3.seconds)
+  end
+
+  def test_client_review_fixes
+    # login_as for a store with max_age.
+    c = Bezel::Testing::Client.new(TtAgedApp, session_key: "_aged")
+    c.login_as({"user_id" => "7"})
+    assert_equal("user 7", Bezel::Testing.text_response(c.get("/aged")))
+    # follow_redirect drops the fragment, takes the client's own host, refuses another.
+    c.get("/hop")
+    assert_equal("user 7", Bezel::Testing.text_response(c.follow_redirect))
+    c.get("/away")
+    assert_match(/leaves the application/, failure { c.follow_redirect })
+    # Cookies: a Max-Age parsed, an empty value kept.
+    c.get("/setter")
+    assert_equal("1", c.cookies["keep"])
+    assert_nil(c.cookies["gone"]?)
+    assert_equal("", c.cookies["blank"])
+    # A Cookie header given is sent with the jar's.
+    sent = Bezel::Testing.text_response(c.get("/cookies", headers: {"cookie" => "mine=1"}))
+    assert_true(sent.start_with?("mine=1; "))
+    assert_true(sent.include?("_aged="))
   end
 end

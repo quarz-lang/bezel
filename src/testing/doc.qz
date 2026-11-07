@@ -79,49 +79,62 @@ class Testing::Node
   # The classes of the `class` attribute.
   def classes -> Array[String] = (attr("class") || "").split(" ").reject(&:empty?)
 
-  # The text inside, whitespace collapsed.
-  def text -> String = Testing::Node.squish(raw_text)
+  # The text inside, whitespace collapsed: inline elements joined as
+  # they are (`Hello, <b>Ann</b>!` is `Hello, Ann!`), block elements
+  # apart; `script`, `style`, `template` and `title` inside leave theirs
+  # out (the element's own `text` gives it).
+  def text -> String
+    b = String::Builder.new
+    write_text(b, true)
+    Testing::Node.squish(b.to_s)
+  end
+
+  # Elements whose text is no part of the page's.
+  HIDDEN = ["script", "style", "template", "title"]
+
+  # Elements that begin a line of text.
+  BLOCKS = ["p", "div", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "td", "th", "ul", "ol", "table",
+            "section", "article", "header", "footer", "nav", "main", "aside", "form", "pre", "blockquote",
+            "dt", "dd", "dl", "option", "label", "fieldset", "legend", "figure", "figcaption", "hr", "button"]
 
   # :nodoc:
-  def raw_text -> String
+  def write_text(b: String::Builder, top: Bool) -> Void
     t = @text
-    return t if t
-    @children.map(&:raw_text).join(" ")
+    if t
+      b << t
+      return
+    end
+    return if !top && HIDDEN.include?(@tag)
+    block = BLOCKS.include?(@tag)
+    b << " " if block
+    @children.each { |c| c.write_text(b, false) }
+    b << " " if block
   end
 
   # The elements under this one `selector` matches, in document order.
   def select(selector: String) -> Array[Testing::Node]
-    groups = selector.split(",").map { |g| Testing::Selector.parse(g) }
-    out: Array[Testing::Node] = []
-    all = descendants
-    all.each do |n|
-      out = out.push(n) if groups.any? { |g| g.matches?(n, self) }
-    end
-    out
-  end
-
-  # The elements under this one, in document order.
-  def descendants -> Array[Testing::Node]
-    out: Array[Testing::Node] = []
-    @children.each do |c|
-      next if c.text?
-      out = out.push(c) + c.descendants
-    end
-    out
+    groups = Testing::Selector.split_list(selector).map { |g| Testing::Selector.parse(g) }
+    out = Array::Builder[Testing::Node].new
+    ancestors = Array::Builder[Testing::Node].new
+    collect(groups, ancestors, out)
+    out.to_a
   end
 
   # :nodoc:
-  # The ancestors of `node` under this one, nearest first.
-  def path_to(node: Testing::Node) -> Array[Testing::Node]?
+  # Walks the elements under this one, `ancestors` the path to it
+  # (outermost first), adding those a selector matches to `out`.
+  def collect(groups: Array[Testing::Selector], ancestors: Array::Builder[Testing::Node], out: Array::Builder[Testing::Node]) -> Void
     @children.each do |c|
-      if c.equal?(node)
-        return Array[Testing::Node].new
-      end
-      sub = c.path_to(node)
-      return sub.push(c) if sub
+      next if c.text?
+      out << c if groups.any? { |g| g.matches?(c, ancestors) }
+      ancestors << c
+      c.collect(groups, ancestors, out)
+      ancestors.pop
     end
-    nil
   end
+
+  # The elements under this one, in document order.
+  def descendants -> Array[Testing::Node] = select("*")
 
   # `text` with runs of whitespace as one space, trimmed.
   def self.squish(text: String) -> String = text.gsub(/\s+/, " ").strip
