@@ -94,6 +94,8 @@ class ParamsTest < Test::Case
       assert_raise(Bezel::BadRequest) { Bezel::Params.from_query(q) }
     end
     assert_equal("2", Bezel::Params.from_query("a[]=1&a=2").fetch("a"))
+    assert_equal("2", Bezel::Params.from_query("a[b]=1&a=2").fetch("a"))
+    assert_true(Bezel::Params.from_query("=1&=2").empty?)
   end
 
   def test_depth_is_limited

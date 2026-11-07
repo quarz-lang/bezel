@@ -76,5 +76,7 @@ class ConfigTest < Test::Case
     d = assert_raise(Bezel::ConfigError) { load({"DATABASE_URL" => "mysql://u:hunter2@h/d"}) }
     assert_match(/DATABASE_URL/, d.message)
     assert_false(d.message.include?("hunter2"))
+    slash = assert_raise(Bezel::ConfigError) { load({"DATABASE_URL" => "postgres://u:se/cret@h/d"}) }
+    assert_false(slash.message.include?("cret"))
   end
 end

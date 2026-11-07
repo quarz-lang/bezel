@@ -26,8 +26,9 @@ abstract class Endpoint
   # once, when its handler is.
   def self.plugs -> Array[Plug] = []
 
-  # Reports an exception answered with `500` (the request is `conn`, as
-  # the endpoint took it). By default to standard error, with its
+  # Reports an exception answered with `500`; `conn` is the connection
+  # as the plug that raised received it (after the plugs before it: the
+  # method `Plug::MethodOverride` set, the body's parameters). By default to standard error, with its
   # backtrace; override it to send errors elsewhere. An exception it
   # raises is written to standard error and goes no further.
   def self.on_error(error: Exception, conn: Conn) -> Void
@@ -59,16 +60,13 @@ data Runner(endpoint: Type[Endpoint], plugs: Array[Plug], app: App)
     rescue StandardError => e
       return answer(conn, e)
     end
-    out = Plug.run(plugs, conn, ->(c: Conn) { Runner.answered(c) })
+    out = Plug.run(plugs, conn)
     e = out.error
-    e ? answer(out, e) : out.to_response
-  end
-
-  # :nodoc:
-  # `conn`, or `Bezel::NotFound` when no plug answered it.
-  def self.answered(conn: Conn) -> Conn
-    raise NotFound.new("no route for #{conn.method} #{conn.path}") unless conn.sent?
-    conn
+    return answer(out, e) if e
+    # (Halted or not, a connection without a body was answered by no
+    # plug: as `Conn#final_status` says, a 404.)
+    return answer(out, NotFound.new("no route for #{out.method} #{out.path}")) unless out.sent?
+    out.to_response
   end
 
   # :nodoc:

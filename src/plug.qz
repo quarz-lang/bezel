@@ -9,7 +9,10 @@
 #
 # A plug that must act after the rest of the pipeline (logging the
 # status, a time limit) overrides `wrap`, which is given the rest as a
-# procedure.
+# procedure. The rest does not raise: an exception a later plug raised
+# comes back as the connection's `Conn#error` (the connection halted),
+# which `wrap` may inspect, or replace by clearing `error` and answering
+# itself (`out.with(error: nil).html(page, status: 404)`).
 #
 # ```
 # data Hello(name: String)

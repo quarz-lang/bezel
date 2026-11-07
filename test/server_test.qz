@@ -35,13 +35,27 @@ class ServerTest < Test::Case
   end
 
   def test_start_stops_on_term
-    c = Bezel::Config.load("start_test", environ: {"BEZEL_ENV" => "test", "HOST" => "127.0.0.1", "PORT" => "0"})
+    probe = TCPServer.new("127.0.0.1", 0)
+    port = probe.local_address.port
+    probe.close
+    c = Bezel::Config.load("start_test", environ: {"BEZEL_ENV" => "test", "HOST" => "127.0.0.1", "PORT" => port.to_s})
     out = Task.scope do |s|
       t = s.spawn do
         Bezel.start(ServerTestApp, config: c, grace: 1.second)
         "stopped"
       end
-      Task.sleep(300.ms)
+      # (The traps are set before the server is bound and answers.)
+      up = false
+      100.times do
+        break if up
+        begin
+          HTTP::Client.new(timeout: 1.second).get("http://127.0.0.1:#{port}/nothing").close
+          up = true
+        rescue HTTP::Client::Error
+          Task.sleep(50.ms)
+        end
+      end
+      assert_true(up)
       Process.run("kill", "-TERM", Process.pid.to_s)
       t.await
     end

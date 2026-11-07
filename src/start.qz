@@ -11,7 +11,8 @@
 # (Ctrl-C) does the same with one second. A second signal during the
 # shutdown ends the process at once (status 1), for a request that
 # never waits. Returns once the server has stopped and the pool is
-# closed, with the signals' default actions back.
+# closed, with the default actions of SIGTERM and SIGINT back: traps the
+# application set for them before are dropped, not restored.
 #
 # ```quarz no_run
 # # src/main.qz of an application

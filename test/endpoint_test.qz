@@ -15,6 +15,7 @@ class EndpointTestApp < Bezel::Endpoint
        in ["GET", "/go"] then conn.redirect("/")
        in ["GET", "/forbidden"] then raise Bezel::Forbidden.new
        in ["GET", "/boom"] then raise ArgumentError.new("<boom>")
+       in ["GET", "/halted"] then conn.put_status(204).halt
        else conn
        end
      end]
@@ -130,5 +131,10 @@ class EndpointTest < Test::Case
     assert_true(text_of(boom).include?(id))
     assert_equal(22, (EndpointTestApp.call(HTTP::Server::Request.get("/nothing")).headers["x-request-id"] || "").size)
     assert_equal("ArgumentError /boom", EndpointTestApp::ERRORS.value.last)
+  end
+
+  def test_halted_without_a_body_is_not_found
+    res = EndpointTestApp.call(HTTP::Server::Request.get("/halted"))
+    assert_equal(404, res.status)
   end
 end

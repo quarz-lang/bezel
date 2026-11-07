@@ -45,10 +45,13 @@ data Params(entries: Hash[String, Param])
   # The parameters of a query string or an `application/x-www-form-urlencoded`
   # body, nested as Rack nests them: `a[b]=1` is a map, `a[]=1&a[]=2` a
   # list, `a[][b]=1&a[][c]=2` a list of one map (a new map begins when a
-  # name repeats in the last one). A plain name given twice keeps the
-  # last value. A name used both ways (`a=1&a[]=2`, `a[]=1&a[b]=2`), a
-  # list of lists (`a[][]=1`), a nesting deeper than `MAX_DEPTH` or a
-  # value that is not UTF-8 once decoded is `Bezel::BadRequest`.
+  # name repeats in the last one). A plain name keeps its last value,
+  # replacing a list or map given before (`a[]=1&a=2` is `"2"`), and a
+  # pair without a name (`=1`) is ignored. Nesting under a name that holds
+  # another kind of value (`a=1&a[]=2`, `a[]=1&a[b]=2`), a list of lists
+  # (`a[][]=1`, which Rack reads otherwise), a nesting deeper than
+  # `MAX_DEPTH` or a value that is not UTF-8 once decoded is
+  # `Bezel::BadRequest`.
   def self.from_query(query: String) -> Params
     return Params.empty if query.empty?
     root = ParamTree::Map.new
@@ -58,6 +61,7 @@ data Params(entries: Hash[String, Param])
       key = HTTP.percent_decode(k, true)
       value = HTTP.percent_decode(v, true)
       raise BadRequest.new("malformed query or form: not UTF-8 once decoded") if key.nil? || value.nil?
+      next if key.empty?
       head, path = Params.split_key(key)
       root.store(head, path, value)
     end

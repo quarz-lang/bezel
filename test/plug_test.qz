@@ -186,4 +186,12 @@ class PlugTest < Test::Case
     xml = bare.with(headers: HTTP::Headers.of({"Content-Type" => "application/xml"}))
     assert_false(p.call(Bezel::Conn.build(xml)).halted?)
   end
+
+  def test_a_wrap_sees_errors_as_conn_error
+    custom = Bezel.plug { |c| c }
+    pages = Bezel::Pipeline.new([custom])
+    plugs: Array[Bezel::Plug] = [pages, Bezel.plug { |c| raise Bezel::NotFound.new }]
+    out = Bezel::Plug.run(plugs, Bezel::Conn.build(req))
+    assert_equal(404, out.final_status)
+  end
 end

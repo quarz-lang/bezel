@@ -39,12 +39,7 @@ class Plug::Logger
 
   def wrap(conn: Conn, rest: (Conn) -> Conn) -> Conn
     return rest.call(conn) unless conn.config.log?(:info)
-    begin
-      out = rest.call(conn)
-    rescue StandardError => e
-      report(conn, Conn.status_of(e), conn.request_id)
-      raise e
-    end
+    out = rest.call(conn)
     report(conn, out.final_status, out.request_id || conn.request_id)
     out
   end
