@@ -168,7 +168,8 @@ type-checked and escaped as hand-written DSL code is:
 ```
 
 - `{expr}` writes a value escaped (a `Bezel::Html` as it is, nil as
-  nothing); `{raw(expr)}` is the only unescaped output.
+  nothing); `{raw(expr)}`, like `Bezel::Html.raw` in the code, writes a
+  string unescaped, and nothing else does.
 - `:for={pattern <- expr}` and `:if={expr}` repeat or guard an element;
   `<.card>` is a component (`Card.new(title: "Help")`, the content its
   `content`), `<:footer>` a slot (a `footer:` argument, a `Bezel::Html`).

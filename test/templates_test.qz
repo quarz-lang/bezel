@@ -164,8 +164,10 @@ class TemplatesTest < Test::Case
   end
 
   def test_end_tags_end_at_the_name
-    assert(code_of("<script>a</scripts></script>").include?("h.script(\"a</scripts>\")"))
-    assert(code_of("<title>a</titles></title >").include?("h.text(\"</titles>\")"))
+    # (`</scripts>` does not end the script, and the DSL refuses it in one.)
+    assert_equal("v/t.html.bz:1: a <script> cannot hold </script", error_of("<script>a</scripts></script>"))
+    assert(code_of("<script>a</script\n><p>b</p>").include?("h.script(\"a\")"))
+    assert(code_of("<title>a</title ><p>b</p>").include?("h.title(\"a\")"))
   end
 
   def test_h_cannot_be_a_parameter
@@ -173,6 +175,38 @@ class TemplatesTest < Test::Case
       assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of(t))
     end
     assert(code_of("{@args hh: Int}").include?("def self.t(hh: Int)"))
+  end
+
+  def test_second_review
+    # (`:for`'s list and attribute code are one expression.)
+    assert(code_of("<li :for={i <- 1..3}>x</li>").include?("(1..3).each do |i|"))
+    assert(code_of("<li :for={i <- a||b}>x</li>").include?("(a||b).each do |i|"))
+    assert(code_of("<li :for={i <- -x}>x</li>").include?("(-x).each do |i|"))
+    assert(code_of("<li :for={i <- Shop::User.all}>x</li>").include?("Shop::User.all.each do |i|"))
+    assert(code_of("<p>{a?b:c}</p>").include?("h.put((a?b:c))"))
+    # (What the DSL would refuse at render time.)
+    assert_equal("v/t.html.bz:1: a <script> cannot hold </script", error_of("<script>var a = \"</scripts>\";</script>"))
+    assert_equal("v/t.html.bz:1: a <style> cannot hold </style", error_of("<style>a::after{content:\"</styles>\"}</style>"))
+    assert_equal("v/t.html.bz:2: a <textarea> cannot hold </textarea", error_of("<textarea>\n</textareas></textarea>"))
+    # (Lines as written.)
+    assert_equal("v/t.html.bz:3: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("\n\n&bogus;"))
+    assert_equal("v/t.html.bz:4: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<p>a\n\n\n&bogus;</p>"))
+    assert_equal("v/t.html.bz:2: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<pre>\n&bogus;</pre>"))
+    assert_equal("v/t.html.bz:5: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<.card>\n\n<:foot>x</:foot>\n\n&bogus;</.card>"))
+    assert_equal("v/t.html.bz:2: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<p title=\n\"&bogus;\"></p>"))
+    # (Whitespace inside `pre` is kept in components too.)
+    assert(code_of("<pre><.card>  a\n\n   b  </.card></pre>").include?("h.text(#{lit("  a\n\n   b  ")})"))
+    # (The scanner.)
+    assert(code_of("{@args n: Int}\n<p>{n /2}</p>").include?("h.put((n /2))"))
+    assert(code_of("<p>{xs.reduce(:/)}</p>").include?("h.put((xs.reduce(:/)))"))
+    assert(code_of("<p>{%q(\")}</p>").include?("h.put((%q(\")))"))
+    assert(code_of("<p>{%q|}|}</p>").include?("h.put((%q|}|))"))
+    assert(code_of("<p>{%r{/}}</p>").include?("h.put((%r{/}))"))
+    assert(code_of("<p>{a % b}</p>").include?("h.put((a % b))"))
+    assert_equal("v/t.html.bz:1: a # comment cannot be in {...}", error_of("<p>{\"\#{x #c}\"}</p>"))
+    # (Component names are in lowercase; long numeric references.)
+    assert_equal("v/t.html.bz:1: <.UserCard> is not a component name (<.card>, <.admin.user_card>)", error_of("<.UserCard/>"))
+    assert(code_of("<p>&#00000065;</p>").include?("h.p(\"A\")"))
   end
 
   def test_module_sources_are_checked

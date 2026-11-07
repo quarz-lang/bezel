@@ -49,11 +49,11 @@ module Corpus
       h.text("\n")
       h.p do
         h.text("Tom & Jerry say ")
-        h.put("<hi>")  # basic.html.bz:4
+        h.put(("<hi>"))  # basic.html.bz:4
         h.text(".")
       end
       h.text("\n")
-      if !items.empty?  # basic.html.bz:5
+      if (!items.empty?)  # basic.html.bz:5
         h.ul do
           h.text("\n")
           items.each do |item|  # basic.html.bz:6
@@ -75,7 +75,7 @@ module Corpus
   def self.components(user: User, notes: Array[String]) -> Bezel::Html
     Bezel.html do |h|
       __bz_slot_1 = h.capture do
-        h.a("Edit", href: "/users/#{user.id}")  # components.html.bz:5
+        h.a("Edit", href: ("/users/#{user.id}"))  # components.html.bz:5
       end
       h.component(Panel.new(title: user.name, class_name: "wide", footer: __bz_slot_1)) do  # components.html.bz:2
         h.p do
@@ -87,7 +87,7 @@ module Corpus
       h.text("\n")
       h.component(Panel.new(title: "Notes")) do  # components.html.bz:9
         notes.each do |n|  # components.html.bz:10
-          if !n.empty?  # components.html.bz:10
+          if (!n.empty?)  # components.html.bz:10
             h.p do
               h.put(n)  # components.html.bz:10
             end
@@ -175,13 +175,13 @@ module Corpus
       h.p do
         h.raw(html)  # text.html.bz:12
         h.text(" and ")
-        h.put("{")  # text.html.bz:12
+        h.put(("{"))  # text.html.bz:12
         h.text("braces")
-        h.put("}")  # text.html.bz:12
+        h.put(("}"))  # text.html.bz:12
       end
       h.text("\n")
       h.p do
-        h.put(Bezel::Html.raw("<em>safe</em>"))  # text.html.bz:13
+        h.put((Bezel::Html.raw("<em>safe</em>")))  # text.html.bz:13
       end
       h.text("\n")
       h.p(title: (code if n > 0)) do  # text.html.bz:14
