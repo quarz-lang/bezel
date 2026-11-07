@@ -1,0 +1,15 @@
+class Pages < Bezel::Controller
+  controller do
+    plug :requre_login
+  end
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+  private def require_login(conn: Bezel::Conn) -> Bezel::Conn = conn
+end
+
+class Others < Bezel::Controller
+  controller do
+    plug :check, only: [:hom]
+  end
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+  private def check(conn: Bezel::Conn) -> Bezel::Conn = conn
+end

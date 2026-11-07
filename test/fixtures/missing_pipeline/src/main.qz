@@ -1,0 +1,14 @@
+class Pages < Bezel::Controller
+  controller
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+end
+
+class AppRouter < Bezel::Router
+  def self.browser -> Array[Bezel::Plug] = []
+
+  routes do
+    scope "/", pipeline: :brwoser do
+      get "/", Pages, :home
+    end
+  end
+end

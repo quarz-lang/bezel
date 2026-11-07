@@ -1,0 +1,192 @@
+# One route of a router's table: requests of `method` matching `pattern`
+# (as `HTTP::Router` reads patterns: `/users/{id}`) go through the
+# `pipelines`, then to `action` of `controller`. `name` is the route's
+# name, for its helpers (`user` gives `user_path`), or nil.
+data Route(
+  # `"GET"`, `"POST"`, ...
+  method: String,
+  # The path pattern.
+  pattern: String,
+  # The controller.
+  controller: Type[Controller],
+  # The action, a public method of the controller taking and returning a
+  # `Conn`.
+  action: Symbol,
+  # The pipelines the request goes through first, outermost first.
+  pipelines: Array[Symbol],
+  # The route's name, or nil.
+  name: String?
+)
+  # The names of the pattern's parameters, in order (`[:post_id, :id]`).
+  def params -> Array[Symbol]
+    pattern.split("/").select { |s| s.start_with?("{") && s.end_with?("}") }
+           .map { |s| s.delete_prefix("{").delete_suffix("}").delete_suffix("...").to_sym }
+  end
+
+  # The route as a line of `bezel routes`: name, method, pattern,
+  # controller and action.
+  def to_s -> String = "#{(name || "").rjust(24)}  #{method.ljust(7)} #{pattern}  #{controller.name}##{action}"
+end
+
+# What a router's `routes` block runs on: it collects the routes. Paths
+# are joined to the enclosing scopes' (`scope "/admin"` then `get
+# "/users"` is `/admin/users`), and route names to their prefixes.
+#
+# ```
+# b = Bezel::RouteBuilder.new
+# b.scope("/api", pipeline: :api, as: "api") do
+#   resources "/users", Bezel::Controller, only: [:index, :show]
+# end
+# b.routes.map { |r| "#{r.method} #{r.pattern} #{r.name}" }
+# # => ["GET /api/users api_users", "GET /api/users/{id} api_user"]
+# ```
+class RouteBuilder
+  include DslScope
+
+  var @routes: Array[Route] = []
+  var @prefix: String = ""
+  var @pipelines: Array[Symbol] = []
+  var @name_prefix: String = ""
+
+  # A builder with no routes.
+  def initialize; end
+
+  # The routes collected, in order.
+  def routes -> Array[Route] = @routes
+
+  # The seven actions of `resources`, in order.
+  ACTIONS = [:index, :new, :create, :show, :edit, :update, :delete]
+
+  # Routes the block declares under `path`, through `pipeline` (after the
+  # enclosing scopes' pipelines) and with names prefixed by `as` and `_`.
+  def scope(path: String, *, pipeline: Symbol? = nil, as: String? = nil, &block: RouteBuilder.() -> Void) -> Void
+    saved = [@prefix, @name_prefix]
+    saved_pipelines = @pipelines
+    @prefix = RouteBuilder.join(@prefix, path)
+    @pipelines = @pipelines.push(pipeline) if pipeline
+    @name_prefix = "#{@name_prefix}#{as}_" if as
+    begin
+      instance_exec(&block)
+    ensure
+      @prefix = saved[0]
+      @name_prefix = saved[1]
+      @pipelines = saved_pipelines
+    end
+  end
+
+  # A GET route to `action` of `controller`, named `as` (prefixed by the
+  # scopes').
+  def get(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("GET", path, controller, action, as)
+  # A POST route: `#get`.
+  def post(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("POST", path, controller, action, as)
+  # A PUT route: `#get`.
+  def put(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("PUT", path, controller, action, as)
+  # A PATCH route: `#get`.
+  def patch(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("PATCH", path, controller, action, as)
+  # A DELETE route: `#get`.
+  def delete(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("DELETE", path, controller, action, as)
+  # A HEAD route (a GET route serves HEAD already): `#get`.
+  def head(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("HEAD", path, controller, action, as)
+  # An OPTIONS route: `#get`.
+  def options(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("OPTIONS", path, controller, action, as)
+
+  # The routes of a resource's actions (`ACTIONS`, or `only:` of them,
+  # without `except:`), named by the path's last segment (`/users`:
+  # `users`, `user`, `new_user`, `edit_user`):
+  #
+  # | Action | Route | Name |
+  # |---|---|---|
+  # | index | GET /users | users |
+  # | new | GET /users/new | new_user |
+  # | create | POST /users | users |
+  # | show | GET /users/{id} | user |
+  # | edit | GET /users/{id}/edit | edit_user |
+  # | update | PATCH and PUT /users/{id} | user |
+  # | delete | DELETE /users/{id} | user |
+  def resources(path: String, controller: Type[Controller], *, only: Array[Symbol] = ACTIONS,
+                except: Array[Symbol] = []) -> Void
+    resource_routes(path, controller, only, except)
+  end
+
+  # The same, and the block's routes nested under one member
+  # (`resources "/posts", Posts do resources "/comments", Comments end`:
+  # `/posts/{post_id}/comments`, named `post_comments`).
+  def resources(path: String, controller: Type[Controller], *, only: Array[Symbol] = ACTIONS,
+                except: Array[Symbol] = [], &block: RouteBuilder.() -> Void) -> Void
+    singular = resource_routes(path, controller, only, except)
+    saved = [@prefix, @name_prefix]
+    @prefix = RouteBuilder.join(@prefix, path.delete_suffix("/")) + "/{#{singular}_id}"
+    @name_prefix = "#{@name_prefix}#{singular}_"
+    begin
+      instance_exec(&block)
+    ensure
+      @prefix = saved[0]
+      @name_prefix = saved[1]
+    end
+  end
+
+  # :nodoc:
+  # Adds a resource's routes; its singular name.
+  def resource_routes(path: String, controller: Type[Controller], only: Array[Symbol], except: Array[Symbol]) -> String
+    (only + except).each do |a|
+      raise ArgumentError.new("resources #{path}: unknown action #{a.inspect} (#{ACTIONS.map(&:inspect).join(", ")})") unless ACTIONS.include?(a)
+    end
+    last = path.split("/").reject(&:empty?).last?
+    raise ArgumentError.new("resources needs a path with a name: #{path.inspect}") if last.nil? || last.start_with?("{")
+    plural = Rotor::Inflector.underscore(last.gsub("-", "_"))
+    singular = Rotor::Inflector.singularize(plural)
+    plural = "#{singular}_index" if plural == singular
+    acts = ACTIONS.select { |a| only.include?(a) && !except.include?(a) }
+    # (`"/users/"` is `"/users"`: the collection has no trailing slash.)
+    path = path.delete_suffix("/")
+    member = path + "/{id}"
+    acts.each do |a|
+      case a
+      when :index then add("GET", path, controller, :index, plural)
+      when :new then add("GET", path + "/new", controller, :new, "new_#{singular}")
+      when :create then add("POST", path, controller, :create, plural)
+      when :show then add("GET", member, controller, :show, singular)
+      when :edit then add("GET", member + "/edit", controller, :edit, "edit_#{singular}")
+      when :update
+        add("PATCH", member, controller, :update, singular)
+        add("PUT", member, controller, :update, singular)
+      when :delete then add("DELETE", member, controller, :delete, singular)
+      end
+    end
+    singular
+  end
+
+  # :nodoc:
+  def add(method: String, path: String, controller: Type[Controller], action: Symbol, as: String?) -> Void
+    pattern = RouteBuilder.join(@prefix, path)
+    segs = HTTP.parse_pattern(pattern)
+    shape = HTTP.specificity(segs)
+    @routes.each do |r|
+      next unless r.method == method
+      other = HTTP.parse_pattern(r.pattern)
+      if HTTP.specificity(other) == shape && HTTP.same_literals?(other, segs)
+        raise ArgumentError.new("#{method} #{pattern} conflicts with #{r.pattern} (#{r.controller.name}##{r.action})")
+      end
+    end
+    name = as ? "#{@name_prefix}#{as}" : nil
+    if name
+      raise ArgumentError.new("route name #{name.inspect} is not a name: letters, digits and _") unless name.match?(/\A[a-z_][a-z0-9_]*\z/)
+      @routes.each do |r|
+        # (One name may cover several routes of one pattern: `users` for
+        # index and create, `user` for show, update and delete.)
+        if r.name == name && r.pattern != pattern
+          raise ArgumentError.new("route name #{name.inspect} is given to #{r.pattern} and #{pattern}")
+        end
+      end
+    end
+    @routes = @routes.push(Route.new(method, pattern, controller, action, @pipelines, name))
+  end
+
+  # `path` under `prefix`: one `/` between them, `/` for nothing.
+  def self.join(prefix: String, path: String) -> String
+    p = path == "/" ? "" : path
+    raise ArgumentError.new("a path starts with /: #{path.inspect}") unless p.empty? || p.start_with?("/")
+    out = prefix.delete_suffix("/") + p
+    out.empty? ? "/" : out
+  end
+end

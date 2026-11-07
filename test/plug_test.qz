@@ -194,6 +194,45 @@ class PlugTest < Test::Case
     assert_equal(404, out.final_status)
     assert_equal("x-pages", out.resp_headers["x-seen"])
   end
+
+  def accept(header: String?, formats: Array[String] = ["html", "json"], target: String = "/") -> Symbol?
+    h = header ? HTTP::Headers.of({"Accept" => header}) : HTTP::Headers.empty
+    Bezel::Plug::Accepts.new(formats).call(Bezel::Conn.build(HTTP::Server::Request.get(target, h))).format
+  end
+
+  def test_accepts
+    assert_equal(:html, accept(nil))
+    assert_equal(:html, accept("*/*"))
+    assert_equal(:json, accept("application/json"))
+    assert_equal(:json, accept("text/html;q=0.5, application/json"))
+    assert_equal(:html, accept("text/html, application/json"))
+    assert_equal(:html, accept("text/*"))
+    assert_equal(:json, accept("application/json, text/*;q=0"))
+    assert_equal(:json, accept("*/*, text/html;q=0"))
+    assert_equal(:json, accept("application/*"))
+    assert_equal(:html, accept("application/xhtml+xml"))
+    assert_raise(Bezel::NotAcceptable) { accept("text/html;q=0, application/xhtml+xml") }
+    assert_equal(:json, accept(nil, target: "/?_format=json"))
+    assert_raise(Bezel::NotAcceptable) { accept("image/png") }
+    assert_raise(Bezel::NotAcceptable) { accept("text/html;q=0") }
+    assert_raise(Bezel::NotAcceptable) { accept(nil, target: "/?_format=xml") }
+    assert_raise(ArgumentError) { Bezel::Plug::Accepts.new(["yaml"]) }
+  end
+
+  def test_controller_helpers
+    c = Bezel::Conn.build(req)
+    ctl = Bezel::Controller.new
+    sent = ctl.send_file(c, File.join(static_dir, "robots.txt"))
+    assert_equal("text/plain; charset=utf-8", sent.resp_headers["content-type"])
+    assert_true(sent.halted?)
+    assert_raise(Bezel::NotFound) { ctl.send_file(c, File.join(static_dir, "nope.txt")) }
+    assert_equal(422, ctl.put_status(c, 422).status)
+    assert_equal("/x", ctl.redirect(c, to: "/x").resp_headers["location"])
+    assert_true(ctl.halt(c).halted?)
+    e = assert_raise(Bezel::ConfigError) { ctl.repo(c) }
+    assert_match(/has no database/, e.message)
+    assert_equal("hi", ctl.put_flash(c, :info, "hi").flash.kept[:info])
+  end
 end
 
 # A wrap answering a later plug's NotFound with a page of its own.

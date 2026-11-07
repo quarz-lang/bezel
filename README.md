@@ -14,8 +14,8 @@ Bezel = { git = "https://github.com/quarz-lang/bezel", branch = "main" }
 ```
 
 Work in progress (the plan is issue #1). What exists: the connection,
-parameters, plugs, endpoints, configuration, error pages, `Bezel.start`
-and the built-in plugs. The router, controllers, views, sessions, test
+parameters, plugs, endpoints, configuration, error pages, `Bezel.start`,
+the built-in plugs, the router and controllers. Views, sessions, test
 helpers and the `bezel` command come next.
 
 ```ruby
@@ -65,6 +65,53 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
 - **`Bezel.start`** serves the endpoint with `HTTP::Server`, opens a
   `PG::Pool` when there is a `DATABASE_URL`, and stops gracefully on
   `SIGTERM` and `SIGINT` (a second signal ends the process at once).
+
+A router declares its routes in one `routes` block, checked where it is
+compiled. A controller has one `controller` statement, which generates
+the dispatch to its actions and runs its plugs:
+
+```ruby
+class Shop::UsersController < Bezel::Controller
+  controller do
+    plug :require_login, except: [:index, :show]
+  end
+
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "users")
+  def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "user #{conn.params.int("id")}")
+  # new, create, edit, update, delete ...
+
+  private def require_login(conn: Bezel::Conn) -> Bezel::Conn = ...
+end
+
+class Shop::Router < Bezel::Router
+  def self.browser -> Array[Bezel::Plug] = [Bezel::Plug::Accepts.new(["html"])]
+  def self.api -> Array[Bezel::Plug] = [Bezel::Plug::Accepts.new(["json"])]
+
+  routes do
+    scope "/", pipeline: :browser do
+      get "/", Shop::PageController, :home, as: "home"
+      resources "/users", Shop::UsersController do
+        resources "/posts", Shop::PostsController, only: [:index, :show]
+      end
+    end
+    scope "/api", pipeline: :api, as: "api" do
+      resources "/users", Shop::API::UsersController, except: [:new, :edit]
+    end
+  end
+end
+
+Shop::Router.user_path(id: 5)                       # => "/users/5"
+Shop::Router.user_post_path(user_id: 5, id: 2)      # => "/users/5/posts/2"
+```
+
+- A route whose controller lacks its action, a pipeline the router does
+  not define, a controller plug that is not a method, and a route helper
+  given a wrong keyword are compile errors.
+- `resources` makes the seven routes (`index`, `new`, `create`, `show`,
+  `edit`, `update` with `PATCH` and `PUT`, `delete`), `only:`/`except:`
+  choose, and a block nests routes under `/{user_id}`.
+- Matching is the standard `HTTP::Router`'s: the most specific pattern,
+  `HEAD` by `GET`, `405` with `Allow` for another method's path.
 
 An endpoint is tested without a socket:
 
