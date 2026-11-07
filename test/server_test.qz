@@ -1,0 +1,64 @@
+require "test"
+
+class ServerTestApp < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug]
+    [Bezel::Plug::RequestId.new,
+     Bezel::Plug::Parsers.new,
+     Bezel.plug do |conn|
+       if conn.path == "/echo"
+         conn.json(JSON.parse("{\"name\": #{JSON.generate(conn.params.fetch("name"))}}"))
+       else
+         conn
+       end
+     end]
+  end
+end
+
+class ServerTest < Test::Case
+  def test_through_a_real_server
+    app = Bezel::App.new(Bezel::Config.load("server_test", environ: {"BEZEL_ENV" => "test", "HOST" => "127.0.0.1"}))
+    server = Bezel.server(ServerTestApp, app, port: 0)
+    port = server.local_address.port
+    Task.scope do |s|
+      s.spawn { server.serve }
+      client = HTTP::Client.new(proxy: nil)
+      res = client.post("http://127.0.0.1:#{port}/echo", "name=Ann", "application/x-www-form-urlencoded")
+      assert_equal(200, res.status)
+      assert_equal("Ann", res.json["name"].as_s)
+      assert_equal(22, (res.headers["x-request-id"] || "").size)
+      missing = client.get("http://127.0.0.1:#{port}/nothing")
+      assert_equal(404, missing.status)
+      missing.close
+      client.close
+      server.shutdown(timeout: 1.second)
+    end
+  end
+
+  def test_start_stops_on_term
+    probe = TCPServer.new("127.0.0.1", 0)
+    port = probe.local_address.port
+    probe.close
+    c = Bezel::Config.load("start_test", environ: {"BEZEL_ENV" => "test", "HOST" => "127.0.0.1", "PORT" => port.to_s})
+    out = Task.scope do |s|
+      t = s.spawn do
+        Bezel.start(ServerTestApp, config: c, grace: 1.second)
+        "stopped"
+      end
+      # (The traps are set before the server answers.)
+      up = false
+      100.times do
+        break if up
+        begin
+          HTTP::Client.new(timeout: 1.second, proxy: nil).get("http://127.0.0.1:#{port}/nothing").close
+          up = true
+        rescue HTTP::Client::Error
+          Task.sleep(50.ms)
+        end
+      end
+      assert_true(up)
+      Process.run("kill", "-TERM", Process.pid.to_s)
+      t.await
+    end
+    assert_equal("stopped", out)
+  end
+end

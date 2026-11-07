@@ -1,0 +1,104 @@
+# An application's entry: the plugs every request goes through, in
+# order, the last of them usually the router. An endpoint is a class
+# whose `plugs` the application writes; `Bezel.start` serves it, and a
+# test calls it without a socket (`MyApp::Endpoint.call(req)`).
+#
+# ```
+# class Shop < Bezel::Endpoint
+#   def self.plugs -> Array[Bezel::Plug]
+#     [Bezel::Plug::RequestId.new,
+#      Bezel::Plug::Parsers.new,
+#      Bezel.plug { |conn| conn.text("hello #{conn.params.fetch("name", "you")}") }]
+#   end
+# end
+#
+# res = Shop.call(HTTP::Server::Request.get("/?name=Ann"))
+# res.status     # => 200
+# res.body       # => HTTP::Content::Text(text: "hello Ann")
+# ```
+#
+# A request that no plug answers is `404 Not Found`. An exception a plug
+# raises is answered by `Bezel::ErrorPage` (an `HTTP::Error` with its
+# status, any other `StandardError` with `500`), and a `500` is reported
+# to `on_error` first.
+abstract class Endpoint
+  # The plugs, in order. An endpoint overrides it; the plugs are made
+  # once, when its handler is.
+  def self.plugs -> Array[Plug] = []
+
+  # Reports an exception answered with `500`; `conn` is the connection
+  # as the plug that raised received it (after the plugs before it: the
+  # method `Plug::MethodOverride` set, the body's parameters). By default to standard error, with its
+  # backtrace; override it to send errors elsewhere. An exception it
+  # raises is written to standard error and goes no further.
+  def self.on_error(error: Exception, conn: Conn) -> Void
+    STDERR.puts "bezel: #{conn.method} #{conn.request.target.partition("?")[0]} raised #{error.class.name}: #{error.message}"
+    error.backtrace.first(20).each { |l| STDERR.puts "  #{l}" }
+  end
+
+  # The endpoint as an `HTTP::Handler` for `app`: what `Bezel.start`
+  # gives the server.
+  def self.handler(app: App = App.test) -> Runner = Runner.new(self.type, plugs, app)
+
+  # The response to `req`, through a handler made for this call (`app`
+  # by default a `test` application without a database).
+  def self.call(req: HTTP::Server::Request, app: App = App.test) -> HTTP::Server::Response = handler(app).call(req)
+
+  # :nodoc:
+  def self.type -> Type[Endpoint] = self
+end
+
+# An endpoint's handler: its plugs and the application, made once and
+# shared by the server's connections.
+data Runner(endpoint: Type[Endpoint], plugs: Array[Plug], app: App)
+  include HTTP::Handler
+
+  def call(req: HTTP::Server::Request) -> HTTP::Server::Response
+    conn = Conn.bare(req, app)
+    begin
+      conn = conn.merge_params(Params.from_query(req.query))
+    rescue StandardError => e
+      return answer(conn, e)
+    end
+    # (After the last plug, a connection without a body is a 404 that
+    # the plugs' wraps see as `Conn#error`.)
+    out = Plug.run(plugs, conn, ->(c: Conn) { Runner.answered(c) })
+    e = out.error
+    return answer(out, e) if e
+    # (Halted by a plug without a body: answered by none, as
+    # `Conn#final_status` says, a 404.)
+    return answer(out, NotFound.new("no route for #{out.method} #{out.path}")) unless out.sent?
+    out.to_response
+  end
+
+  # :nodoc:
+  # `conn`, or `Bezel::NotFound` when no plug answered it.
+  def self.answered(conn: Conn) -> Conn
+    raise NotFound.new("no route for #{conn.method} #{conn.path}") unless conn.sent?
+    conn
+  end
+
+  # :nodoc:
+  # Headers of a response being made that an error page does not keep:
+  # they describe the body or the resource it replaces.
+  DROPPED = ["content-type", "content-length", "content-encoding", "content-disposition",
+             "etag", "last-modified", "location", "cache-control", "expires"]
+
+  # The error page for `error`, with the headers the plugs set on
+  # `conn` (the request id, security headers) but `DROPPED`.
+  def answer(conn: Conn, error: StandardError) -> HTTP::Server::Response
+    status = Conn.status_of(error)
+    if status >= 500 && !error.is_a?(HTTP::Error)
+      begin
+        endpoint.on_error(error, conn)
+      rescue StandardError => e
+        STDERR.puts "bezel: on_error raised #{e.class.name}: #{e.message}"
+      end
+    end
+    res = ErrorPage.response(conn, error, status)
+    headers = HTTP::Headers.empty
+    conn.resp_headers.each { |k, v| headers = headers.add(k, v) unless DROPPED.include?(k) }
+    res.headers.each { |k, v| headers = headers.put(k, v) }
+    res.with(headers: headers)
+  end
+end

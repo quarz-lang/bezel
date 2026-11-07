@@ -1,0 +1,95 @@
+# The answer to a request that raised: an `HTTP::Error` (`Bezel::NotFound`
+# and the others) with its status, anything else with `500`.
+#
+# In `dev` and `test` the page shows the exception's class and message,
+# its backtrace, and the request: method, path, parameters, session.
+# In `prod` it shows the status's reason only. Both come as HTML, or as
+# JSON when the request's Accept asks for JSON and not HTML.
+module ErrorPage
+  # The response to `error` raised for `conn`, with `status`.
+  def self.response(conn: Conn, error: Exception, status: Int) -> HTTP::Server::Response
+    detail = !conn.config.prod?
+    if ErrorPage.wants_json?(conn)
+      body = detail ? ErrorPage.dev_json(conn, error, status) : ErrorPage.prod_json(status)
+      HTTP::Server::Response.json(body, status)
+    else
+      html = detail ? ErrorPage.dev_html(conn, error, status) : ErrorPage.prod_html(status)
+      HTTP::Server::Response.html(html, status)
+    end
+  end
+
+  # Whether `conn`'s Accept asks for JSON and not HTML.
+  def self.wants_json?(conn: Conn) -> Bool
+    accept = conn.header("accept") || ""
+    accept.include?("json") && !accept.include?("text/html")
+  end
+
+  # `text` escaped for HTML: `&`, `<`, `>`, `"` and `'`.
+  def self.escape(text: String) -> String
+    text.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;").gsub("\"", "&quot;").gsub("'", "&#39;")
+  end
+
+  # :nodoc:
+  def self.prod_html(status: Int) -> String
+    title = ErrorPage.escape("#{status} #{HTTP.reason(status)}")
+    "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>#{title}</title></head>" +
+      "<body><h1>#{title}</h1></body></html>\n"
+  end
+
+  # :nodoc:
+  def self.prod_json(status: Int) -> JSON::Value
+    JSON::Value::Object.new({"error" => JSON::Value::Object.new({
+      "status" => JSON::Value::Number.new(status),
+      "message" => JSON::Value::String.new(HTTP.reason(status))
+    })})
+  end
+
+  # :nodoc:
+  def self.dev_json(conn: Conn, error: Exception, status: Int) -> JSON::Value
+    trace = error.backtrace.map { |l| JSON::Value::String.new(l) }
+    JSON::Value::Object.new({"error" => JSON::Value::Object.new({
+      "status" => JSON::Value::Number.new(status),
+      "class" => JSON::Value::String.new(error.class.name),
+      "message" => JSON::Value::String.new(error.message),
+      "backtrace" => JSON::Value::Array.new(trace),
+      "method" => JSON::Value::String.new(conn.method),
+      "path" => JSON::Value::String.new(conn.path),
+      "params" => JSON::Value::String.new(conn.params.to_h.inspect)
+    })})
+  end
+
+  # :nodoc:
+  def self.dev_html(conn: Conn, error: Exception, status: Int) -> String
+    e = ->(s: String) { ErrorPage.escape(s) }
+    trace = error.backtrace.map { |l| "<li><code>#{e.call(l)}</code></li>" }.join("\n")
+    session = conn.session.values.keys.map { |k| "<li><code>#{e.call(k)}</code></li>" }.join
+    <<~HTML
+      <!DOCTYPE html>
+      <html><head><meta charset="utf-8"><title>#{e.call("#{status} #{error.class.name}")}</title>
+      <style>
+        body { font-family: system-ui, sans-serif; margin: 2em; color: #222; background: #fff; }
+        h1 { color: #b00020; font-size: 1.4em; } pre, code { font-family: ui-monospace, monospace; }
+        pre { background: #f6f6f6; padding: 1em; overflow-x: auto; white-space: pre-wrap; }
+        ol { font-size: 0.9em; } th { text-align: left; padding-right: 1em; }
+      </style></head>
+      <body>
+      <h1>#{e.call(error.class.name)} (#{status} #{e.call(HTTP.reason(status))})</h1>
+      <pre>#{e.call(error.message)}</pre>
+      <h2>Request</h2>
+      <table>
+      <tr><th>Method</th><td><code>#{e.call(conn.method)}</code></td></tr>
+      <tr><th>Path</th><td><code>#{e.call(conn.path)}</code></td></tr>
+      <tr><th>Request id</th><td><code>#{e.call(conn.request_id || "-")}</code></td></tr>
+      <tr><th>Parameters</th><td><code>#{e.call(conn.params.to_h.inspect)}</code></td></tr>
+      </table>
+      <h2>Session keys</h2>
+      <ul>#{session}</ul>
+      <h2>Backtrace</h2>
+      <ol>
+      #{trace}
+      </ol>
+      <p>This page is shown in #{conn.config.env}; in prod the response says only the status.</p>
+      </body></html>
+    HTML
+  end
+end

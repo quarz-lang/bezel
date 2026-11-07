@@ -1,0 +1,82 @@
+# The root of the errors an application raises to answer with a status:
+# `raise Bezel::NotFound` in an action is a `404`. The endpoint turns
+# each into its status, with the error page (`Bezel::ErrorPage`); any
+# other `StandardError` is a `500`. Being an `HTTP::Error`, it is also
+# answered with its status by a bare `HTTP::Server`.
+class Error < HTTP::Error
+  # An error answered with `status`.
+  def initialize(status: Int, message: String = "")
+    super(status, message.empty? ? HTTP.reason(status) : message)
+  end
+end
+
+# `400 Bad Request`: a parameter missing or malformed, a body that does
+# not parse.
+class BadRequest < Error
+  # The error, its message `message`.
+  def initialize(message: String = "Bad Request")
+    super(400, message)
+  end
+end
+
+# `401 Unauthorized`.
+class Unauthorized < Error
+  # The error, its message `message`.
+  def initialize(message: String = "Unauthorized")
+    super(401, message)
+  end
+end
+
+# `403 Forbidden`.
+class Forbidden < Error
+  # The error, its message `message`.
+  def initialize(message: String = "Forbidden")
+    super(403, message)
+  end
+end
+
+# `404 Not Found`.
+class NotFound < Error
+  # The error, its message `message`.
+  def initialize(message: String = "Not Found")
+    super(404, message)
+  end
+end
+
+# `406 Not Acceptable`: no format the client accepts.
+class NotAcceptable < Error
+  # The error, its message `message`.
+  def initialize(message: String = "Not Acceptable")
+    super(406, message)
+  end
+end
+
+# `413 Content Too Large`: a body over the parsers' `max_body`.
+class PayloadTooLarge < Error
+  # The error, its message `message`.
+  def initialize(message: String = "Payload Too Large")
+    super(413, message)
+  end
+end
+
+# `415 Unsupported Media Type`: a body of a type no parser takes.
+class UnsupportedMediaType < Error
+  # The error, its message `message`.
+  def initialize(message: String = "Unsupported Media Type")
+    super(415, message)
+  end
+end
+
+# `503 Service Unavailable`: the request ran out of the time the
+# `Bezel::Plug::Timeout` plug gives it.
+class TimeoutError < Error
+  # The error, its message `message`.
+  def initialize(message: String = "Request timed out")
+    super(503, message)
+  end
+end
+
+# A setting is missing or wrong (`Bezel::Config`): raised when the
+# configuration is loaded, before the server starts. Not an HTTP error.
+class ConfigError < StandardError
+end

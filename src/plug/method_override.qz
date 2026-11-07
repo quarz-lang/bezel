@@ -1,0 +1,27 @@
+# Lets an HTML form send PUT, PATCH or DELETE: a POST whose body
+# has `_method` set to one of them (in any case) gets that method. It
+# reads the body's parameters, so it comes after `Bezel::Plug::Parsers`;
+# the query's `_method` is not believed (a link could carry it).
+#
+# ```
+# req = HTTP::Server::Request.post("/users/1", "_method=delete",
+#   HTTP::Headers.of({"Content-Type" => "application/x-www-form-urlencoded"}))
+# conn = Bezel::Plug.run([Bezel::Plug::Parsers.new, Bezel::Plug::MethodOverride.new], Bezel::Conn.build(req))
+# conn.method        # => "DELETE"
+# ```
+class Plug::MethodOverride
+  include Plug
+
+  # The plug.
+  def initialize; end
+
+  # The methods a form may ask for.
+  METHODS = ["PUT", "PATCH", "DELETE"]
+
+  def call(conn: Conn) -> Conn
+    return conn unless conn.method == "POST"
+    m = conn.body_params.string?("_method")&.upcase
+    return conn unless m && METHODS.include?(m)
+    conn.with(request: conn.request.with(method: m))
+  end
+end

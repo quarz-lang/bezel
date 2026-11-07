@@ -1,0 +1,58 @@
+# What `Bezel::Plug::Logger` reports of one request.
+data LogEvent(
+  # The method (`"GET"`).
+  method: String,
+  # The path, without the query (which may carry a token).
+  path: String,
+  # The response's status (500 for an exception).
+  status: Int,
+  # The time from the endpoint taking the request to the response.
+  duration: Duration,
+  # The request's id, or nil.
+  request_id: String?
+)
+  # One line: `GET /users -> 200 in 1.2ms [id]`.
+  def to_s -> String
+    "#{method} #{path} -> #{status} in #{format("%.1f", duration.to_f * 1000.0)}ms#{request_id ? " [#{request_id}]" : ""}"
+  end
+end
+
+# Logs one line per request, once the rest of the pipeline has answered,
+# with the status the client gets (`Conn#final_status`: 404 when nothing
+# answered, the error's when a plug raised), the method and path as this
+# plug received them (before `Plug::Head` or `Plug::MethodOverride`
+# change the method), and the request's id when `Plug::RequestId` ran
+# before it: to standard error, or to
+# `on_event` when given (for structured logs). Lines are written at the
+# `info` level, so a LOG_LEVEL of `warn` or `error` silences them.
+# The path is written percent-decoded, as `Conn#path`; control
+# characters in it are escaped, so that a request cannot forge a line.
+class Plug::Logger
+  include Plug
+
+  @on_event: (shareable (LogEvent) -> Void)?
+
+  # The plug, reporting to `on_event` when given, else to standard error.
+  def initialize(@on_event: (shareable (LogEvent) -> Void)? = nil); end
+
+  def call(conn: Conn) -> Conn = conn
+
+  def wrap(conn: Conn, rest: (Conn) -> Conn) -> Conn
+    return rest.call(conn) unless conn.config.log?(:info)
+    out = rest.call(conn)
+    report(conn, out.final_status, out.request_id || conn.request_id)
+    out
+  end
+
+  # :nodoc:
+  def report(conn: Conn, status: Int, request_id: String?) -> Void
+    path = conn.path.gsub(/[\x00-\x1f\x7f]/) { |c| "\\x#{c.ord.to_s(16).rjust(2, "0")}" }
+    event = LogEvent.new(conn.method, path, status, Time.monotonic - conn.started, request_id)
+    f = @on_event
+    if f
+      f.call(event)
+    else
+      STDERR.puts event.to_s
+    end
+  end
+end
