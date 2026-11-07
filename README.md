@@ -16,8 +16,9 @@ Bezel = { git = "https://github.com/quarz-lang/bezel", branch = "main" }
 Work in progress (the plan is issue #1). What exists: the connection,
 parameters, plugs, endpoints, configuration, error pages, `Bezel.start`,
 the built-in plugs, the router and controllers, and the HTML DSL with
-forms over rotor's changesets. Sessions, test helpers, templates and the
-`bezel` command come next.
+forms over rotor's changesets, sessions, the flash, CSRF protection,
+secure headers, host authorization, password hashes and signed tokens.
+Test helpers, templates and the `bezel` command come next.
 
 ```ruby
 class Shop::Endpoint < Bezel::Endpoint
@@ -150,6 +151,32 @@ end
   plug sets it) and `_method`, name their fields `user[email]`, and show
   the input as typed for a field with errors. `link`'s `confirm:` writes
   `data-confirm` for the application's script.
+
+A browser pipeline adds sessions and protection:
+
+```ruby
+def self.browser -> Array[Bezel::Plug]
+  [Bezel::Plug::Session.new(key: "_shop"),      # an encrypted cookie (AES-256-GCM)
+   Bezel::Plug::Flash.new,
+   Bezel::Plug::CSRF.new,                        # forms from Bezel.html(conn) carry the token
+   Bezel::Plug::SecureHeaders.new,
+   Bezel::Plug::HostAuthorization.new(["shop.example"])]
+end
+```
+
+- The session holds strings (`conn.put_session("user_id", "7")`,
+  `conn.session["user_id"]`), encrypted under a key derived from
+  `SECRET_KEY_BASE`; its cookie is `HttpOnly`, `SameSite=Lax`, and
+  `Secure` outside `dev`. A cookie that does not decrypt is an empty
+  session.
+- The flash lives one request: `conn.put_flash(:info, "Saved")` before a
+  redirect, `conn.flash[:info]` after it.
+- CSRF: unsafe methods need the session's token (masked per request) in
+  `_csrf_token` or `X-CSRF-Token`, and a request from another origin
+  (`Origin`, `Sec-Fetch-Site`) is refused.
+- `Bezel::Password.hash/verify` (PBKDF2-SHA256, 600,000 iterations) and
+  `Bezel::Token.sign/verify` (HMAC, expiring, bound to a purpose) for
+  links sent by mail.
 
 An endpoint is tested without a socket:
 

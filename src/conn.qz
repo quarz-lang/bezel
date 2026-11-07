@@ -9,9 +9,11 @@ data App(config: Config, pool: PG::Pool? = nil)
   end
 end
 
-# The session's values, which the session plug (bezel#6) loads from
-# and writes to its store; empty without that plug.
-data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: Bool = false)
+# The session's values, which `Plug::Session` loads from its store
+# (`Session::Store`) and writes back when they changed; empty, and not
+# `loaded`, without that plug. Values are strings (an application
+# stores ids, not objects).
+data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: Bool = false, loaded: Bool = false)
   # The value of `key`, or nil.
   def [](key: String) -> String? = values[key]?
 
@@ -22,7 +24,12 @@ data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: 
   def delete(key: String) -> Session = with(values: values.delete(key), changed: true)
 
   # An empty session, whose cookie is to be dropped (logging out).
-  def drop -> Session = Session.new({}, true, true)
+  def drop -> Session = Session.new({}, true, true, loaded)
+
+  # The session with a fresh identity: the same values, written anew.
+  # (A cookie store has no identity to renew; a server-side store would
+  # change its id here, after a login.)
+  def renew -> Session = with(changed: true)
 end
 
 # The flash: messages kept for the next request (`put`), and those the

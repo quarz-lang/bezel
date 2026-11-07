@@ -1,0 +1,230 @@
+require "test"
+
+class SecEndpoint < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug]
+    [Bezel::Plug::Parsers.new,
+     Bezel::Plug::MethodOverride.new,
+     Bezel::Plug::Session.new(key: "_sec"),
+     Bezel::Plug::Flash.new,
+     Bezel::Plug::CSRF.new,
+     Bezel::Plug::SecureHeaders.new(csp: "default-src 'self'"),
+     Bezel.plug do |conn|
+       case [conn.method, conn.path]
+       in ["GET", "/login"] then conn.put_session("user_id", conn.params.fetch("id")).text("in")
+       in ["GET", "/me"] then conn.text("user #{conn.session["user_id"] || "-"}")
+       in ["GET", "/logout"] then conn.put_session(conn.session.drop).text("out")
+       in ["GET", "/big"] then conn.put_session("blob", "x" * 5000).text("big")
+       in ["GET", "/flash"] then conn.put_flash(:info, "saved").redirect("/next")
+       in ["GET", "/next"] then conn.text("flash #{conn.flash[:info] || "-"}")
+       in ["GET", "/form"] then conn.html(Bezel.html(conn) { |h| h.link("Delete", to: "/thing", method: :delete) })
+       in ["GET", "/token"] then conn.text(conn.csrf_token || "")
+       in ["POST", "/thing"] then conn.text("posted")
+       in ["DELETE", "/thing"] then conn.text("deleted")
+       else conn
+       end
+     end]
+  end
+
+  def self.on_error(error: Exception, conn: Bezel::Conn) -> Void = nil
+end
+
+class NoSessionEndpoint < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [Bezel::Plug::CSRF.new, Bezel.plug { |c| c.text("x") }]
+  def self.on_error(error: Exception, conn: Bezel::Conn) -> Void = nil
+end
+
+# A browser's cookie jar, for the requests of one test.
+class SecJar
+  var @cookies: Hash[String, String] = {}
+  def initialize; end
+
+  def header -> String = @cookies.map { |k, v| "#{k}=#{v}" }.join("; ")
+
+  def take(res: HTTP::Server::Response) -> Void
+    res.headers.all("set-cookie").each do |sc|
+      pair = sc.partition(";")[0]
+      name, _, value = pair.partition("=")
+      if sc.include?("Max-Age=0")
+        @cookies = @cookies.delete(name)
+      else
+        @cookies = @cookies.put(name, value)
+      end
+    end
+  end
+
+  def request(method: String, path: String, body: String = "", headers: Hash[String, String] = {},
+              app: Bezel::App = Bezel::App.test("sec")) -> HTTP::Server::Response
+    h = headers
+    h = h.put("Cookie", header) unless @cookies.empty?
+    h = h.put("Content-Type", "application/x-www-form-urlencoded") unless body.empty?
+    h = h.put("Host", "shop.example") unless h.key?("Host")
+    res = SecEndpoint.call(HTTP::Server::Request.build(method, path, HTTP::Headers.of(h), body), app)
+    take(res)
+    res
+  end
+end
+
+class SecurityTest < Test::Case
+  def text_of(res: HTTP::Server::Response) -> String
+    case res.body
+    in HTTP::Content::Text(text:) then text
+    else ""
+    end
+  end
+
+  def app(env: String) -> Bezel::App
+    Bezel::App.new(Bezel::Config.load("sec", environ: {"BEZEL_ENV" => env, "SECRET_KEY_BASE" => "k" * 64}, quiet: true))
+  end
+
+  def test_session_round_trip_and_drop
+    jar = SecJar.new
+    assert_equal("user -", text_of(jar.request("GET", "/me")))
+    jar.request("GET", "/login?id=7")
+    assert_equal("user 7", text_of(jar.request("GET", "/me")))
+    jar.request("GET", "/logout")
+    assert_equal("user -", text_of(jar.request("GET", "/me")))
+  end
+
+  def test_cookie_attributes_per_environment
+    dev = SecJar.new.request("GET", "/login?id=1", app: app("dev")).headers.all("set-cookie")
+    sc = dev.find { |c| c.start_with?("_sec=") } || ""
+    assert_match(/; Path=\/; HttpOnly; SameSite=Lax\z/, sc)
+    prod = SecJar.new.request("GET", "/login?id=1", app: app("prod")).headers.all("set-cookie")
+    assert_match(/; Path=\/; HttpOnly; Secure; SameSite=Lax\z/, prod.find { |c| c.start_with?("_sec=") } || "")
+    # A request that changes nothing sets no cookie (once CSRF's token is kept).
+    jar = SecJar.new
+    jar.request("GET", "/me")
+    assert_true(jar.request("GET", "/me").headers.all("set-cookie").empty?)
+  end
+
+  def test_tampered_or_foreign_cookies_read_as_empty
+    jar = SecJar.new
+    res = jar.request("GET", "/login?id=7")
+    value = (res.headers.all("set-cookie").find { |c| c.start_with?("_sec=") } || "").partition(";")[0].partition("=")[2]
+    flipped = value[0, value.size - 2] + (value[value.size - 2] == "A" ? "B" : "A") + value[value.size - 1]
+    req = ->(cookie: String, a: Bezel::App) {
+      text_of(SecEndpoint.call(HTTP::Server::Request.get("/me", HTTP::Headers.of({"Cookie" => "_sec=#{cookie}"})), a))
+    }
+    assert_equal("user 7", req.call(value, Bezel::App.test("sec")))
+    assert_equal("user -", req.call(flipped, Bezel::App.test("sec")))
+    assert_equal("user -", req.call("not-base64!", Bezel::App.test("sec")))
+    # Another secret cannot read it.
+    assert_equal("user -", req.call(value, app("test")))
+  end
+
+  def test_session_too_large
+    res = SecJar.new.request("GET", "/big")
+    assert_equal(500, res.status)
+    assert_match(/session cookie _sec would take/, text_of(res))
+  end
+
+  def test_flash_lives_one_request
+    jar = SecJar.new
+    jar.request("GET", "/flash")
+    assert_equal("flash saved", text_of(jar.request("GET", "/next")))
+    assert_equal("flash -", text_of(jar.request("GET", "/next")))
+  end
+
+  def test_csrf
+    jar = SecJar.new
+    token = text_of(jar.request("GET", "/token"))
+    assert_true(token.size > 40)
+    # Masked: another request gives another text for the same secret.
+    other = text_of(jar.request("GET", "/token"))
+    assert_false(token == other)
+    assert_equal(403, jar.request("POST", "/thing", "a=1").status)
+    assert_equal(403, jar.request("POST", "/thing", "_csrf_token=nope").status)
+    assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}").status)
+    assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{other}").status)
+    assert_equal(200, jar.request("POST", "/thing", "a=1", {"X-CSRF-Token" => token}).status)
+    # Another session's token is refused.
+    stranger = SecJar.new
+    stranger.request("GET", "/token")
+    assert_equal(403, stranger.request("POST", "/thing", "_csrf_token=#{token}").status)
+    # Origin and Sec-Fetch-Site.
+    assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Origin" => "http://shop.example"}).status)
+    assert_equal(403, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Origin" => "https://evil.example"}).status)
+    assert_equal(403, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Origin" => "null"}).status)
+    assert_equal(403, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Sec-Fetch-Site" => "cross-site"}).status)
+    assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}", {"Sec-Fetch-Site" => "same-origin"}).status)
+    # A form from Bezel.html(conn) carries a good token.
+    page = text_of(jar.request("GET", "/form"))
+    m = page.match(/name="_csrf_token" value="([^"]+)"/)
+    assert(m)
+    form_token = m ? (m[1] || "") : ""
+    assert_equal("deleted", text_of(jar.request("POST", "/thing", "_method=delete&_csrf_token=#{form_token}")))
+    # GET needs none.
+    assert_equal(200, SecJar.new.request("GET", "/me").status)
+  end
+
+  def test_csrf_needs_a_session
+    res = NoSessionEndpoint.call(HTTP::Server::Request.get("/"))
+    assert_equal(500, res.status)
+    assert_match(/needs Plug::Session/, text_of(res))
+  end
+
+  def test_secure_headers
+    res = SecJar.new.request("GET", "/me")
+    assert_equal("nosniff", res.headers["x-content-type-options"])
+    assert_equal("SAMEORIGIN", res.headers["x-frame-options"])
+    assert_equal("strict-origin-when-cross-origin", res.headers["referrer-policy"])
+    assert_equal("default-src 'self'", res.headers["content-security-policy"])
+    assert_nil(res.headers["strict-transport-security"])
+    c = Bezel::Plug::SecureHeaders.new(frame_options: nil, hsts: 31_536_000).call(Bezel::Conn.build(HTTP::Server::Request.get("/")))
+    assert_nil(c.resp_headers["x-frame-options"])
+    assert_equal("max-age=31536000; includeSubDomains", c.resp_headers["strict-transport-security"])
+  end
+
+  def host(h: String?) -> Bezel::Conn
+    hs = h ? HTTP::Headers.of({"Host" => h}) : HTTP::Headers.empty
+    Bezel::Plug::HostAuthorization.new(["shop.example", ".cdn.example", "[::1]"]).call(Bezel::Conn.build(HTTP::Server::Request.get("/", hs)))
+  end
+
+  def test_host_authorization
+    ["shop.example", "SHOP.example:443", "cdn.example", "a.b.cdn.example", "[::1]:8080"].each do |ok|
+      assert_false(host(ok).halted?)
+    end
+    ["evil.example", "shop.example.evil", "xcdn.example", "", "127.0.0.1"].each do |bad|
+      assert_raise(Bezel::Forbidden) { host(bad) }
+    end
+    assert_raise(Bezel::Forbidden) { host(nil) }
+  end
+
+  def test_password
+    h = Bezel::Password.hash("pw", iterations: 1000)
+    assert_match(/\A\$pbkdf2-sha256\$1000\$[A-Za-z0-9_\-]{22}\$[A-Za-z0-9_\-]{43}\z/, h)
+    assert_true(Bezel::Password.verify("pw", h))
+    assert_false(Bezel::Password.verify("pW", h))
+    assert_false(h == Bezel::Password.hash("pw", iterations: 1000))
+    assert_false(Bezel::Password.verify("pw", "garbage"))
+    assert_false(Bezel::Password.verify("pw", "$pbkdf2-sha256$1000$!!$!!"))
+    assert_true(Bezel::Password.needs_rehash?(h))
+    assert_false(Bezel::Password.needs_rehash?(h, 1000))
+    assert_raise(ArgumentError) { Bezel::Password.hash("pw", iterations: 10) }
+  end
+
+  def test_token
+    c = Bezel::Config.load("t", environ: {"BEZEL_ENV" => "test"}, quiet: true)
+    other = Bezel::Config.load("t", environ: {"BEZEL_ENV" => "test", "SECRET_KEY_BASE" => "z" * 64}, quiet: true)
+    t = Bezel::Token.sign(c, "reset", "42", expires_in: 1.hour)
+    assert_equal("42", Bezel::Token.verify(c, "reset", t))
+    assert_nil(Bezel::Token.verify(c, "confirm", t))
+    assert_nil(Bezel::Token.verify(other, "reset", t))
+    assert_nil(Bezel::Token.verify(c, "reset", t + "x"))
+    assert_nil(Bezel::Token.verify(c, "reset", "garbage"))
+    payload, _, mac = t.partition(".")
+    forged = Base64.urlsafe_encode("{\"d\":\"1\",\"e\":\"9999999999\"}", padding: false)
+    assert_nil(Bezel::Token.verify(c, "reset", "#{forged}.#{mac}"))
+    expired = Bezel::Token.sign(c, "reset", "42", expires_in: 0.seconds)
+    assert_nil(Bezel::Token.verify(c, "reset", expired))
+  end
+
+  def test_constant_time_compare_and_cookies
+    assert_true(Bezel::Keys.same?("abc", "abc"))
+    assert_false(Bezel::Keys.same?("abc", "abd"))
+    assert_false(Bezel::Keys.same?("abc", "ab"))
+    assert_equal({"a" => "1", "b" => "x y"}, Bezel::Cookies.parse("a=1; b=\"x y\"; a=2; junk"))
+    assert_raise(ArgumentError) { Bezel::Cookies.set_cookie("a b", "x") }
+    assert_raise(ArgumentError) { Bezel::Cookies.set_cookie("a", "x;y") }
+  end
+end

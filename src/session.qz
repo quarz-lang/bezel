@@ -1,0 +1,155 @@
+# Where a session lives between requests: `Plug::Session` loads it for a
+# request and saves it when it changed. `Session::CookieStore` keeps it
+# in an encrypted cookie; a store on the server (rotor-backed) can come
+# later behind the same interface.
+module Session::Store
+  include Shareable
+
+  # The session of `conn`'s request (an empty one when there is none, or
+  # it does not read back).
+  abstract def load(conn: Conn) -> Session
+
+  # `conn` with its session saved (a cookie set or dropped).
+  abstract def save(conn: Conn, session: Session) -> Conn
+end
+
+# A session kept in a cookie: its values as JSON, encrypted and
+# authenticated with AES-256-GCM under a key derived from
+# SECRET_KEY_BASE (`Keys`), the cookie's name as associated data. A
+# cookie that does not decrypt (another secret, tampered with, another
+# cookie's) reads as an empty session. The cookie is HttpOnly,
+# `SameSite=Lax`, `Path=/` and Secure outside `dev`, by default; a
+# session over `MAX_BYTES` once encoded is a `Bezel::CookieOverflow`.
+#
+# The values can be read by nobody without the secret, but the cookie as
+# a whole can be replayed: logging out drops it from the browser, not
+# from a copy someone kept. What must be revocable belongs in the
+# database, the session holding its id.
+class Session::CookieStore
+  include Session::Store
+
+  @key: String
+  @max_age: Int?
+  @secure: Bool?
+  @same_site: String
+  @domain: String?
+
+  # The cookie's size limit, its value encoded (browsers keep 4096 bytes
+  # per cookie, its name and attributes included).
+  MAX_BYTES = 4000
+
+  # A store in the cookie `key`, kept `max_age` seconds (nil: until the
+  # browser closes), Secure when `secure` (nil: outside `dev`).
+  def initialize(*, key: String, max_age: Int? = nil, secure: Bool? = nil, same_site: String = "Lax",
+                 domain: String? = nil)
+    raise ArgumentError.new("same_site: Lax, Strict or None, not #{same_site.inspect}") unless ["Lax", "Strict", "None"].include?(same_site)
+    @key = key
+    @max_age = max_age
+    @secure = secure
+    @same_site = same_site
+    @domain = domain
+    Cookies.set_cookie(key, "")
+  end
+
+  # The cookie's name.
+  def key -> String = @key
+
+  def load(conn: Conn) -> Session
+    raw = Cookies.parse(conn.header("cookie"))[@key]?
+    return Session.new({}, false, false, true) if raw.nil? || raw.empty?
+    values = decode(conn, raw)
+    Session.new(values || {}, false, false, true)
+  end
+
+  def save(conn: Conn, session: Session) -> Conn
+    secure = @secure.nil? ? !conn.config.dev? : @secure == true
+    if session.dropped || session.values.empty?
+      return conn unless session.changed || session.dropped
+      return conn.add_resp_header("set-cookie", Cookies.set_cookie(@key, "", max_age: 0, secure: secure, same_site: @same_site, domain: @domain))
+    end
+    value = encode(conn, session.values)
+    if value.bytesize > MAX_BYTES
+      raise CookieOverflow.new("the session cookie #{@key} would take #{value.bytesize} bytes, over #{MAX_BYTES}: keep ids in the session, not data")
+    end
+    conn.add_resp_header("set-cookie", Cookies.set_cookie(@key, value, max_age: @max_age, secure: secure,
+                                                         same_site: @same_site, domain: @domain))
+  end
+
+  # :nodoc:
+  def cipher(conn: Conn) -> Crypto::AES::GCM
+    Crypto::AES::GCM.new(Keys.derive(conn.config.secret_key_base, "bezel session cookie"))
+  end
+
+  # :nodoc:
+  def encode(conn: Conn, values: Hash[String, String]) -> String
+    Base64.urlsafe_encode(cipher(conn).encrypt(JSON.generate(values), aad: @key), padding: false)
+  end
+
+  # :nodoc:
+  # The values of a cookie, or nil when it does not decrypt or parse.
+  def decode(conn: Conn, raw: String) -> Hash[String, String]?
+    begin
+      sealed = Base64.urlsafe_decode(raw)
+      plain = cipher(conn).decrypt(sealed, aad: @key).decode?
+      return nil if plain.nil?
+      json = JSON.parse(plain).as_h?
+      return nil if json.nil?
+      out: Hash[String, String] = {}
+      json.each do |k, v|
+        s = v.as_s?
+        out = out.put(k, s) if s
+      end
+      out
+    rescue Crypto::AuthenticationError, ArgumentError, JSON::ParseError
+      nil
+    end
+  end
+end
+
+# :nodoc:
+# (Names `Plug::Session`'s body can use: there, `Session` is the plug.)
+type SessionStore = Session::Store
+# :nodoc:
+SessionCookieStore = Session::CookieStore
+
+# A session that does not fit its cookie (`Session::CookieStore`): a 500,
+# since the application put too much in it.
+class CookieOverflow < StandardError
+end
+
+# Loads the request's session from `store` (`conn.session`) and, once the
+# rest of the pipeline has answered, saves it when it changed (a cookie
+# store sets its cookie). Not saved when a plug raised: the error page
+# leaves the session as it was.
+#
+# ```
+# s = Bezel::Plug::Session.new(key: "_shop")
+# plugs: Array[Bezel::Plug] = [s, Bezel.plug { |c| c.put_session("user_id", "7").text("hi") }]
+# out = Bezel::Plug.run(plugs, Bezel::Conn.build(HTTP::Server::Request.get("/")))
+# (out.resp_headers["set-cookie"] || "").start_with?("_shop=")   # => true
+# ```
+class Plug::Session
+  include Plug
+
+  @store: SessionStore
+
+  # A plug of a store.
+  def initialize(*, store: SessionStore)
+    @store = store
+  end
+
+  # A plug of a cookie store (the cookie store's options).
+  def initialize(*, key: String, max_age: Int? = nil, secure: Bool? = nil, same_site: String = "Lax",
+                 domain: String? = nil)
+    @store = SessionCookieStore.new(key: key, max_age: max_age, secure: secure, same_site: same_site, domain: domain)
+  end
+
+  def call(conn: Conn) -> Conn = conn.with(session: @store.load(conn))
+
+  def wrap(conn: Conn, rest: (Conn) -> Conn) -> Conn
+    out = rest.call(call(conn))
+    return out unless out.error.nil?
+    s = out.session
+    s.changed || s.dropped ? @store.save(out, s) : out
+  end
+end

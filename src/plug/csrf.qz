@@ -1,0 +1,94 @@
+# The request did not prove that it came from the application's own
+# pages: `Plug::CSRF` refused it (a 403).
+class InvalidCSRFToken < Forbidden
+  # The error, its message `message`.
+  def initialize(message: String = "Invalid CSRF token")
+    super(message)
+  end
+end
+
+# Protects a browser pipeline against cross-site request forgery (after
+# `Plug::Session`):
+#
+# - Each session gets a secret token (in the session, `_csrf_token`).
+#   Pages carry it masked (a fresh one-time pad per request, so that it
+#   never repeats in a compressed response): `Conn#csrf_token`, which
+#   `Bezel.html(conn)` puts in forms and non-GET links.
+# - A POST, PUT, PATCH or DELETE must send it back, in the form field
+#   `_csrf_token` or the header `X-CSRF-Token`, else `InvalidCSRFToken`
+#   (403).
+# - As a second check, such a request whose Origin is another origin
+#   than the request's (its scheme and Host), or whose `Sec-Fetch-Site` is
+#   `cross-site`, is refused even with a token.
+#
+# GET, HEAD and OPTIONS are not checked: they must not change anything.
+class Plug::CSRF
+  include Plug
+
+  # The session key of the token.
+  KEY = "_csrf_token"
+
+  # The methods that need a token.
+  UNSAFE = ["POST", "PUT", "PATCH", "DELETE"]
+
+  # The plug.
+  def initialize; end
+
+  def call(conn: Conn) -> Conn
+    raise ConfigError.new("Plug::CSRF needs Plug::Session before it") unless conn.session.loaded
+    secret_text = conn.session[KEY]
+    secret = secret_text ? Plug::CSRF.decode(secret_text) : nil
+    if secret.nil? || secret.size != 32
+      secret = Crypto.random_bytes(32)
+      conn = conn.put_session(KEY, Base64.urlsafe_encode(secret, padding: false))
+    end
+    if UNSAFE.include?(conn.method)
+      Plug::CSRF.check_origin(conn)
+      given = conn.body_params.string?("_csrf_token") || conn.header("x-csrf-token")
+      raise InvalidCSRFToken.new("CSRF token missing") if given.nil? || given.empty?
+      raise InvalidCSRFToken.new unless Plug::CSRF.valid?(secret, given)
+    end
+    conn.assign(:csrf_token, Plug::CSRF.mask(secret))
+  end
+
+  # `secret` masked with a fresh pad: the pad and the secret XORed with
+  # it, in URL-safe Base64.
+  def self.mask(secret: Bytes) -> String
+    pad = Crypto.random_bytes(secret.size)
+    mixed = Bytes.build { |b| secret.size.times { |i| b << (secret[i] ^ pad[i]) } }
+    Base64.urlsafe_encode(pad + mixed, padding: false)
+  end
+
+  # Whether `given`, a masked token, unmasks to `secret`.
+  def self.valid?(secret: Bytes, given: String) -> Bool
+    raw = Plug::CSRF.decode(given)
+    return false if raw.nil? || raw.size != secret.size * 2
+    n = secret.size
+    plain = Bytes.build { |b| n.times { |i| b << (raw[i] ^ raw[n + i]) } }
+    Keys.same?(plain, secret)
+  end
+
+  # :nodoc:
+  def self.decode(text: String) -> Bytes?
+    begin
+      Base64.urlsafe_decode(text)
+    rescue ArgumentError
+      nil
+    end
+  end
+
+  # :nodoc:
+  # Refuses a request from another origin (Origin, Sec-Fetch-Site).
+  def self.check_origin(conn: Conn) -> Void
+    if conn.header("sec-fetch-site")&.downcase == "cross-site"
+      raise InvalidCSRFToken.new("cross-site request refused")
+    end
+    origin = conn.header("origin")
+    return if origin.nil?
+    host = conn.request.host
+    expected = host ? "#{conn.request.scheme}://#{host}".downcase : nil
+    if origin == "null" || expected.nil? || origin.downcase.delete_suffix("/") != expected
+      raise InvalidCSRFToken.new("request from another origin refused")
+    end
+  end
+end

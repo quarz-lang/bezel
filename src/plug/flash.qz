@@ -1,0 +1,42 @@
+# Carries the flash between requests in the session (after
+# `Plug::Session`): the messages a request `put` (`Conn#put_flash`) are
+# the next request's `conn.flash[:kind]`, and then gone. Messages shown
+# in the same request use `Bezel::Flash#now`.
+class Plug::Flash
+  include Plug
+
+  # The session key the flash is kept under.
+  KEY = "_flash"
+
+  # The plug.
+  def initialize; end
+
+  def call(conn: Conn) -> Conn
+    raw = conn.session[KEY]
+    return conn if raw.nil?
+    current: Hash[Symbol, String] = {}
+    begin
+      JSON.parse(raw).as_h?&.each do |k, v|
+        s = v.as_s?
+        current = current.put(k.to_sym, s) if s
+      end
+    rescue JSON::ParseError
+    end
+    conn.with(flash: conn.flash.with(current: current, kept: Hash[Symbol, String].new))
+  end
+
+  def wrap(conn: Conn, rest: (Conn) -> Conn) -> Conn
+    raise ConfigError.new("Plug::Flash needs Plug::Session before it") unless conn.session.loaded
+    had = !conn.session[KEY].nil?
+    out = rest.call(call(conn))
+    return out unless out.error.nil?
+    kept = out.flash.kept
+    if kept.empty?
+      had ? out.with(session: out.session.delete(KEY)) : out
+    else
+      plain: Hash[String, String] = {}
+      kept.each { |k, v| plain = plain.put(k.to_s, v) }
+      out.with(session: out.session.put(KEY, JSON.generate(plain)))
+    end
+  end
+end
