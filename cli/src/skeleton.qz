@@ -9,13 +9,16 @@ module Cli::Skeleton
 
   # Modules an application's cannot be named like: the standard
   # library's and its dependencies' (a clash fails to compile).
-  TAKEN = ["Bezel", "Rotor", "Test", "Time", "Duration", "File", "Dir", "Set", "Array", "Hash", "String", "Int",
-           "Integer", "Float", "Bool", "Symbol", "Object", "Kernel", "Process", "Signal", "Task", "Channel", "Atom",
-           "Math", "Random", "Regexp", "Range", "Bytes", "Socket", "Crypto", "Digest", "Base64", "Meta", "Nil",
-           "Enumerable", "Enumerator", "Comparable", "Exception", "Main", "Cli", "Type", "Proc", "Result", "Quoted",
-           "Shareable", "Unshareable", "DslScope", "MatchData", "Mutex", "Selector", "Time", "Fiber", "Env",
-           "StandardError", "ArgumentError", "RuntimeError", "IndexError", "KeyError", "TypeError", "IOError",
-           "SystemCallError", "NotImplementedError", "ZeroDivisionError", "OverflowError", "SystemExit"]
+  TAKEN = ["ArgumentError", "Array", "Atom", "Bool", "Bytes", "Channel", "Cog", "Comparable", "DeadlockError", "Dir",
+           "DslScope", "Duration", "Enumerable", "Enumerator", "EOFError", "Exception", "File", "Float",
+           "FloatDomainError", "FrozenError", "Hash", "IndexError", "Int", "Integer", "IOError", "Kernel", "KeyError",
+           "MatchData", "Math", "Meta", "Nil", "NoMatchingPatternError", "NoMemoryError", "NotImplementedError",
+           "Object", "OverflowError", "Proc", "Process", "Quoted", "Random", "Range", "RangeError", "Regexp",
+           "Result", "RuntimeError", "Set", "Shareable", "Signal", "StandardError", "StopIteration", "String",
+           "Symbol", "SystemCallError", "SystemExit", "SystemStackError", "Task", "Time", "Type", "TypeError",
+           "Unshareable", "ZeroDivisionError", "Class",
+           # (Standard modules loaded when named, and the dependencies.)
+           "Test", "Socket", "SocketError", "Crypto", "Digest", "Base64", "Bezel", "Rotor", "Main", "Cli"]
 
   # Runs the command.
   def self.command(args: Array[String], cwd: String, out: IO) -> Int
