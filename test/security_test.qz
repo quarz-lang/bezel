@@ -38,44 +38,25 @@ class NoSessionEndpoint < Bezel::Endpoint
   def self.on_error(error: Exception, conn: Bezel::Conn) -> Void = nil
 end
 
-# A browser's cookie jar, for the requests of one test.
+# The requests of one test, through a `Bezel::Testing::Client` (which
+# keeps the cookies) with the CSRF check on and the Host `shop.example`.
 class SecJar
-  var @cookies: Hash[String, String] = {}
-  def initialize; end
+  @client: Bezel::Testing::Client
 
-  def header -> String = @cookies.map { |k, v| "#{k}=#{v}" }.join("; ")
-
-  def take(res: HTTP::Server::Response) -> Void
-    res.headers.all("set-cookie").each do |sc|
-      pair = sc.partition(";")[0]
-      name, _, value = pair.partition("=")
-      if sc.include?("Max-Age=0")
-        @cookies = @cookies.delete(name)
-      else
-        @cookies = @cookies.put(name, value)
-      end
-    end
+  def initialize(app: Bezel::App = Bezel::Testing.app("sec", skip_csrf: false))
+    @client = Bezel::Testing::Client.new(SecEndpoint, app)
   end
 
-  def request(method: String, path: String, body: String = "", headers: Hash[String, String] = {},
-              app: Bezel::App = Bezel::App.test("sec")) -> HTTP::Server::Response
+  def request(method: String, path: String, body: String = "", headers: Hash[String, String] = {}) -> HTTP::Server::Response
     h = headers
-    h = h.put("Cookie", header) unless @cookies.empty?
     h = h.put("Content-Type", "application/x-www-form-urlencoded") unless body.empty?
     h = h.put("Host", "shop.example") unless h.key?("Host")
-    res = SecEndpoint.call(HTTP::Server::Request.build(method, path, HTTP::Headers.of(h), body), app)
-    take(res)
-    res
+    @client.request(method, path, body, h)
   end
 end
 
 class SecurityTest < Test::Case
-  def text_of(res: HTTP::Server::Response) -> String
-    case res.body
-    in HTTP::Content::Text(text:) then text
-    else ""
-    end
-  end
+  def text_of(res: HTTP::Server::Response) -> String = Bezel::Testing.body_of(res)
 
   def app(env: String) -> Bezel::App
     Bezel::App.new(Bezel::Config.load("sec", environ: {"BEZEL_ENV" => env, "SECRET_KEY_BASE" => "k" * 64}, quiet: true))
@@ -96,10 +77,10 @@ class SecurityTest < Test::Case
   end
 
   def test_cookie_attributes_per_environment
-    dev = SecJar.new.request("GET", "/login?id=1", app: app("dev")).headers.all("set-cookie")
+    dev = SecJar.new(app("dev")).request("GET", "/login?id=1").headers.all("set-cookie")
     sc = dev.find { |c| c.start_with?("_sec=") } || ""
     assert_match(/; Path=\/; HttpOnly; SameSite=Lax\z/, sc)
-    prod = SecJar.new.request("GET", "/login?id=1", app: app("prod")).headers.all("set-cookie")
+    prod = SecJar.new(app("prod")).request("GET", "/login?id=1").headers.all("set-cookie")
     assert_match(/; Path=\/; HttpOnly; Secure; SameSite=Lax\z/, prod.find { |c| c.start_with?("_sec=") } || "")
     # A request that changes nothing sets no cookie (once CSRF's token is kept).
     jar = SecJar.new

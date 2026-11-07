@@ -1,0 +1,133 @@
+require "test"
+
+class TtPages < Bezel::Controller
+  controller
+
+  def home(conn: Bezel::Conn) -> Bezel::Conn
+    render(conn, Bezel.html(conn) do |h|
+      h.h1("Hello   <world>")
+      h.form(action: "/items", method: "post", class_name: "new-item") do
+        h.csrf_input
+        h.input(type: "text", name: "item[name]")
+      end
+      h.p { h.text("user #{conn.session["user_id"] || "-"}") }
+    end)
+  end
+
+  def create(conn: Bezel::Conn) -> Bezel::Conn
+    conn.put_flash(:info, "Created #{conn.params["item"].fetch("name")}").redirect("/")
+  end
+
+  def api(conn: Bezel::Conn) -> Bezel::Conn = json(conn, JSON.parse("{\"ok\": true, \"n\": #{conn.params.int("n")}}"))
+
+  def boom(conn: Bezel::Conn) -> Bezel::Conn = raise ArgumentError.new("broken")
+
+  def flashed(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "flash #{conn.flash[:info] || "-"}")
+end
+
+class TtRouter < Bezel::Router
+  def self.browser -> Array[Bezel::Plug] = [Bezel::Plug::Session.new(key: "_tt"), Bezel::Plug::Flash.new, Bezel::Plug::CSRF.new]
+
+  routes do
+    scope "/", pipeline: :browser do
+      get "/", TtPages, :home
+      post "/items", TtPages, :create
+      get "/api", TtPages, :api
+      get "/boom", TtPages, :boom
+      get "/flashed", TtPages, :flashed
+    end
+  end
+end
+
+class TtApp < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [Bezel::Plug::Parsers.new, TtRouter.new]
+  def self.on_error(error: Exception, conn: Bezel::Conn) -> Void = nil
+end
+
+class TestingTest < Test::Case
+  # The message of the assertion failure the block raises.
+  def failure(&: () -> Void) -> String
+    begin
+      yield
+    rescue Test::AssertionFailed => e
+      return e.message
+    end
+    flunk("no assertion failed")
+  end
+
+  def node(doc: Bezel::Testing::Doc, selector: String) -> Bezel::Testing::Node
+    doc.at(selector) || flunk("no #{selector}")
+  end
+  def test_doc_parsing_and_selectors
+    doc = Bezel::Testing::Doc.parse(<<~HTML)
+      <!DOCTYPE html>
+      <!-- a comment <p>not this</p> -->
+      <div id="main" class="box wide">
+        <p class=note>One &amp; two &lt;3 &#65;&#x42;</p>
+        <ul><li>a<li>b</ul>
+        <form action='/users' method="post"><input type=hidden name="_method" value="patch" disabled><br/></form>
+        <script>if (a < b) { "</p>" }</script>
+        <p>Last</p>
+      </div>
+    HTML
+    assert_equal(2, doc.select("p").size)
+    assert_equal("One & two <3 AB", node(doc, "p.note").text)
+    assert_true(doc.has_element?("div#main.box.wide"))
+    assert_true(doc.has_element?("div p.note"))
+    assert_true(doc.has_element?("form[action=\"/users\"] input[type=hidden][name=_method][value='patch']"))
+    assert_true(doc.has_element?("input[disabled]"))
+    assert_false(doc.has_element?("form input[type=text]"))
+    assert_equal(2, doc.select("li").size)
+    assert_equal(3, doc.select("li, form").size)
+    assert_false(doc.has_text?("not this"))
+    assert_true(doc.has_text?("One & two"))
+    assert_true(doc.has_text?("Last"))
+    assert_equal(1, doc.select("script").size)
+    assert_raise(ArgumentError) { doc.select("p[") }
+  end
+
+  def test_one_request_helpers
+    res = Bezel::Testing.get(TtApp, "/")
+    doc = Bezel::Testing.html_response(res, 200)
+    assert_true(doc.has_text?("Hello <world>"))
+    assert_true(doc.has_element?("form.new-item[action=\"/items\"] input[name=_csrf_token]"))
+    json = Bezel::Testing.json_response(Bezel::Testing.get(TtApp, "/api", params: {"n" => "4"}))
+    assert_equal(4, json["n"].as_i)
+    created = Bezel::Testing.post(TtApp, "/items", params: {"item[name]" => "pen"})
+    assert_equal("/", Bezel::Testing.redirected_to(created))
+    assert_match(/expected status 200, got 500: broken/, failure { Bezel::Testing.html_response(Bezel::Testing.get(TtApp, "/boom"), 200) })
+    assert_match(/expected a JSON response/, failure { Bezel::Testing.json_response(res) })
+    assert_match(/expected status 302, got 200/, failure { Bezel::Testing.redirected_to(res) })
+    assert_equal(404, Bezel::Testing.get(TtApp, "/nothing").status)
+  end
+
+  def test_client_session_flash_and_redirects
+    c = Bezel::Testing::Client.new(TtApp)
+    c.get("/")
+    assert_equal("_tt", c.session_key)
+    c.post("/items", params: {"item[name]" => "pen"})
+    assert_equal({info: "Created pen"}, c.flash)
+    page = c.follow_redirect
+    assert_equal(200, page.status)
+    assert_equal("flash -", Bezel::Testing.text_response(c.get("/flashed")))
+  end
+
+  def test_login_as
+    c = Bezel::Testing::Client.new(TtApp, session_key: "_tt")
+    c.login_as({"user_id" => "7"})
+    assert_true(Bezel::Testing.html_response(c.get("/")).has_text?("user 7"))
+    assert_equal("7", c.session["user_id"])
+    assert_raise(ArgumentError) { Bezel::Testing::Client.new(TtApp).login_as({"x" => "1"}) }
+  end
+
+  def test_csrf_flag
+    strict = Bezel::Testing.app(skip_csrf: false)
+    assert_equal(403, Bezel::Testing.post(TtApp, "/items", params: {"item[name]" => "x"}, app: strict).status)
+    # With the check on, a client posts the token of a page, as a browser does.
+    c = Bezel::Testing::Client.new(TtApp, strict)
+    token = node(Bezel::Testing.html_response(c.get("/")), "input[name=_csrf_token]").attr("value") || ""
+    assert_equal(302, c.post("/items", params: {"item[name]" => "x", "_csrf_token" => token}).status)
+    prod = Bezel::App.new(Bezel::Config.load("t", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "p" * 64}, quiet: true), nil, true)
+    assert_equal(500, Bezel::Testing.post(TtApp, "/items", params: {"item[name]" => "x"}, app: prod).status)
+  end
+end

@@ -1,0 +1,293 @@
+# Testing an application through its endpoint, in the test's own task,
+# without sockets: requests built in memory go through every plug, the
+# router and the actions, and the responses come back to be checked.
+#
+# ```
+# class TPages < Bezel::Controller
+#   controller
+#   def home(conn: Bezel::Conn) -> Bezel::Conn = render(conn, Bezel.html { |h| h.h1("Hello") })
+# end
+#
+# class TRouter < Bezel::Router
+#   routes do
+#     get "/", TPages, :home
+#   end
+# end
+#
+# class TApp < Bezel::Endpoint
+#   def self.plugs -> Array[Bezel::Plug] = [TRouter.new]
+# end
+#
+# res = Bezel::Testing.get(TApp, "/")
+# Bezel::Testing.html_response(res, 200).has_text?("Hello")   # => true
+# ```
+#
+# `Testing.get` and friends make one request each; a `Testing::Client`
+# keeps cookies between requests, as a browser does (sessions, the
+# flash, a login), and follows redirects. The applications they run in
+# are `test` ones whose CSRF check is off (`App#skip_csrf`, a flag the
+# program sets and `prod` refuses), so that a test posts without a
+# token; `Testing.app(skip_csrf: false)` tests the check itself.
+#
+# The response helpers check the status and raise `Test::AssertionFailed`
+# otherwise, with the body's start, so that a test fails as an
+# assertion does.
+module Testing
+  # A `test` application named `name`, without a database (`pool` to
+  # give one: `PG::Testing`'s), the CSRF check off unless `skip_csrf` is
+  # false.
+  def self.app(name: String = "bezel", *, pool: PG::Pool? = nil, skip_csrf: Bool = true) -> App
+    App.new(Config.load(name, environ: {"BEZEL_ENV" => "test"}, quiet: true), pool, skip_csrf)
+  end
+
+  # The response of `endpoint` to a GET of `path` (a query in it, or
+  # `params` added to it).
+  def self.get(endpoint: Type[Endpoint], path: String, *, params: Hash[String, String | Array[String]] = {},
+               headers: Hash[String, String] = {}, app: App = Testing.app) -> HTTP::Server::Response
+    Testing::Client.new(endpoint, app).get(path, params: params, headers: headers)
+  end
+
+  # The response of `endpoint` to a POST of `params` as a form (or `json`
+  # as a JSON body) to `path`.
+  def self.post(endpoint: Type[Endpoint], path: String, *, params: Hash[String, String | Array[String]] = {},
+                json: JSON::Value? = nil, headers: Hash[String, String] = {}, app: App = Testing.app) -> HTTP::Server::Response
+    Testing::Client.new(endpoint, app).post(path, params: params, json: json, headers: headers)
+  end
+
+  # A PUT: `post`'s arguments.
+  def self.put(endpoint: Type[Endpoint], path: String, *, params: Hash[String, String | Array[String]] = {},
+               json: JSON::Value? = nil, headers: Hash[String, String] = {}, app: App = Testing.app) -> HTTP::Server::Response
+    Testing::Client.new(endpoint, app).put(path, params: params, json: json, headers: headers)
+  end
+
+  # A PATCH: `post`'s arguments.
+  def self.patch(endpoint: Type[Endpoint], path: String, *, params: Hash[String, String | Array[String]] = {},
+                 json: JSON::Value? = nil, headers: Hash[String, String] = {}, app: App = Testing.app) -> HTTP::Server::Response
+    Testing::Client.new(endpoint, app).patch(path, params: params, json: json, headers: headers)
+  end
+
+  # A DELETE: `post`'s arguments.
+  def self.delete(endpoint: Type[Endpoint], path: String, *, params: Hash[String, String | Array[String]] = {},
+                  json: JSON::Value? = nil, headers: Hash[String, String] = {}, app: App = Testing.app) -> HTTP::Server::Response
+    Testing::Client.new(endpoint, app).delete(path, params: params, json: json, headers: headers)
+  end
+
+  # The page of `res`, parsed (`Testing::Doc`), after checking that its
+  # status is `status` and that it is HTML.
+  def self.html_response(res: HTTP::Server::Response, status: Int = 200) -> Testing::Doc
+    Testing.check_status(res, status)
+    type = res.headers["content-type"] || ""
+    Testing.fail("expected an HTML response, got #{type.inspect}") unless type.start_with?("text/html")
+    Testing::Doc.parse(Testing.body_of(res))
+  end
+
+  # The JSON of `res`, after checking that its status is `status` and
+  # that it is JSON.
+  def self.json_response(res: HTTP::Server::Response, status: Int = 200) -> JSON::Value
+    Testing.check_status(res, status)
+    type = res.headers["content-type"] || ""
+    Testing.fail("expected a JSON response, got #{type.inspect}") unless type.start_with?("application/json")
+    begin
+      JSON.parse(Testing.body_of(res))
+    rescue JSON::ParseError
+      Testing.fail("the response is not JSON: #{Testing.excerpt(res)}")
+    end
+  end
+
+  # The text of `res`, after checking that its status is `status`.
+  def self.text_response(res: HTTP::Server::Response, status: Int = 200) -> String
+    Testing.check_status(res, status)
+    Testing.body_of(res)
+  end
+
+  # Where `res` redirects to, after checking that its status is
+  # `status` (302 by default; any 3xx with `status: nil`).
+  def self.redirected_to(res: HTTP::Server::Response, status: Int? = 302) -> String
+    s = status
+    if s
+      Testing.check_status(res, s)
+    elsif res.status < 300 || res.status > 399
+      Testing.fail("expected a redirect, got #{res.status}: #{Testing.excerpt(res)}")
+    end
+    res.headers["location"] || Testing.fail("the redirect has no Location")
+  end
+
+  # The body of `res` as text (empty for none).
+  def self.body_of(res: HTTP::Server::Response) -> String
+    case res.body
+    in HTTP::Content::Text(text:) then text
+    in HTTP::Content::Binary(bytes:) then bytes.decode? || ""
+    else ""
+    end
+  end
+
+  # :nodoc:
+  def self.check_status(res: HTTP::Server::Response, status: Int) -> Void
+    Testing.fail("expected status #{status}, got #{res.status}: #{Testing.excerpt(res)}") unless res.status == status
+  end
+
+  # :nodoc:
+  def self.excerpt(res: HTTP::Server::Response) -> String
+    b = Testing.body_of(res)
+    # (An error page: its message is in its first <pre>.)
+    m = b.match(/<pre>([^<]*)<\/pre>/)
+    text = m ? (m[1] || "") : b
+    text.size > 300 ? text[0, 300] + "..." : text
+  end
+
+  # :nodoc:
+  def self.fail(message: String) -> Nothing = raise Test::AssertionFailed.new(message)
+end
+
+# A browser for tests: requests to one endpoint, keeping the cookies the
+# responses set (Max-Age=0 deletes one), sending them with the next.
+#
+# ```quarz no_run
+# c = Bezel::Testing::Client.new(TApp)
+# c.post("/login", params: {"email" => "ann@example.com", "password" => "secret"})
+# c.follow_redirect(c.last)
+# c.session["user_id"]          # => "1"
+# c.flash[:info]                # => "Welcome"
+# ```
+class Testing::Client
+  include Unshareable
+
+  @endpoint: Type[Endpoint]
+  @app: App
+  var @cookies: Hash[String, String] = {}
+  var @session_key: String?
+  var @last: HTTP::Server::Response? = nil
+
+  # A client of `endpoint` in `app`; `session_key` names the session's
+  # cookie (found by itself among the cookies otherwise: the one that
+  # decrypts).
+  def initialize(@endpoint: Type[Endpoint], @app: App = Testing.app, *, @session_key: String? = nil); end
+
+  # The cookies kept, by name.
+  def cookies -> Hash[String, String] = @cookies
+
+  # The last response, or nil before any request.
+  def last? -> HTTP::Server::Response? = @last
+
+  # The last response.
+  def last -> HTTP::Server::Response = @last || raise ArgumentError.new("no request yet")
+
+  # A GET of `path` (`params` added to its query).
+  def get(path: String, *, params: Hash[String, String | Array[String]] = {}, headers: Hash[String, String] = {}) -> HTTP::Server::Response
+    target = params.empty? ? path : "#{path}#{path.include?("?") ? "&" : "?"}#{URI.encode_www_form(params)}"
+    request("GET", target, "", headers)
+  end
+
+  # A POST of `params` as a form, or of `json` as a JSON body.
+  def post(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
+           headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("POST", path, params, json, headers)
+
+  # A PUT: `post`'s arguments.
+  def put(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
+          headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("PUT", path, params, json, headers)
+
+  # A PATCH: `post`'s arguments.
+  def patch(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
+            headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("PATCH", path, params, json, headers)
+
+  # A DELETE: `post`'s arguments.
+  def delete(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
+             headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("DELETE", path, params, json, headers)
+
+  # A GET of where `res` redirects to (a path of the application).
+  def follow_redirect(res: HTTP::Server::Response = last) -> HTTP::Server::Response
+    get(Testing.redirected_to(res, nil))
+  end
+
+  # A request of `method` to `target` with `body` and `headers` (the
+  # cookies and a Host added).
+  def request(method: String, target: String, body: String = "", headers: Hash[String, String] = {}) -> HTTP::Server::Response
+    h = headers
+    h = h.put("Host", "www.example.com") unless h.any? { |k, v| k.downcase == "host" }
+    h = h.put("Cookie", @cookies.map { |k, v| "#{k}=#{v}" }.join("; ")) unless @cookies.empty?
+    res = @endpoint.call(HTTP::Server::Request.build(method, target, HTTP::Headers.of(h), body), @app)
+    take(res)
+    @last = res
+    res
+  end
+
+  # The session's values, as the application last saved them (empty
+  # without a session cookie that decrypts).
+  def session -> Hash[String, String]
+    key = session_key
+    return {} if key.nil?
+    raw = @cookies[key]?
+    return {} if raw.nil?
+    store = Session::CookieStore.new(key: key)
+    conn = Conn.bare(HTTP::Server::Request.get("/"), @app)
+    store.decode(conn, raw) || {}
+  end
+
+  # The flash the next request will see.
+  def flash -> Hash[Symbol, String]
+    raw = session[Plug::Flash::KEY]?
+    out: Hash[Symbol, String] = {}
+    return out if raw.nil?
+    JSON.parse(raw).as_h?&.each do |k, v|
+      s = v.as_s?
+      out = out.put(k.to_sym, s) if s
+    end
+    out
+  end
+
+  # Logs in as an application that keeps its user in the session does:
+  # the session's cookie written with `values` added (`{"user_id" =>
+  # "7"}`), as if a login had put them. Needs the session's cookie name:
+  # `session_key:`, or a response that set it.
+  def login_as(values: Hash[String, String]) -> Void
+    key = session_key || raise ArgumentError.new("login_as needs the session's cookie: give session_key:, or make a request first")
+    merged = session
+    values.each { |k, v| merged = merged.put(k, v) }
+    store = Session::CookieStore.new(key: key)
+    conn = Conn.bare(HTTP::Server::Request.get("/"), @app)
+    @cookies = @cookies.put(key, store.encode(conn, merged))
+    nil
+  end
+
+  # The session cookie's name: given, else the first cookie that
+  # decrypts as a session.
+  def session_key -> String?
+    k = @session_key
+    return k if k
+    conn = Conn.bare(HTTP::Server::Request.get("/"), @app)
+    @cookies.each do |name, value|
+      unless Session::CookieStore.new(key: name).decode(conn, value).nil?
+        @session_key = name
+        return name
+      end
+    end
+    nil
+  end
+
+  # :nodoc:
+  def send_body(method: String, path: String, params: Hash[String, String | Array[String]], json: JSON::Value?,
+                headers: Hash[String, String]) -> HTTP::Server::Response
+    j = json
+    if j
+      request(method, path, j.to_json, headers.put("Content-Type", "application/json"))
+    elsif params.empty?
+      request(method, path, "", headers)
+    else
+      request(method, path, URI.encode_www_form(params), headers.put("Content-Type", "application/x-www-form-urlencoded"))
+    end
+  end
+
+  # :nodoc:
+  def take(res: HTTP::Server::Response) -> Void
+    res.headers.all("set-cookie").each do |sc|
+      pair = sc.partition(";")[0]
+      name, eq, value = pair.partition("=")
+      next if eq.empty?
+      if sc.downcase.include?("max-age=0") || value.empty?
+        @cookies = @cookies.delete(name)
+      else
+        @cookies = @cookies.put(name, value)
+      end
+    end
+  end
+end

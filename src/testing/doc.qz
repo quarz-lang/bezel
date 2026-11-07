@@ -1,0 +1,134 @@
+# A parsed HTML page for tests to query (`Testing.html_response`): its
+# elements as a tree, found by a small selector language:
+#
+# - `tag`, "#id", ".class", `[attr]`, `[attr=value]` (quoted or not),
+#   combined (`form.search[method=get]`);
+# - descendants, separated by spaces (`form input[type=hidden]`);
+# - several selectors separated by commas (`h1, h2`).
+#
+# ```
+# doc = Bezel::Testing::Doc.parse("<form action=\"/users\"><input name=\"user[email]\" value=\"a&amp;b\"></form>")
+# doc.has_element?("form[action=\"/users\"] input")   # => true
+# doc.select("input")[0].attr("value")                 # => "a&b"
+# doc.has_text?("nothing")                              # => false
+# ```
+#
+# The parser reads well-formed HTML as `Bezel.html` writes it, and is
+# forgiving with the rest: void elements need no end tag, an end tag
+# closes up to its element, entities are decoded, comments and the
+# doctype are skipped, `script`, `style`, `textarea` and `title` hold
+# text.
+class Testing::Doc
+  @root: Testing::Node
+
+  # :nodoc:
+  def initialize(@root: Testing::Node); end
+
+  # The document of `source`.
+  def self.parse(source: String) -> Testing::Doc = Testing::Doc.new(Testing::Parser.new(source).parse)
+
+  # The document's root (a node without a tag).
+  def root -> Testing::Node = @root
+
+  # The elements `selector` matches, in document order.
+  def select(selector: String) -> Array[Testing::Node] = @root.select(selector)
+
+  # The first element `selector` matches, or nil.
+  def at(selector: String) -> Testing::Node? = select(selector).first?
+
+  # Whether an element matches `selector`.
+  def has_element?(selector: String) -> Bool = !select(selector).empty?
+
+  # The text of the page, whitespace collapsed.
+  def text -> String = @root.text
+
+  # Whether the page's text has `text` (whitespace collapsed in both).
+  def has_text?(text: String) -> Bool = self.text.include?(Testing::Node.squish(text))
+end
+
+# An element of a `Testing::Doc` (or its root, without a tag), or a text.
+class Testing::Node
+  @tag: String
+  @attrs: Hash[String, String]
+  var @children: Array[Testing::Node] = []
+  @text: String?
+
+  # :nodoc:
+  def initialize(@tag: String, @attrs: Hash[String, String], @text: String? = nil); end
+
+  # The tag in lowercase (`""` for the root and for a text).
+  def tag -> String = @tag
+
+  # The attributes, names in lowercase.
+  def attrs -> Hash[String, String] = @attrs
+
+  # The attribute `name`, or nil.
+  def attr(name: String) -> String? = @attrs[name.downcase]?
+
+  # The child elements and texts.
+  def children -> Array[Testing::Node] = @children
+
+  # :nodoc:
+  def add(child: Testing::Node) -> Void
+    @children = @children.push(child)
+  end
+
+  # Whether this is a text.
+  def text? -> Bool = !@text.nil?
+
+  # The classes of the `class` attribute.
+  def classes -> Array[String] = (attr("class") || "").split(" ").reject(&:empty?)
+
+  # The text inside, whitespace collapsed.
+  def text -> String = Testing::Node.squish(raw_text)
+
+  # :nodoc:
+  def raw_text -> String
+    t = @text
+    return t if t
+    @children.map(&:raw_text).join(" ")
+  end
+
+  # The elements under this one `selector` matches, in document order.
+  def select(selector: String) -> Array[Testing::Node]
+    groups = selector.split(",").map { |g| Testing::Selector.parse(g) }
+    out: Array[Testing::Node] = []
+    all = descendants
+    all.each do |n|
+      out = out.push(n) if groups.any? { |g| g.matches?(n, self) }
+    end
+    out
+  end
+
+  # The elements under this one, in document order.
+  def descendants -> Array[Testing::Node]
+    out: Array[Testing::Node] = []
+    @children.each do |c|
+      next if c.text?
+      out = out.push(c) + c.descendants
+    end
+    out
+  end
+
+  # :nodoc:
+  # The ancestors of `node` under this one, nearest first.
+  def path_to(node: Testing::Node) -> Array[Testing::Node]?
+    @children.each do |c|
+      if c.equal?(node)
+        return Array[Testing::Node].new
+      end
+      sub = c.path_to(node)
+      return sub.push(c) if sub
+    end
+    nil
+  end
+
+  # `text` with runs of whitespace as one space, trimmed.
+  def self.squish(text: String) -> String = text.gsub(/\s+/, " ").strip
+
+  # :nodoc:
+  def inspect -> String = text? ? "#<text #{(@text || "").inspect}>" : "#<#{@tag} #{@attrs.inspect}>"
+
+  # :nodoc:
+  def to_s -> String = inspect
+end

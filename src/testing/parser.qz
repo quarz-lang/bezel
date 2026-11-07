@@ -1,0 +1,271 @@
+# :nodoc:
+# The tolerant HTML reader of `Testing::Doc`.
+class Testing::Parser
+  @src: String
+  var @pos: Int = 0
+
+  # Elements without content.
+  VOID = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]
+
+  # Elements whose content is text up to their end tag.
+  TEXT = ["script", "style", "textarea", "title"]
+
+  def initialize(@src: String); end
+
+  # The tree of the source, under a root node.
+  def parse -> Testing::Node
+    root = Testing::Node.new("", {})
+    stack: Array[Testing::Node] = [root]
+    while @pos < @src.size
+      lt = @src.index("<", @pos)
+      if lt.nil?
+        text_node(stack, @src[@pos, @src.size - @pos])
+        @pos = @src.size
+        break
+      end
+      text_node(stack, @src[@pos, lt - @pos]) if lt > @pos
+      @pos = lt
+      if @src[@pos, 4] == "<!--"
+        close = @src.index("-->", @pos + 4)
+        @pos = close ? close + 3 : @src.size
+      elsif @src[@pos, 2] == "<!" || @src[@pos, 2] == "<?"
+        close = @src.index(">", @pos)
+        @pos = close ? close + 1 : @src.size
+      elsif @src[@pos, 2] == "</"
+        close = @src.index(">", @pos)
+        name = @src[@pos + 2, (close || @src.size) - @pos - 2].strip.downcase
+        @pos = close ? close + 1 : @src.size
+        i = stack.size - 1
+        while i > 0 && stack[i].tag != name
+          i -= 1
+        end
+        stack = stack.first(i) if i > 0
+      else
+        tag, attrs, self_closing = read_tag
+        if tag.empty?
+          text_node(stack, "<")
+          @pos += 1
+          next
+        end
+        node = Testing::Node.new(tag, attrs)
+        stack.last?&.add(node)
+        if TEXT.include?(tag)
+          stop = @src.downcase.index("</#{tag}", @pos)
+          finish = stop || @src.size
+          inner = @src[@pos, finish - @pos]
+          node.add(Testing::Node.new("", {}, Testing::Parser.decode(inner))) unless inner.empty?
+          close = stop ? @src.index(">", stop) : nil
+          @pos = close ? close + 1 : @src.size
+        elsif !VOID.include?(tag) && !self_closing
+          stack = stack.push(node)
+        end
+      end
+    end
+    root
+  end
+
+  # :nodoc:
+  def text_node(stack: Array[Testing::Node], raw: String) -> Void
+    return if raw.empty?
+    stack.last?&.add(Testing::Node.new("", {}, Testing::Parser.decode(raw)))
+  end
+
+  # :nodoc:
+  # The tag at `@pos` (`<`): its name, attributes and whether it ends
+  # with `/>`; an empty name when `<` starts no tag.
+  def read_tag -> [String, Hash[String, String], Bool]
+    m = @src[@pos, @src.size - @pos].match(/\A<([A-Za-z][A-Za-z0-9\-]*)/)
+    return ["", Hash[String, String].new, false] if m.nil?
+    name = (m[1] || "").downcase
+    @pos += name.size + 1
+    attrs: Hash[String, String] = {}
+    self_closing = false
+    while @pos < @src.size
+      skip_space
+      c = @src[@pos]
+      if c == ">"
+        @pos += 1
+        break
+      elsif c == "/"
+        self_closing = true
+        @pos += 1
+        next
+      end
+      am = @src[@pos, @src.size - @pos].match(/\A([^\s=>\/]+)/)
+      if am.nil?
+        @pos += 1
+        next
+      end
+      aname = (am[1] || "").downcase
+      @pos += aname.size
+      skip_space
+      value = ""
+      if @pos < @src.size && @src[@pos] == "="
+        @pos += 1
+        skip_space
+        q = @pos < @src.size ? @src[@pos] : ""
+        if q == "\"" || q == "'"
+          close = @src.index(q, @pos + 1) || @src.size
+          value = @src[@pos + 1, close - @pos - 1]
+          @pos = close + 1
+        else
+          vm = @src[@pos, @src.size - @pos].match(/\A([^\s>]*)/)
+          v = vm ? (vm[1] || "") : ""
+          value = v
+          @pos += v.size
+        end
+      end
+      attrs = attrs.put(aname, Testing::Parser.decode(value)) unless attrs.key?(aname)
+    end
+    [name, attrs, self_closing]
+  end
+
+  # :nodoc:
+  def skip_space -> Void
+    while @pos < @src.size && @src[@pos].match?(/\s/)
+      @pos += 1
+    end
+  end
+
+  # `text` with its character references decoded.
+  def self.decode(text: String) -> String
+    return text unless text.include?("&")
+    text.gsub(/&(#[0-9]+|#[xX][0-9A-Fa-f]+|amp|lt|gt|quot|apos|nbsp);/) do |ref|
+      body = ref[1, ref.size - 2]
+      case body
+      when "amp" then "&"
+      when "lt" then "<"
+      when "gt" then ">"
+      when "quot" then "\""
+      when "apos" then "'"
+      when "nbsp" then " "
+      else
+        code = body.start_with?("#x") || body.start_with?("#X") ? body[2, body.size - 2].to_i(16) : body[1, body.size - 1].to_i
+        code > 0 && code <= 0x10FFFF ? code.chr : ref
+      end
+    end
+  end
+end
+
+# :nodoc:
+# One selector of a `Testing::Doc` query: compound parts by descendant
+# steps.
+class Testing::Selector
+  @steps: Array[Testing::Compound]
+
+  def initialize(@steps: Array[Testing::Compound]); end
+
+  # The selector of `text`; `ArgumentError` for one it cannot read.
+  def self.parse(text: String) -> Testing::Selector
+    Testing::Selector.new(Testing::Selector.split_steps(text.strip).map { |s| Testing::Compound.parse(s) })
+  end
+
+  # :nodoc:
+  # `text` split at the spaces outside brackets and quotes.
+  def self.split_steps(text: String) -> Array[String]
+    out: Array[String] = []
+    cur = String::Builder.new
+    depth = 0
+    quote = ""
+    text.each_char do |c|
+      if quote != ""
+        quote = "" if c == quote
+        cur << c
+      elsif c == "\"" || c == "'"
+        quote = c
+        cur << c
+      elsif c == "["
+        depth += 1
+        cur << c
+      elsif c == "]"
+        depth -= 1
+        cur << c
+      elsif depth == 0 && c.match?(/\s/)
+        part = cur.to_s
+        out = out.push(part) unless part.empty?
+      else
+        cur << c
+      end
+    end
+    last = cur.to_s
+    out = out.push(last) unless last.empty?
+    raise ArgumentError.new("empty selector") if out.empty?
+    out
+  end
+
+  # Whether `node`, under `scope`, matches: its own part the last, and
+  # the earlier ones its ancestors, in order.
+  def matches?(node: Testing::Node, scope: Testing::Node) -> Bool
+    return false unless @steps[@steps.size - 1].matches?(node)
+    path = scope.path_to(node) || Array[Testing::Node].new
+    i = @steps.size - 2
+    path.each do |anc|
+      break if i < 0
+      i -= 1 if @steps[i].matches?(anc)
+    end
+    i < 0
+  end
+end
+
+# :nodoc:
+# A compound selector: a tag, an id, classes and attribute tests.
+class Testing::Compound
+  @tag: String?
+  @id: String?
+  @classes: Array[String]
+  @attrs: Array[[String, String?]]
+
+  def initialize(@tag: String?, @id: String?, @classes: Array[String], @attrs: Array[[String, String?]]); end
+
+  # The compound of `text` (`form.search#main[method=get]`).
+  def self.parse(text: String) -> Testing::Compound
+    tag: String? = nil
+    id: String? = nil
+    classes: Array[String] = []
+    attrs: Array[[String, String?]] = []
+    rest = text
+    m = rest.match(/\A([A-Za-z][A-Za-z0-9\-]*|\*)/)
+    if m
+      t = m[1] || ""
+      tag = t == "*" ? nil : t.downcase
+      rest = rest[t.size, rest.size - t.size]
+    end
+    while !rest.empty?
+      if rest.start_with?("#")
+        im = rest.match(/\A#([A-Za-z0-9_\-]+)/) || raise ArgumentError.new("bad selector #{text.inspect}")
+        id = im[1]
+        rest = rest[(im[0] || "").size, rest.size - (im[0] || "").size]
+      elsif rest.start_with?(".")
+        cm = rest.match(/\A\.([A-Za-z0-9_\-]+)/) || raise ArgumentError.new("bad selector #{text.inspect}")
+        classes = classes.push(cm[1] || "")
+        rest = rest[(cm[0] || "").size, rest.size - (cm[0] || "").size]
+      elsif rest.start_with?("[")
+        am = rest.match(/\A\[\s*([^\s=\]]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]*)))?\s*\]/) || raise ArgumentError.new("bad selector #{text.inspect}")
+        name = (am[1] || "").downcase
+        value = am[2] || am[3] || am[4]
+        has_value = (am[0] || "").include?("=")
+        attrs = attrs.push([name, has_value ? (value || "") : nil])
+        rest = rest[(am[0] || "").size, rest.size - (am[0] || "").size]
+      else
+        raise ArgumentError.new("bad selector #{text.inspect}")
+      end
+    end
+    Testing::Compound.new(tag, id, classes, attrs)
+  end
+
+  # Whether the element `node` matches.
+  def matches?(node: Testing::Node) -> Bool
+    return false if node.text? || node.tag.empty?
+    t = @tag
+    return false if t && node.tag != t
+    i = @id
+    return false if i && node.attr("id") != i
+    cs = node.classes
+    return false unless @classes.all? { |c| cs.include?(c) }
+    @attrs.all? do |pair|
+      name, value = pair
+      have = node.attr(name)
+      value.nil? ? !have.nil? : have == value
+    end
+  end
+end

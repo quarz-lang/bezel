@@ -168,21 +168,16 @@ class RtEndpoint < Bezel::Endpoint
 end
 
 class RouterTest < Test::Case
-  def text_of(res: HTTP::Server::Response) -> String
-    case res.body
-    in HTTP::Content::Text(text:) then text
-    else ""
-    end
-  end
+  def text_of(res: HTTP::Server::Response) -> String = Bezel::Testing.body_of(res)
 
   def get(path: String, headers: Hash[String, String] = {}) -> HTTP::Server::Response
-    RtEndpoint.call(HTTP::Server::Request.get(path, HTTP::Headers.of(headers)))
+    Bezel::Testing.get(RtEndpoint, path, headers: headers)
   end
 
   def form(method: String, path: String, body: String, admin: Bool = true) -> HTTP::Server::Response
     h = {"Content-Type" => "application/x-www-form-urlencoded"}
     h = h.put("X-Admin", "1") if admin
-    RtEndpoint.call(HTTP::Server::Request.build(method, path, HTTP::Headers.of(h), body))
+    Bezel::Testing::Client.new(RtEndpoint).request(method, path, body, h)
   end
 
   def test_table

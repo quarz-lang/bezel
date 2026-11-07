@@ -1,7 +1,11 @@
 # What every request of an application shares: its configuration and,
 # with a DATABASE_URL, the database's pool. `Bezel.start` makes it;
 # a test makes one with `App.new(config)`.
-data App(config: Config, pool: PG::Pool? = nil)
+#
+# `skip_csrf` is `Bezel::Testing`'s: requests through `Plug::CSRF` need no
+# token. It comes from the program, never from a request, and is refused
+# in `prod` (`Bezel::ConfigError` at the first request it would skip).
+data App(config: Config, pool: PG::Pool? = nil, skip_csrf: Bool = false)
   # An application `name` in `test`, without a database: what a test of
   # an endpoint uses when it gives none.
   def self.test(name: String = "bezel") -> App

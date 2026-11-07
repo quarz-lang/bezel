@@ -45,7 +45,9 @@ class Plug::CSRF
       conn = conn.put_session(KEY, text)
       secret = Plug::CSRF.decode(text) || Bytes.new
     end
-    if UNSAFE.include?(conn.method)
+    if UNSAFE.include?(conn.method) && conn.app.skip_csrf
+      raise ConfigError.new("skip_csrf is for tests: refused in prod") if conn.config.prod?
+    elsif UNSAFE.include?(conn.method)
       Plug::CSRF.check_origin(conn)
       given = conn.body_params.string?("_csrf_token") || conn.header("x-csrf-token")
       raise InvalidCSRFToken.new("CSRF token missing") if given.nil? || given.empty?
