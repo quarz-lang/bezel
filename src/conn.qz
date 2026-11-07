@@ -124,7 +124,8 @@ data Conn(
   # digits, `.`, `-`, `:`, `[` and `]`) is `Bezel::BadRequest`, so that it
   # cannot bring a path or a query of its own.
   def url(path: String) -> String
-    host = request.host || "localhost"
+    given = request.host
+    host = given.nil? || given.empty? ? "localhost" : given
     raise BadRequest.new("the Host header is not a host") unless host.match?(/\A[A-Za-z0-9.\-:\[\]]+\z/)
     "#{request.scheme}://#{host}#{path}"
   end

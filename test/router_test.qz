@@ -200,6 +200,9 @@ class RouterTest < Test::Case
     assert_raise(ArgumentError) { RtRouter.file_path(path: "../../etc/passwd") }
     assert_raise(ArgumentError) { RtRouter.file_path(path: "a//b") }
     assert_equal("/files/", RtRouter.file_path(path: ""))
+    assert_equal("/files/a/", RtRouter.file_path(path: "a/"))
+    blank = Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Host" => ""})))
+    assert_equal("http://localhost/x", blank.url("/x"))
     assert_equal("/users/.x", RtRouter.user_path(id: ".x"))
     assert_equal("/users?page=2&tag=a+b&tag=c", Bezel::Router.with_query(RtRouter.users_path, {"page" => "2", "tag" => ["a b", "c"]}))
     assert_equal("/users", Bezel::Router.with_query("/users", Hash[String, String | Array[String]].new))
