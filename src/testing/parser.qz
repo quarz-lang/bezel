@@ -27,6 +27,8 @@ class Testing::Parser
   CLOSES = {
     "p" => ["p"], "li" => ["li"], "dt" => ["dt", "dd"], "dd" => ["dt", "dd"], "option" => ["option"],
     "tr" => ["td", "th", "tr"], "td" => ["td", "th"], "th" => ["td", "th"],
+    "optgroup" => ["option", "optgroup"], "thead" => ["td", "th", "tr", "thead", "tbody", "tfoot"],
+    "tbody" => ["td", "th", "tr", "thead", "tbody", "tfoot"], "tfoot" => ["td", "th", "tr", "thead", "tbody", "tfoot"],
     "div" => ["p"], "ul" => ["p"], "ol" => ["p"], "dl" => ["p"], "table" => ["p"], "form" => ["p"],
     "h1" => ["p"], "h2" => ["p"], "h3" => ["p"], "h4" => ["p"], "h5" => ["p"], "h6" => ["p"],
     "section" => ["p"], "article" => ["p"], "header" => ["p"], "footer" => ["p"], "nav" => ["p"],
@@ -35,7 +37,10 @@ class Testing::Parser
 
   # Elements the search for an element to close does not go past.
   BOUNDARIES = ["html", "body", "table", "ul", "ol", "dl", "select", "template", "button", "td", "th", "li",
-                "div", "section", "article", "form", "blockquote"]
+                "div", "section", "article", "form", "blockquote", "optgroup", "thead", "tbody", "tfoot"]
+
+  # Boundaries a list item's search goes past (HTML's list item steps).
+  ITEM_PASSES = ["div", "p", "address"]
 
   def initialize(@src: String); end
 
@@ -75,6 +80,9 @@ class Testing::Parser
         end
       elsif t.size > 1 && t.start_with?("<")
         tag, attrs = Testing::Parser.start_tag(t)
+        # (In SVG and MathML, `/>` ends the element, as browsers read it.)
+        foreign = (0...stack.size).any? { |i| stack[i].tag == "svg" || stack[i].tag == "math" }
+        self_closing = foreign && t.match?(/(\A<[A-Za-z][A-Za-z0-9\-]*|\s|["'])\/>\z/)
         closes = CLOSES[tag]?
         if closes
           k = stack.size - 1
@@ -85,7 +93,7 @@ class Testing::Parser
             t2 = stack[k].tag
             if closes.include?(t2)
               found = k
-            elsif BOUNDARIES.include?(t2)
+            elsif BOUNDARIES.include?(t2) && !(["li", "dt", "dd"].include?(tag) && ITEM_PASSES.include?(t2))
               break
             end
             k -= 1
@@ -96,7 +104,9 @@ class Testing::Parser
         end
         node = Testing::Node.new(tag, attrs)
         stack.last&.add(node)
-        if TEXT.include?(tag)
+        if self_closing
+          nil
+        elsif TEXT.include?(tag)
           raw_tag = tag
           raw_node = node
           raw = String::Builder.new
@@ -118,8 +128,8 @@ class Testing::Parser
   end
 
   # The name and attributes of a start tag token. (`/>` is ignored, as
-  # HTML does: a void element has no content anyway, and `<a href=/>`
-  # is a link to `/`.)
+  # HTML does outside SVG and MathML: a void element has no content
+  # anyway, and `<a href=/>` is a link to `/`.)
   def self.start_tag(token: String) -> [String, Hash[String, String]]
     m = token.match(/\A<([A-Za-z][A-Za-z0-9\-]*)/)
     name = m ? (m[1] || "") : ""

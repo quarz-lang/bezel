@@ -59,6 +59,8 @@ class TtAgedRouter < Bezel::Router
       get "/aged", TtAged, :who
       get "/a/who", TtAged, :who
       get "/a/rel", TtAged, :rel
+      get "/a/b/rel", TtAged, :rel
+      get "/x", TtAged, :who
       get "/hop", TtAged, :hop
       get "/away", TtAged, :away
       get "/cookies", TtAged, :cookies
@@ -251,5 +253,47 @@ class TestingTest < Test::Case
     c = Bezel::Testing::Client.new(TtAgedApp)
     c.take(HTTP::Server::Response.empty(204).header("set-cookie", "b=1; Max-Age=99999999999999999999999"))
     assert_equal("1", c.cookies["b"])
+  end
+
+  def test_parser_third_review_fixes
+    svg = Bezel::Testing::Doc.parse("<svg><path d=\"M0\"/><circle r=\"1\" /></svg><p>after</p>")
+    assert_false(svg.has_element?("path circle"))
+    assert_equal(2, svg.select("svg path, svg circle").size)
+    opt = Bezel::Testing::Doc.parse("<select><optgroup label=A><option>a<optgroup label=B><option>b</select>")
+    assert_equal("b", node(opt, "optgroup[label=B] option").text)
+    assert_false(opt.has_element?("optgroup optgroup"))
+    tb = Bezel::Testing::Doc.parse("<table><thead><tr><th>h<tbody><tr><td>1</table>")
+    assert_false(tb.has_element?("th tbody"))
+    assert_true(tb.has_element?("table tbody td"))
+    li = Bezel::Testing::Doc.parse("<ul><li><div>a<li>b</ul>")
+    assert_false(li.has_element?("li li"))
+  end
+
+  def test_redirect_dots_and_schemes
+    c = Bezel::Testing::Client.new(TtAgedApp, session_key: "_aged")
+    c.login_as({"user_id" => "7"})
+    {"../../x?x=1" => "user 7 1", "./../../x?x=2" => "user 7 2", "/a/../x?x=3" => "user 7 3"}.each do |to, want|
+      c.get("/a/b/rel", params: {"to" => to})
+      assert_equal(want, Bezel::Testing.text_response(c.follow_redirect))
+    end
+    c.get("/a/b/rel", params: {"to" => "mailto:a@b.example"})
+    assert_match(/leaves the application/, failure { c.follow_redirect })
+    c.get("/a/b/rel", params: {"to" => "https://www.example.com:80/x"})
+    assert_match(/leaves the application/, failure { c.follow_redirect })
+    # An empty location requests the last target again (here, a loop the test stops).
+    c.get("/a/b/rel", params: {"to" => "#top"})
+    assert_equal(302, c.follow_redirect.status)
+    assert_equal("/a/b/rel?to=%23top", c.last_target)
+  end
+
+  def test_max_age_follows_rfc_6265
+    gone = ->(sc: String) { Bezel::Testing::Client.expired?(sc) }
+    assert_true(gone.call("a=1; Max-Age=0000000000000000"))
+    assert_false(gone.call("a=1; Max-Age=0abc"))
+    assert_true(gone.call("a=1; Max-Age=1; Max-Age=0"))
+    assert_false(gone.call("a=1; Max-Age=0; Max-Age=1"))
+    assert_true(gone.call("a=1; max-age = -0"))
+    assert_false(gone.call("a=1; Max-Age=99999999999999999999999"))
+    assert_false(gone.call("a=1; Path=/"))
   end
 end
