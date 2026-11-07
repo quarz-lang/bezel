@@ -15,8 +15,9 @@ Bezel = { git = "https://github.com/quarz-lang/bezel", branch = "main" }
 
 Work in progress (the plan is issue #1). What exists: the connection,
 parameters, plugs, endpoints, configuration, error pages, `Bezel.start`,
-the built-in plugs, the router and controllers. Views, sessions, test
-helpers and the `bezel` command come next.
+the built-in plugs, the router and controllers, and the HTML DSL with
+forms over rotor's changesets. Sessions, test helpers, templates and the
+`bezel` command come next.
 
 ```ruby
 class Shop::Endpoint < Bezel::Endpoint
@@ -112,6 +113,43 @@ Shop::Router.user_post_path(user_id: 5, id: 2)      # => "/users/5/posts/2"
   choose, and a block nests routes under `/{user_id}`.
 - Matching is the standard `HTTP::Router`'s: the most specific pattern,
   `HEAD` by `GET`, `405` with `Allow` for another method's path.
+
+Views are Quarz code: `Bezel.html` gives a builder with a method per
+HTML element, every text and attribute escaped, attributes as typed
+keywords (`class_name:` is the `class` attribute, since `class` cannot
+name a parameter; `class:` waits for quarz-lang/quarz#382). A layout is
+a function taking the inner HTML; a component includes
+`Bezel::Component`; a form over a changeset shows its values and errors:
+
+```ruby
+module UserView
+  def self.edit(conn: Bezel::Conn, cs: Rotor::Changeset[User]) -> Bezel::Html
+    Bezel.html(conn) do |h|
+      h.h1("Edit #{cs.data.name}")
+      h.form_for(cs, action: Shop::Router.user_path(id: cs.data.id), method: :patch) do |f|
+        f.label(:email)
+        f.email_field(:email)
+        f.errors(:email)
+        f.submit("Save")
+      end
+      h.link("Delete", to: Shop::Router.user_path(id: cs.data.id), method: :delete, confirm: "Sure?")
+    end
+  end
+end
+```
+
+- A misspelt attribute or one of the wrong type is a compile error;
+  `attrs:` passes others (event handlers `on...` are refused), `data:`
+  and `aria:` the `data-*` and `aria-*` ones.
+- URL attributes, typed or given in `attrs:` (and `srcset`, a meta
+  refresh), refuse `javascript:` and other schemes than http, https,
+  mailto and tel (relative URLs are fine); `srcdoc` is refused; `<script>`
+  and `<style>` refuse content that could end them. A `style` is escaped
+  but not checked: do not build one from input.
+- Forms carry the CSRF token (from `Bezel.html(conn)`, once the CSRF
+  plug sets it) and `_method`, name their fields `user[email]`, and show
+  the input as typed for a field with errors. `link`'s `confirm:` writes
+  `data-confirm` for the application's script.
 
 An endpoint is tested without a socket:
 

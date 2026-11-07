@@ -1,0 +1,212 @@
+# Writes the fields of a form over a rotor changeset (`HtmlBuilder#form_for`):
+# each field is named `<prefix>[<field>]` (`user[email]`), with the id
+# `<prefix>_<field>`, and shows the value the changeset holds: its
+# change, else the model's; for a permitted field with errors and no
+# change (a value that did not cast, or a blank required one), the input
+# as given, so that it shows as typed. `errors` writes the changeset's errors on a
+# field.
+#
+# ```
+# class FormUser < Rotor::Model
+#   table "form_users" do
+#     column :id, Int, primary: true
+#     column :email, String
+#   end
+# end
+#
+# cs = Rotor::Changeset.cast(FormUser, {"email" => "ann"}, [:email]).validate_format(:email, /@/)
+# page = Bezel.html do |h|
+#   h.form_for(cs, action: "/users") do |f|
+#     f.label(:email, "Email")
+#     f.text_field(:email)
+#     f.errors(:email)
+#   end
+# end
+# page.to_s
+# # => "<form action=\"/users\" method=\"post\"><label for=\"form_user_email\">Email</label><input type=\"text\" name=\"form_user[email]\" value=\"ann\" id=\"form_user_email\" class=\"invalid\" aria-invalid=\"true\"><span id=\"form_user_email_error\" class=\"error\">has invalid format</span></form>"
+# ```
+#
+# A field with errors gets the class `invalid` and `aria-invalid`.
+class FormBuilder
+  include Unshareable
+  include DslScope
+
+  @h: HtmlBuilder
+  @prefix: String
+  @values: Hash[Symbol, String]
+  @errors: Hash[Symbol, Array[String]]
+
+  # :nodoc:
+  def initialize(@h: HtmlBuilder, @prefix: String, @values: Hash[Symbol, String], @errors: Hash[Symbol, Array[String]]); end
+
+  # The HTML builder, for markup between the fields.
+  def html -> HtmlBuilder = @h
+
+  # The name of `field`'s input: `user[email]`.
+  def name(field: Symbol) -> String = "#{@prefix}[#{field}]"
+
+  # The id of `field`'s input: `user_email`.
+  def id(field: Symbol) -> String = "#{@prefix}_#{field}"
+
+  # The value the form shows for `field`, or nil.
+  def value(field: Symbol) -> String? = @values[field]?
+
+  # The errors on `field`.
+  def errors_on(field: Symbol) -> Array[String] = @errors[field]? || []
+
+  # Writes `<label for="...">text</label>` (the field's name, humanized,
+  # without `text`).
+  def label(field: Symbol, text: String? = nil, *, class_name: (String | Array[String?])? = nil) -> Void
+    @h.label(text || FormBuilder.humanize(field), for: id(field), class_name: class_name)
+  end
+
+  # Writes an `<input type="text">` for `field`.
+  def text_field(field: Symbol, *, placeholder: String? = nil, required: Bool = false,
+                 class_name: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
+    input_of("text", field, value(field), placeholder, required, class_name, attrs)
+  end
+
+  # Writes an `<input type="email">` for `field`.
+  def email_field(field: Symbol, *, placeholder: String? = nil, required: Bool = false,
+                  class_name: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
+    input_of("email", field, value(field), placeholder, required, class_name, attrs)
+  end
+
+  # Writes an `<input type="number">` for `field`.
+  def number_field(field: Symbol, *, placeholder: String? = nil, required: Bool = false,
+                   class_name: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
+    input_of("number", field, value(field), placeholder, required, class_name, attrs)
+  end
+
+  # Writes an `<input type="password">` for `field`, never with a value.
+  def password_field(field: Symbol, *, placeholder: String? = nil, required: Bool = false,
+                     class_name: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
+    input_of("password", field, nil, placeholder, required, class_name, attrs)
+  end
+
+  # Writes an `<input type="hidden">` for `field`.
+  def hidden(field: Symbol) -> Void
+    @h.input(type: "hidden", name: name(field), value: value(field), id: id(field))
+  end
+
+  # Writes a `<textarea>` for `field`, its value the content.
+  def textarea(field: Symbol, *, rows: Int? = nil, placeholder: String? = nil, required: Bool = false,
+               class_name: (String | Array[String?])? = nil) -> Void
+    @h.textarea(value(field) || "", name: name(field), id: id(field), rows: rows, placeholder: placeholder,
+                required: required, class_name: FormBuilder.with_invalid(class_name, !errors_on(field).empty?),
+                aria: invalid_aria(field))
+  end
+
+  # Writes a checkbox for `field`: a hidden `false` first, so that an
+  # unchecked box still sends the field, then the box (value `true`),
+  # checked when the value is true (`true`, `1`, `on`).
+  def checkbox(field: Symbol, *, class_name: (String | Array[String?])? = nil) -> Void
+    v = value(field)
+    on = !v.nil? && ["true", "1", "on"].include?(v.downcase)
+    @h.input(type: "hidden", name: name(field), value: "false")
+    @h.input(type: "checkbox", name: name(field), value: "true", id: id(field), checked: on,
+             class_name: FormBuilder.with_invalid(class_name, !errors_on(field).empty?), aria: invalid_aria(field))
+  end
+
+  # Writes a `<select>` for `field` of `options` (`[label, value]` pairs),
+  # the one of the field's value selected; `prompt` adds a first option
+  # with an empty value.
+  def select(field: Symbol, options: Array[[String, String]], *, prompt: String? = nil,
+             class_name: (String | Array[String?])? = nil) -> Void
+    current = value(field)
+    @h.select(name: name(field), id: id(field), class_name: FormBuilder.with_invalid(class_name, !errors_on(field).empty?),
+              aria: invalid_aria(field)) do
+      @h.option(prompt, value: "") if prompt
+      options.each do |pair|
+        label, v = pair
+        @h.option(label, value: v, selected: v == current)
+      end
+    end
+  end
+
+  # Writes the errors on `field` (`<span class="error">`, one per error,
+  # joined by `, `), or nothing without one.
+  def errors(field: Symbol) -> Void
+    es = errors_on(field)
+    @h.span(es.join(", "), class_name: "error", id: "#{id(field)}_error") unless es.empty?
+  end
+
+  # Writes the submit button.
+  def submit(text: String = "Save", *, class_name: (String | Array[String?])? = nil) -> Void
+    @h.button(text, type: "submit", class_name: class_name)
+  end
+
+  # :nodoc:
+  def input_of(type: String, field: Symbol, v: String?, placeholder: String?, required: Bool,
+               class_name: (String | Array[String?])?, attrs: Hash[String, String]) -> Void
+    @h.input(type: type, name: name(field), value: v, id: id(field), placeholder: placeholder,
+             required: required, class_name: FormBuilder.with_invalid(class_name, !errors_on(field).empty?),
+             aria: invalid_aria(field), attrs: attrs)
+  end
+
+  # :nodoc:
+  def invalid_aria(field: Symbol) -> Hash[String, String]
+    errors_on(field).empty? ? {} : {"invalid" => "true"}
+  end
+
+  # :nodoc:
+  def self.with_invalid(class_name: (String | Array[String?])?, invalid: Bool) -> (String | Array[String?])?
+    return class_name unless invalid
+    case class_name
+    in nil then "invalid"
+    in String then [class_name, "invalid"]
+    in Array then class_name.push("invalid")
+    end
+  end
+
+  # `email_address` as `Email address`.
+  def self.humanize(field: Symbol) -> String = field.to_s.gsub("_", " ").capitalize
+
+  # :nodoc:
+  # What a form shows of each field: the value the changeset would give
+  # the model, or, for a permitted field with errors and no change, the
+  # input as given.
+  def self.values_of[M <: Rotor::Model](cs: Rotor::Changeset[M]) -> Hash[Symbol, String]
+    out: Hash[Symbol, String] = {}
+    cs.data.to_h.each do |k, v|
+      s = FormBuilder.show(cs.get_field(k))
+      out = out.put(k, s) if s
+    end
+    cs.changes.each do |k, v|
+      s = FormBuilder.show(v)
+      out = s ? out.put(k, s) : out.delete(k)
+    end
+    failed = cs.errors.map(&:field)
+    cs.permitted.each do |f|
+      # (A field with a change shows it, valid or not: put_change's too.)
+      next unless failed.include?(f) && !cs.changes.key?(f)
+      key = f.to_s
+      next unless cs.params.key?(key)
+      out = out.put(f, FormBuilder.show(cs.params[key]?) || "")
+    end
+    out
+  end
+
+  # :nodoc:
+  def self.errors_of[M <: Rotor::Model](cs: Rotor::Changeset[M]) -> Hash[Symbol, Array[String]]
+    out: Hash[Symbol, Array[String]] = {}
+    cs.errors.each do |e|
+      out = out.put(e.field, (out[e.field]? || []).push(e.text))
+    end
+    out
+  end
+
+  # :nodoc:
+  # A value as a form shows it.
+  def self.show(v: Object?) -> String?
+    case v
+    in nil then nil
+    in String then v
+    in Int then v.to_s
+    in Float then v.to_s
+    in Bool then v ? "true" : "false"
+    in Time then v.iso8601
+    else nil
+    end
+  end
+end

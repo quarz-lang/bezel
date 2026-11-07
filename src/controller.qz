@@ -79,7 +79,11 @@ class Controller
       m.result == Conn && !Controller.methods.any? { |c| c.name == m.name }
   end
 
-  # `conn` answered with the HTML `html` (`text/html`), and halted.
+  # `conn` answered with the page `html` (`text/html`), and halted.
+  def render(conn: Conn, html: Html, status: Int = conn.status) -> Conn = conn.html(html.source, status: status)
+
+  # `conn` answered with the HTML source `html` (`text/html`), and
+  # halted: the caller vouches that it is safe HTML.
   def render(conn: Conn, html: String, status: Int = conn.status) -> Conn = conn.html(html, status: status)
 
   # `conn` answered with `value` as JSON, and halted.
