@@ -1,0 +1,35 @@
+# What the corpus's templates use: a model and components.
+
+data User = (id: Int, name: String, email: String)
+
+# A panel: a section with a heading, the content, and a footer when given.
+class Panel
+  include Bezel::Component
+  @title: String
+  @class_name: String?
+  @footer: Bezel::Html
+
+  def initialize(@title: String, @class_name: String? = nil, @footer: Bezel::Html = Bezel::Html.empty); end
+
+  def render(h: Bezel::HtmlBuilder, content: Bezel::Html) -> Void
+    h.section(class_name: ["panel", @class_name]) do
+      h.h2(@title)
+      h.append(content)
+      h.footer { h.append(@footer) } unless @footer.empty?
+    end
+  end
+end
+
+module Ui
+  # A badge.
+  class Badge
+    include Bezel::Component
+    @label: String
+
+    def initialize(@label: String); end
+
+    def render(h: Bezel::HtmlBuilder, content: Bezel::Html) -> Void
+      h.span(@label, class_name: "badge")
+    end
+  end
+end

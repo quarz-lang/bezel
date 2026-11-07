@@ -1,0 +1,8 @@
+{@args name: String, items: Array[String]}
+<!-- A greeting. -->
+<h1 class="title">Hello, {name}!</h1>
+<p>Tom &amp; Jerry say {"<hi>"}.</p>
+<ul :if={!items.empty?}>
+  <li :for={item <- items}>{item}</li>
+</ul>
+<p :if={items.empty?}>Nothing yet.</p>

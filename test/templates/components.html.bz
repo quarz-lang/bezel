@@ -1,0 +1,12 @@
+{@args user: User, notes: Array[String]}
+<.panel title={user.name} class="wide">
+  <p>{user.email}</p>
+  <:footer>
+    <a href={"/users/#{user.id}"}>Edit</a>
+  </:footer>
+</.panel>
+<.ui.badge label="new" />
+<.panel title="Notes">
+  <p :for={n <- notes} :if={!n.empty?}>{n}</p>
+</.panel>
+<.panel :for={{n, i} <- notes.each_with_index.to_a} title={"Note #{i.to_s}"}>{n}</.panel>

@@ -18,7 +18,7 @@ parameters, plugs, endpoints, configuration, error pages, `Bezel.start`,
 the built-in plugs, the router and controllers, and the HTML DSL with
 forms over rotor's changesets, sessions, the flash, CSRF protection,
 secure headers, host authorization, password hashes and signed tokens,
-and test helpers. Templates and the `bezel` command come next.
+test helpers, and the template compiler. The `bezel` command comes next.
 
 ```ruby
 class Shop::Endpoint < Bezel::Endpoint
@@ -151,6 +151,36 @@ end
   plug sets it) and `_method`, name their fields `user[email]`, and show
   the input as typed for a field with errors. `link`'s `confirm:` writes
   `data-confirm` for the application's script.
+
+Templates are HTML with Quarz expressions (`*.html.bz`), compiled ahead
+of time into DSL code (`Bezel::Templates`; `bezel templates` writes
+`src/views/generated/`, committed, with each template's digest in the
+header). Nothing is interpreted at run time and the generated code is
+type-checked and escaped as hand-written DSL code is:
+
+```html
+{@args conn: Bezel::Conn, users: Array[User], banner: String}
+<h1 class="title">Users</h1>
+<ul :if={!users.empty?}>
+  <li :for={u <- users}><a href={Shop::Router.user_path(id: u.id)}>{u.name}</a></li>
+</ul>
+<.card title="Help">{users.size} users.<:footer>{raw(banner)}</:footer></.card>
+```
+
+- `{expr}` writes a value escaped (a `Bezel::Html` as it is, nil as
+  nothing); `{raw(expr)}`, like `Bezel::Html.raw` in the code, writes a
+  string unescaped, and nothing else does.
+- `:for={pattern <- expr}` and `:if={expr}` repeat or guard an element;
+  `<.card>` is a component (`Card.new(title: "Help")`, the content its
+  `content`), `<:footer>` a slot (a `footer:` argument, a `Bezel::Html`).
+- Code in braces is one expression the compiler can delimit as Quarz
+  will: `/` and `%` are operators with a space on each side
+  (`a.size / 2`) or start a literal after `(`, `[`, a comma, the
+  opening brace, or a spaced `=~`, `=`, `=>`, `&&`, `||` or keyword
+  argument (`gsub(/\s/, "")`, `s =~ /x/`); no `#` comments or heredocs.
+- An unknown element or attribute, a boolean attribute given a string,
+  an unclosed tag: an error naming the template's line. `<!-- -->` is
+  a comment of the template, left out of the page.
 
 A browser pipeline adds sessions and protection:
 

@@ -109,6 +109,16 @@ class HtmlBuilder
     nil
   end
 
+  # Writes `value` as a template's `{expr}` does: `Html` as it is, nil
+  # as nothing, anything else as its `to_s`, escaped.
+  def put(value: Object?) -> Void
+    case value
+    when Html then append(value)
+    when nil then nil
+    else text(value.to_s)
+    end
+  end
+
   # Writes `html` as it is: `Html` is safe already.
   def append(html: Html) -> Void
     @out << html.source
