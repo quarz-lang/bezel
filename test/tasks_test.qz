@@ -56,6 +56,16 @@ class TasksTest < Test::Case
     Bezel::Config.load("tk", environ: env)
   end
 
+  # Drops what the migrations made at `url`.
+  def drop(url: String) -> Void
+    c = PG.connect(url)
+    begin
+      c.exec("DROP TABLE IF EXISTS tk_items, schema_migrations, other_versions")
+    ensure
+      c.close
+    end
+  end
+
   def test_routes
     status, out = run_main(["routes"])
     assert_equal(0, status)
@@ -80,6 +90,9 @@ class TasksTest < Test::Case
 
   def test_migrate_status_rollback
     PG::Testing.with_cluster do |url|
+      # (PG_TEST_URL's server is shared, and kept between runs: the tables
+      # are dropped before and after.)
+      drop(url)
       c = config(url)
       status, out = run_main(["status"], c)
       assert_equal(0, status)
@@ -98,6 +111,7 @@ class TasksTest < Test::Case
       assert_equal(["pending 20261108000001  TkCreateItems", "pending 20261108000002  TkAddSize"], run_main(["status"], c)[1].lines.map(&:chomp))
       assert_equal(["up      20261108000001  TkCreateItems", "up      20261108000002  TkAddSize"],
                    run_main(["status", "--table", "other_versions"], c)[1].lines.map(&:chomp))
+      drop(url)
     end
   rescue PG::Testing::Unavailable => e
     omit(e.message)
