@@ -57,7 +57,10 @@
 # slot's (but inside `pre` and `textarea`).
 #
 # An expression's code goes in the generated code as written, in
-# parentheses, so it is one expression without `#` comments; the
+# parentheses, so it is one expression without `#` comments, heredocs,
+# lines starting with `__END__` or `=begin`, or a `/` or `%` after a
+# name with a space before it and none after (`a /b`, which Quarz may
+# read as a call's argument): the compiler must see where it ends. The
 # generated code names the builder `h` and the slots' contents
 # `__bz_slot_<n>`, which the template's own names avoid.
 #
@@ -191,6 +194,11 @@ module Templates
         code = digits.size > 7 ? -1 : digits.to_i(hex ? 16 : 10)
         unless code > 0 && code <= 0x10FFFF && !(code >= 0xD800 && code <= 0xDFFF)
           raise Templates::Error.new(path, line, "#{ref} is not a character")
+        end
+        # (HTML reads &#128;-&#159; as windows-1252, and keeps &#13; a CR
+        # that a literal one would not stay: write the character.)
+        if (code < 0x20 && code != 9 && code != 10) || (code >= 0x7f && code <= 0x9f)
+          raise Templates::Error.new(path, line, "#{ref} is a control character (write the character meant)")
         end
         code.chr
       else
@@ -428,8 +436,12 @@ class Templates::Parser
     line = @line
     close = Templates::Parser.matching(@cs, @i)
     fail(line, "a # comment cannot be in {...}") if close == -2
+    fail(line, "a / or % after a name, with a space before it and none after, is ambiguous in {...} (write `a / b`, or `f(/x/)`)") if close == -3
+    fail(line, "a heredoc cannot be in {...} (write `<< x` with a space for the operator)") if close == -4
     fail(line, "{ is not closed (a { in a text is written {\"{\"})") if close < 0
     code = @cs[(@i + 1)...close].join.strip
+    # (Lines that end a file's code or start a comment block.)
+    fail(line, "__END__ or =begin cannot start a line in {...}") if code.match?(/(\A|\n)[ \t]*(__END__|=begin)/)
     advance(close + 1 - @i)
     fail(line, "{} holds no expression") if code.empty?
     code
@@ -446,9 +458,12 @@ class Templates::Parser
   end
 
   # The index of the bracket closing the one (`{`, `(` or `[`) at `open`
-  # in `cs`, skipping strings and regular expressions and the brackets
-  # they hold (`"}"`, `/}/`, and `#{...}` in them), or -1; -2 at a `#`
-  # comment.
+  # in `cs`, skipping strings, regular expressions and percent literals
+  # and the brackets they hold (`"}"`, `/}/`, and `#{...}` in them), or
+  # -1; -2 at a `#` comment, -3 at a `/` or `%` the Quarz lexer could
+  # read either way, -4 at a heredoc. (What the scanner cannot read as
+  # Quarz's lexer does is refused: else code could run on past the
+  # braces, into the generated code of the template's text.)
   def self.matching(cs: Array[String], open: Int) -> Int
     stack = [cs[open]? || ""]
     j = open + 1
@@ -468,16 +483,15 @@ class Templates::Parser
       when "\"", "'"
         j = Templates::Parser.string_end(cs, j)
         return j if j < 0
-      when "/"
-        if Templates::Parser.regexp_start?(cs, j, prev)
-          j = Templates::Parser.string_end(cs, j)
+      when "/", "%"
+        how = Templates::Parser.slash(cs, j, prev)
+        return -3 if how == :ambiguous
+        if how == :literal
+          j = c == "/" ? Templates::Parser.string_end(cs, j) : Templates::Parser.percent_end(cs, j)
           return j if j < 0
         end
-      when "%"
-        if Templates::Parser.regexp_start?(cs, j, prev)
-          j = Templates::Parser.percent_end(cs, j)
-          return j if j < 0
-        end
+      when "<"
+        return -4 if cs[j + 1]? == "<" && (cs[j + 2]? || "").match?(/\A[~\-"'`A-Za-z_]\z/)
       when "#" then return -2
       end
       prev = cs[j] unless cs[j].match?(/\A\s\z/)
@@ -486,20 +500,43 @@ class Templates::Parser
     -1
   end
 
-  # Whether the `/` (or `%`) at `j` starts a regular expression (or a
-  # percent literal): after an operator, an opening bracket, a comma or
-  # a keyword; not after a value (`a / b`, `n /2`: a call without
-  # parentheses, `gsub /x/`, is not read) nor in a symbol (`:/`).
-  def self.regexp_start?(cs: Array[String], j: Int, prev: String) -> Bool
-    return false if cs[j - 1]? == ":" && (j < 2 || cs[j - 2] != ":")
-    return true if prev.match?(/\A[(\[{,=!&|?:;+\-*%<>~^]\z/)
-    return false unless prev.match?(/\A[A-Za-z0-9_]\z/)
+  # Keywords after which a `/` or `%` starts a literal.
+  KEYWORDS = ["if", "unless", "and", "or", "not", "when", "in", "return", "while", "until", "then", "else",
+              "elsif", "do", "case", "yield", "break", "next"]
+
+  # How the Quarz lexer reads the `/` (or `%`) at `j`: `:literal` (a
+  # regular expression or percent literal: after an operator, an opening
+  # bracket, a comma, a label or a keyword), `:operator` (after a value,
+  # or in a symbol `:/`), or `:ambiguous` (after a name, with a space
+  # before and none after: a call's argument unless the name is a local,
+  # which only the checker knows).
+  def self.slash(cs: Array[String], j: Int, prev: String) -> Symbol
+    if cs[j - 1]? == ":"
+      before = j >= 2 ? cs[j - 2] : ""
+      # (`a:/x/` is a label then a literal; `:/` a symbol.)
+      return before.match?(/\A[A-Za-z0-9_]\z/) ? :literal : :operator
+    end
+    name_end = prev.match?(/\A[A-Za-z0-9_]\z/)
+    if (prev == "?" || prev == "!")
+      # (A method name's `?` or `!` (`a.empty? / 2`), or an operator.)
+      k = j - 1
+      k -= 1 while k >= 0 && cs[k].match?(/\A\s\z/)
+      name_end = k >= 1 && cs[k - 1].match?(/\A[A-Za-z0-9_]\z/)
+      return :literal unless name_end
+    end
+    return :literal if prev.match?(/\A[(\[{,=!&|?:;+\-*%<>~^]\z/) && !name_end
+    return :operator unless name_end
     k = j - 1
     k -= 1 while k >= 0 && cs[k].match?(/\A\s\z/)
+    k -= 1 if k >= 0 && (cs[k] == "?" || cs[k] == "!")
     e = k
     k -= 1 while k >= 0 && cs[k].match?(/\A[A-Za-z0-9_]\z/)
-    return false if k >= 0 && (cs[k] == "." || cs[k] == "@")
-    ["if", "unless", "and", "or", "not", "when", "in", "return", "while", "until"].include?(cs[(k + 1)..e].join)
+    word = cs[(k + 1)..e].join
+    return :literal if KEYWORDS.include?(word)
+    return :operator if word.match?(/\A[0-9A-Z]/) || (k >= 0 && cs[k] == "@")
+    spaced_before = cs[j - 1]?.to_s.match?(/\A\s\z/)
+    spaced_after = (cs[j + 1]? || " ").match?(/\A\s\z/)
+    spaced_before && !spaced_after ? :ambiguous : :operator
   end
 
   # The index of the delimiter closing the percent literal (`%q(...)`,
@@ -507,7 +544,14 @@ class Templates::Parser
   # itself when it is not one (a `%` operator).
   def self.percent_end(cs: Array[String], open: Int) -> Int
     j = open + 1
-    j += 1 if (cs[j]? || "").match?(/\A[qQwWiIrs]\z/)
+    letter = cs[j]? || ""
+    if letter.match?(/\A[qQwir]\z/)
+      j += 1
+    else
+      letter = ""
+    end
+    # (`%Q`, `%r` and `%(...)` interpolate.)
+    interpolates = letter == "Q" || letter == "r" || letter == ""
     d = cs[j]? || ""
     return open unless d.match?(/\A[^A-Za-z0-9\s]\z/)
     closer = {"(" => ")", "[" => "]", "{" => "}", "<" => ">"}[d]? || d
@@ -519,7 +563,10 @@ class Templates::Parser
         j += 2
         next
       end
-      if c == closer
+      if interpolates && c == "#" && cs[j + 1]? == "{"
+        j = Templates::Parser.matching(cs, j + 1)
+        return j if j < 0
+      elsif c == closer
         depth -= 1
         return j if depth == 0
       elsif c == d
@@ -595,7 +642,12 @@ class Templates::Parser
       if key.start_with?(":")
         fail(a.line, "#{key} takes an expression ({...})") unless a.code
         case key
-        when ":for" then for_code = a.value
+        when ":for"
+          f = a.value || ""
+          parts = f.partition(" <- ")
+          fail(a.line, ":for is written {pattern <- expr}") if parts[1].empty? || parts[0].strip.empty? || parts[2].strip.empty?
+          fail(a.line, ":for cannot name a variable `h` (the builder's name)") if parts[0].match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
+          for_code = f
         when ":if" then if_code = a.value
         else fail(a.line, "#{key} is not a special attribute (:for, :if)")
         end
@@ -662,9 +714,13 @@ class Templates::Parser
     # (`</scripts>` is not one here, but the DSL takes no chance), and a
     # script's `<!--` or `<script`, which hide its end tag.)
     low = t.downcase
-    fail(line, "a <#{tag}> cannot hold </#{tag}") if low.include?("</#{tag}")
+    at = low.index("</#{tag}")
+    fail(line + low[0, at].count("\n"), "a <#{tag}> cannot hold </#{tag}") if at
     if tag == "script"
-      ["<!--", "<script"].each { |bad| fail(line, "a <script> cannot hold #{bad}: it hides its end tag") if low.include?(bad) }
+      ["<!--", "<script"].each do |bad|
+        k = low.index(bad)
+        fail(line + low[0, k].count("\n"), "a <script> cannot hold #{bad}: it hides its end tag") if k
+      end
     end
     end_tag(tag)
     Templates::Node.new(:text, t, line)
@@ -773,10 +829,9 @@ class Templates::Generator
       d = depth
       f = n.for_code
       if f
+        # (Checked by the parser.)
         parts = f.partition(" <- ")
-        fail(n.line, ":for is written {pattern <- expr}") if parts[1].empty? || parts[0].strip.empty? || parts[2].strip.empty?
         pattern = parts[0].strip
-        fail(n.line, ":for cannot name a variable `h` (the builder's name)") if pattern.match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
         pattern = pattern[1, pattern.size - 2] if pattern.start_with?("{") && pattern.end_with?("}")
         list = parts[2].strip
         emit(d, "#{Templates::Generator.paren(list)}.each do |#{pattern}|#{at(n.line)}")
