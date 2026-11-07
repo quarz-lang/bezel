@@ -3,7 +3,8 @@
 #   quarz run tools/gen_elements.qz > src/html/elements.qz
 #
 # Each element has its own attributes (below: name, then kind: s a string,
-# u a URL, d a URL that may be `data:image/...`, i an integer, b a boolean)
+# u a URL, d a URL that may be `data:image/...`, x a srcset, m a meta's content,
+# i an integer, b a boolean)
 # and the global ones. A void element takes no content; a normal one takes
 # a text (escaped) or an optional block; `script` and `style` take raw text.
 
@@ -12,7 +13,7 @@ RAW = %w[script style]
 NORMAL = %w[a abbr address article aside audio b bdi bdo blockquote body button canvas caption cite code
             colgroup data datalist dd del details dfn dialog div dl dt em fieldset figcaption figure footer
             form h1 h2 h3 h4 h5 h6 head header hgroup html i iframe ins kbd label legend li main mark menu
-            meter nav noscript object ol optgroup option output p picture pre progress q rp rt ruby s samp
+            map meter nav noscript object ol optgroup option output p picture pre progress q rp rt ruby s samp
             search section select slot small span strong sub summary sup table tbody td template textarea
             tfoot th thead time title tr u ul var video]
 
@@ -31,13 +32,14 @@ SPECIFIC = {
   "embed" => "src:u type:s width:i height:i",
   "fieldset" => "disabled:b name:s form:s",
   "form" => "action:u method:s enctype:s target:s novalidate:b autocomplete:s accept_charset:s",
-  "iframe" => "src:u srcdoc:s name:s width:i height:i allow:s loading:s sandbox:s referrerpolicy:s",
-  "img" => "src:d alt:s width:i height:i srcset:s sizes:s loading:s decoding:s",
+  "iframe" => "src:u name:s width:i height:i allow:s loading:s sandbox:s referrerpolicy:s",
+  "img" => "src:d alt:s width:i height:i srcset:x sizes:s loading:s decoding:s",
   "input" => "type:s name:s value:s placeholder:s required:b disabled:b readonly:b checked:b multiple:b autofocus:b min:s max:s step:s minlength:i maxlength:i pattern:s autocomplete:s form:s list:s size:i accept:s",
   "label" => "for:s form:s",
   "li" => "value:i",
   "link" => "rel:s href:u type:s media:s sizes:s crossorigin:s integrity:s as:s",
-  "meta" => "name:s content:s charset:s http_equiv:s property:s",
+  "meta" => "name:s content:m charset:s http_equiv:s property:s",
+  "map" => "name:s",
   "meter" => "value:s min:s max:s low:s high:s optimum:s",
   "object" => "type:s width:i height:i",
   "ol" => "start:i reversed:b type:s",
@@ -47,7 +49,7 @@ SPECIFIC = {
   "progress" => "value:s max:s",
   "script" => "src:u type:s async:b defer:b nomodule:b crossorigin:s integrity:s nonce:s",
   "select" => "name:s multiple:b required:b disabled:b size:i form:s autocomplete:s",
-  "source" => "src:u type:s srcset:s sizes:s media:s",
+  "source" => "src:u type:s srcset:x sizes:s media:s",
   "style" => "media:s nonce:s",
   "td" => "colspan:i rowspan:i headers:s",
   "th" => "colspan:i rowspan:i headers:s scope:s abbr:s",
@@ -91,6 +93,8 @@ def body_of(tag: String) -> String
     when "i" then ".int(\"#{html_name}\", #{name})"
     when "u" then ".url(\"#{html_name}\", #{name})"
     when "d" then ".url(\"#{html_name}\", #{name}, true)"
+    when "x" then ".srcset(\"#{html_name}\", #{name})"
+    when "m" then ".meta_content(#{name})"
     else ".str(\"#{html_name}\", #{name})"
     end
   end

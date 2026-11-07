@@ -1,5 +1,5 @@
 # HTML that is safe to send: what `Bezel.html` builds, every text in it
-# escaped. A value: it is concatenated with `+`, put in another page
+# escaped. (`Html.new(source)` is `Html.raw`: the caller vouches.) A value: it is concatenated with `+`, put in another page
 # with `HtmlBuilder#append`, and sent with `Conn#html` or a controller's
 # `render`.
 #
@@ -73,11 +73,18 @@ end
 # ones (`id:`, `css:` for `class`, `style:`, `title:`, `lang:`, `dir:`,
 # `hidden:`, `tabindex:`, `role:`, `data:` for `data-*`, `aria:` for
 # `aria-*`, and `attrs:` for any other). A `String` attribute is escaped,
-# nil leaves it out, `true` writes a boolean attribute and `false` none.
-# A URL attribute (`href`, `src`, `action`, `formaction`, `cite`,
-# `poster`) must be relative or of the schemes http, https, mailto or tel
-# (`data:` for `img`'s `src`): another (`javascript:`) is an
-# `ArgumentError`.
+# nil leaves it out, `true` writes a boolean attribute and `false` none;
+# an attribute given twice is an `ArgumentError`. A URL attribute
+# (`href`, `src`, `action`, `formaction`, `cite`, `poster`, a `srcset`'s
+# candidates, a meta refresh's `url=`, and those names and the other
+# URL attributes of `AttrList::URL_NAMES` in `attrs:`) must be relative
+# or of the schemes http, https, mailto or tel (`data:image/` for
+# images): another (`javascript:`) is an `ArgumentError`. `srcdoc` is
+# refused. A `style` is escaped but not checked: do not build one from
+# input.
+#
+# A form or link carries a CSRF token only when the builder has one:
+# `Bezel.html(conn)`, with the CSRF plug (bezel#6) setting it.
 class HtmlBuilder
   include Unshareable
   include DslScope
@@ -129,13 +136,21 @@ class HtmlBuilder
   # The HTML the block writes, as `Html`, without writing it here.
   def capture(&block: () -> Void) -> Html
     saved = @out.to_s
-    block.call
-    inner = @out.to_s
-    @out << saved
+    inner = ""
+    begin
+      block.call
+    ensure
+      # (What the block wrote is the capture's; the page before it comes
+      # back, also when the block raises.)
+      inner = @out.to_s
+      @out << saved
+    end
     Html.new(inner)
   end
 
-  # A link: `<a href="to">text</a>` for GET. For another method
+  # A link: `<a href="to">text</a>` for GET. `confirm` writes
+  # `data-confirm` for the application's script to ask with (bezel
+  # ships none). For another method
   # (`:post`, `:put`, `:patch`, `:delete`), a form posting to `to` with a
   # button labelled `text`, carrying `_method` (`Plug::MethodOverride`)
   # and the CSRF token: a link cannot send another method, and a GET
@@ -143,7 +158,7 @@ class HtmlBuilder
   def link(text: String, *, to: String, method: Symbol = :get, css: (String | Array[String?])? = nil,
            confirm: String? = nil) -> Void
     if method == :get
-      a(text, href: to, css: css)
+      a(text, href: to, css: css, data: confirm ? {"confirm" => confirm} : Hash[String, String].new)
     else
       verb = method.to_s.upcase
       raise ArgumentError.new("link method: :get, :post, :put, :patch or :delete, not #{method.inspect}") unless ["POST", "PUT", "PATCH", "DELETE"].include?(verb)
@@ -218,6 +233,9 @@ class HtmlBuilder
   # :nodoc:
   def tag_text(tag: String, attrs: AttrList, content: String) -> Void
     open_tag(tag, attrs)
+    # (The parser drops a newline right after `<textarea>` or `<pre>`: one
+    # more keeps the content's own.)
+    @out << "\n" if (tag == "textarea" || tag == "pre" || tag == "listing") && content.start_with?("\n")
     text(content)
     close_tag(tag)
   end
@@ -231,10 +249,14 @@ class HtmlBuilder
 
   # :nodoc:
   # `<script>` and `<style>` hold raw text: `content` must not close
-  # them (`</script`, case-insensitive), or the rest would be HTML.
+  # them (`</script`, case-insensitive), nor hold `<!--` or `<script`,
+  # after which a script element's end tag no longer ends it (the
+  # tokenizer's escaped states), or the rest of the page would change
+  # meaning. JSON for a script escapes `<` as `\u003c`.
   def tag_raw_text(tag: String, attrs: AttrList, content: String) -> Void
-    if content.downcase.include?("</#{tag}")
-      raise ArgumentError.new("the content of <#{tag}> holds </#{tag}: it would end the element")
+    low = content.downcase
+    ["</#{tag}", "<!--", "<script"].each do |bad|
+      raise ArgumentError.new("the content of <#{tag}> holds #{bad}: it could end the element or hide its end") if low.include?(bad)
     end
     open_tag(tag, attrs)
     raw(content)
@@ -249,16 +271,60 @@ class AttrList
   include Unshareable
 
   @buf: String::Builder = String::Builder.new
+  var @names: Array[String] = []
 
   def initialize; end
+
+  # The attributes holding a URL, which `attrs:` checks as the typed ones
+  # are (`HtmlBuilder.check_url`).
+  URL_NAMES = ["href", "src", "action", "formaction", "data", "poster", "cite", "xlink:href", "background",
+               "ping", "manifest", "codebase", "longdesc", "usemap", "icon", "lowsrc", "dynsrc"]
+
+  # Attributes `attrs:` refuses: `srcdoc` is a document, run with the
+  # page's origin, which no escaping makes safe.
+  REFUSED = ["srcdoc"]
 
   # The attributes as HTML (each with a leading space).
   def source -> String = @buf.to_s
 
   # `name="value"`, or nothing for nil.
   def str(name: String, value: String?) -> AttrList
-    @buf << " " << name << "=\"" << Html.escape(value) << "\"" if value
+    if value
+      seen(name)
+      @buf << " " << name << "=\"" << Html.escape(value) << "\""
+    end
     self
+  end
+
+  # `srcset` (`url 1x, url 2x`): each candidate's URL checked.
+  def srcset(name: String, value: String?) -> AttrList
+    v = value
+    if v
+      v.split(",").each do |cand|
+        url = cand.strip.split(/\s+/).first? || ""
+        HtmlBuilder.check_url(name, url, true) unless url.empty?
+      end
+    end
+    str(name, v)
+  end
+
+  # A `<meta>`'s `content`: a refresh's `url=` checked as a URL.
+  def meta_content(value: String?) -> AttrList
+    v = value
+    if v
+      m = v.match(/url\s*=\s*['"]?([^'"]*)/i)
+      HtmlBuilder.check_url("content", (m[1] || "").strip) if m
+    end
+    str("content", v)
+  end
+
+  # :nodoc:
+  # Refuses an attribute given twice (`id:` and `attrs: {"id" => ...}`):
+  # browsers keep the first, which may not be the one meant.
+  def seen(name: String) -> Void
+    key = name.downcase
+    raise ArgumentError.new("attribute #{name} is given twice") if @names.include?(key)
+    @names = @names.push(key)
   end
 
   # A URL attribute (`HtmlBuilder.check_url`).
@@ -272,7 +338,10 @@ class AttrList
 
   # `name` for true, nothing for false.
   def bool(name: String, value: Bool) -> AttrList
-    @buf << " " << name if value
+    if value
+      seen(name)
+      @buf << " " << name
+    end
     self
   end
 
@@ -291,7 +360,18 @@ class AttrList
     int("tabindex", tabindex).str("role", role)
     data.each { |k, v| str("data-#{AttrList.name!(k)}", v) }
     aria.each { |k, v| str("aria-#{AttrList.name!(k)}", v) }
-    attrs.each { |k, v| str(AttrList.name!(k), v) }
+    attrs.each do |k, v|
+      n = AttrList.name!(k)
+      low = n.downcase
+      raise ArgumentError.new("#{n}: refused (a document of its own runs with the page's origin)") if REFUSED.include?(low)
+      if URL_NAMES.include?(low)
+        url(n, v)
+      elsif low == "srcset" || low == "imagesrcset"
+        srcset(n, v)
+      else
+        str(n, v)
+      end
+    end
     self
   end
 

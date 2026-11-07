@@ -207,4 +207,46 @@ class HtmlTest < Test::Case
     assert(out.success?)
     assert_equal(File.read("src/html/elements.qz"), out.stdout, "src/html/elements.qz is stale: run `quarz run tools/gen_elements.qz > src/html/elements.qz`")
   end
+
+  def test_review_fixes
+    # URLs given through attrs: are checked; srcdoc is refused.
+    assert_raise(ArgumentError) { page { |h| h.a("x", attrs: {"href" => "javascript:alert(1)"}) } }
+    assert_raise(ArgumentError) { page { |h| h.input(type: "submit", attrs: {"formaction" => "javascript:x"}) } }
+    assert_raise(ArgumentError) { page { |h| h.object(attrs: {"data" => "javascript:x"}) } }
+    assert_raise(ArgumentError) { page { |h| h.div(attrs: {"xlink:href" => "javascript:1"}) } }
+    assert_raise(ArgumentError) { page { |h| h.iframe(attrs: {"srcdoc" => "<p>x</p>"}) } }
+    assert_equal("<a href=\"/ok\">x</a>", page { |h| h.a("x", attrs: {"href" => "/ok"}) })
+    # srcset candidates and a meta refresh are checked too.
+    assert_raise(ArgumentError) { page { |h| h.img(srcset: "/a.png 1x, javascript:alert(1) 2x") } }
+    assert_equal("<img srcset=\"/a.png 1x, /b.png 2x\">", page { |h| h.img(srcset: "/a.png 1x, /b.png 2x") })
+    assert_raise(ArgumentError) { page { |h| h.meta(http_equiv: "refresh", content: "0;url=javascript:alert(1)") } }
+    assert_equal("<meta content=\"5; url=/next\" http-equiv=\"refresh\">", page { |h| h.meta(http_equiv: "refresh", content: "5; url=/next") })
+    # An attribute given twice is refused.
+    assert_raise(ArgumentError) { page { |h| h.div(id: "a", attrs: {"ID" => "b"}) } }
+    # Raw text cannot hide its end tag.
+    assert_raise(ArgumentError) { page { |h| h.script("<!--<script>") } }
+    # A leading newline in a textarea or pre survives the parser.
+    assert_equal("<textarea>\n\nhello</textarea>", page { |h| h.textarea("\nhello") })
+    assert_equal("<pre>x</pre>", page { |h| h.pre("x") })
+    # capture restores the page when its block raises.
+    out = Bezel.html do |h|
+      h.p("before")
+      begin
+        h.capture { h.span("in"); raise ArgumentError.new("x") }
+      rescue ArgumentError
+      end
+      h.p("after")
+    end
+    assert_equal("<p>before</p><p>after</p>", out.to_s)
+    # confirm on a GET link.
+    assert_equal("<a href=\"/x\" data-confirm=\"Sure?\">x</a>", page { |h| h.link("x", to: "/x", confirm: "Sure?") })
+    assert_equal("<map name=\"m\"></map>", page { |h| h.map(name: "m") })
+  end
+
+  def test_form_shows_changes_and_input_only_where_it_failed
+    cs = HtUser.registration({"name" => "ann", "email" => "a@b.c", "evil" => "x"}).put_change(:name, "ANN")
+    out = Bezel.html { |h| h.form_for(cs, action: "/u") { |f| f.text_field(:name); f.text_field(:evil) } }.to_s
+    assert_true(out.include?("value=\"ANN\""))
+    assert_false(out.include?("value=\"x\""))
+  end
 end

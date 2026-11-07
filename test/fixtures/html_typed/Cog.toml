@@ -1,4 +1,4 @@
-# A program `quarz check` refuses (test/router_test.qz): an element given a misspelt attribute, and one of the wrong type. It is
+# A program `quarz check` refuses (test/html_test.qz): an element given a misspelt attribute, and one of the wrong type. It is
 # checked against this checkout of bezel.
 [cog]
 name = "html_typed"

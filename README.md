@@ -141,10 +141,15 @@ end
 - A misspelt attribute or one of the wrong type is a compile error;
   `attrs:` passes others (event handlers `on...` are refused), `data:`
   and `aria:` the `data-*` and `aria-*` ones.
-- URL attributes refuse `javascript:` and other schemes than http,
-  https, mailto and tel (relative URLs are fine).
-- Forms carry the CSRF token and `_method`, name their fields
-  `user[email]`, and show the input as typed when it did not cast.
+- URL attributes, typed or given in `attrs:` (and `srcset`, a meta
+  refresh), refuse `javascript:` and other schemes than http, https,
+  mailto and tel (relative URLs are fine); `srcdoc` is refused; `<script>`
+  and `<style>` refuse content that could end them. A `style` is escaped
+  but not checked: do not build one from input.
+- Forms carry the CSRF token (from `Bezel.html(conn)`, once the CSRF
+  plug sets it) and `_method`, name their fields `user[email]`, and show
+  the input as typed for a field with errors. `link`'s `confirm:` writes
+  `data-confirm` for the application's script.
 
 An endpoint is tested without a socket:
 

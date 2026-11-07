@@ -1,8 +1,9 @@
 # Writes the fields of a form over a rotor changeset (`HtmlBuilder#form_for`):
 # each field is named `<prefix>[<field>]` (`user[email]`), with the id
-# `<prefix>_<field>`, and shows the value the changeset holds: the input
-# as given (so that a value that did not cast shows again), else the
-# change, else the model's. `errors` writes the changeset's errors on a
+# `<prefix>_<field>`, and shows the value the changeset holds: its
+# change, else the model's; for a permitted field with errors, the input
+# as given (so that a value that did not cast, or failed a validation,
+# shows as typed). `errors` writes the changeset's errors on a
 # field.
 #
 # ```
@@ -162,17 +163,24 @@ class FormBuilder
   def self.humanize(field: Symbol) -> String = field.to_s.gsub("_", " ").capitalize
 
   # :nodoc:
-  # What a form shows of each field: the input as given, else the value
-  # the changeset would give the model.
+  # What a form shows of each field: the value the changeset would give
+  # the model, or, for a permitted field with errors, the input as given.
   def self.values_of[M <: Rotor::Model](cs: Rotor::Changeset[M]) -> Hash[Symbol, String]
     out: Hash[Symbol, String] = {}
     cs.data.to_h.each do |k, v|
       s = FormBuilder.show(cs.get_field(k))
       out = out.put(k, s) if s
     end
-    cs.params.each do |k, v|
+    cs.changes.each do |k, v|
       s = FormBuilder.show(v)
-      out = out.put(k.to_sym, s) if s
+      out = s ? out.put(k, s) : out.delete(k)
+    end
+    failed = cs.errors.map(&:field)
+    cs.permitted.each do |f|
+      next unless failed.include?(f)
+      key = f.to_s
+      next unless cs.params.key?(key)
+      out = out.put(f, FormBuilder.show(cs.params[key]?) || "")
     end
     out
   end
