@@ -85,7 +85,10 @@ data Conn(
   started: Duration,
   # The exception a plug raised, which stopped the pipeline
   # (`Plug.run`): the endpoint answers it with `Bezel::ErrorPage`.
-  error: StandardError? = nil
+  error: StandardError? = nil,
+  # The response's format `Plug::Accepts` chose (`:html`, `:json`), or
+  # nil.
+  format: Symbol? = nil
 )
   # A connection for `req` in `app`, its parameters those of the query
   # (`Bezel::BadRequest` when it does not decode).
@@ -110,6 +113,15 @@ data Conn(
 
   # The configuration.
   def config -> Config = app.config
+
+  # A repository over the application's database pool: `Bezel::ConfigError`
+  # when the application has none (no DATABASE_URL). Cheap: the pool is
+  # the application's, the repository a view of it.
+  def repo -> Rotor::Repo
+    pool = app.pool
+    raise ConfigError.new("#{config.app} has no database: set DATABASE_URL") if pool.nil?
+    Rotor::Repo.new(pool: pool)
+  end
 
   # Whether a plug stopped the pipeline.
   def halted? -> Bool = halted

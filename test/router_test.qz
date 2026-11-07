@@ -1,0 +1,208 @@
+require "test"
+
+class RtUsers < Bezel::Controller
+  controller do
+    plug :load_user, only: [:show, :edit, :update, :delete]
+    plug :require_admin, except: [:index, :show]
+  end
+
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "users")
+  def new(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "new user")
+  def create(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "created #{conn.params["user"].fetch("name")}", status: 201)
+  def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "user #{conn.assign(:user)}")
+  def edit(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "edit #{conn.assign(:user)}")
+  def update(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "updated #{conn.assign(:user)}")
+  def delete(conn: Bezel::Conn) -> Bezel::Conn = put_status(conn, 204).send_resp(204, HTTP::Content::Empty)
+
+  private def load_user(conn: Bezel::Conn) -> Bezel::Conn
+    id = conn.params.int("id")
+    raise Bezel::NotFound.new("no user #{id}") if id > 100
+    conn.assign(:user, id)
+  end
+
+  private def require_admin(conn: Bezel::Conn) -> Bezel::Conn
+    conn.header("x-admin") == "1" ? conn : conn.text("forbidden", status: 403)
+  end
+end
+
+class RtComments < Bezel::Controller
+  controller
+
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "comments of #{conn.params.fetch("user_id")}")
+  def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "comment #{conn.params.fetch("id")} of #{conn.params.fetch("user_id")}")
+end
+
+class RtPages < Bezel::Controller
+  controller
+
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home #{conn.assign?(:piped) || "-"} #{conn.format || :none}")
+  def file(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "file #{conn.params.fetch("path")}")
+  def me(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "me")
+  def data(conn: Bezel::Conn) -> Bezel::Conn = json(conn, JSON.parse("{\"format\": \"#{conn.format}\"}"))
+end
+
+class RtRouter < Bezel::Router
+  def self.browser -> Array[Bezel::Plug]
+    [Bezel.plug { |c| c.assign(:piped, "browser") }, Bezel::Plug::Accepts.new(["html"])]
+  end
+
+  def self.api -> Array[Bezel::Plug] = [Bezel::Plug::Accepts.new(["json"])]
+
+  routes do
+    scope "/", pipeline: :browser do
+      get "/", RtPages, :home, as: "home"
+      get "/files/{path...}", RtPages, :file, as: "file"
+      get "/users/me", RtPages, :me
+      resources "/users", RtUsers do
+        resources "/comments", RtComments, only: [:index, :show]
+      end
+    end
+    scope "/api", pipeline: :api, as: "api" do
+      get "/data", RtPages, :data, as: "data"
+    end
+  end
+end
+
+class RtEndpoint < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [Bezel::Plug::Parsers.new, Bezel::Plug::MethodOverride.new, RtRouter.new]
+end
+
+class RouterTest < Test::Case
+  def text_of(res: HTTP::Server::Response) -> String
+    case res.body
+    in HTTP::Content::Text(text:) then text
+    else ""
+    end
+  end
+
+  def get(path: String, headers: Hash[String, String] = {}) -> HTTP::Server::Response
+    RtEndpoint.call(HTTP::Server::Request.get(path, HTTP::Headers.of(headers)))
+  end
+
+  def form(method: String, path: String, body: String, admin: Bool = true) -> HTTP::Server::Response
+    h = {"Content-Type" => "application/x-www-form-urlencoded"}
+    h = h.put("X-Admin", "1") if admin
+    RtEndpoint.call(HTTP::Server::Request.build(method, path, HTTP::Headers.of(h), body))
+  end
+
+  def test_table
+    names = RtRouter.route_table.map { |r| "#{r.method} #{r.pattern} #{r.name || "-"} #{r.action}" }
+    assert_equal([
+      "GET / home home",
+      "GET /files/{path...} file file",
+      "GET /users/me - me",
+      "GET /users users index",
+      "GET /users/new new_user new",
+      "POST /users users create",
+      "GET /users/{id} user show",
+      "GET /users/{id}/edit edit_user edit",
+      "PATCH /users/{id} user update",
+      "PUT /users/{id} user update",
+      "DELETE /users/{id} user delete",
+      "GET /users/{user_id}/comments user_comments index",
+      "GET /users/{user_id}/comments/{id} user_comment show",
+      "GET /api/data api_data data"
+    ], names)
+    assert_equal([:browser], RtRouter.route_table[0].pipelines)
+  end
+
+  def test_helpers
+    assert_equal("/", RtRouter.home_path)
+    assert_equal("/users", RtRouter.users_path)
+    assert_equal("/users/7", RtRouter.user_path(id: 7))
+    assert_equal("/users/a%2Fb", RtRouter.user_path(id: "a/b"))
+    assert_equal("/users/7/edit", RtRouter.edit_user_path(id: 7))
+    assert_equal("/users/new", RtRouter.new_user_path)
+    assert_equal("/users/3/comments/9", RtRouter.user_comment_path(user_id: 3, id: 9))
+    assert_equal("/files/a/b%20c.txt", RtRouter.file_path(path: "a/b c.txt"))
+    assert_equal("/api/data", RtRouter.api_data_path)
+    assert_raise(ArgumentError) { RtRouter.user_path(id: 1.5) }
+  end
+
+  def test_routing_and_pipelines
+    home = get("/")
+    assert_equal(200, home.status)
+    assert_equal("home browser html", text_of(home))
+    assert_equal("users", text_of(get("/users")))
+    assert_equal("me", text_of(get("/users/me")))
+    assert_equal("file a/b/c", text_of(get("/files/a/b/c")))
+    assert_equal("comment 9 of 3", text_of(get("/users/3/comments/9")))
+    assert_equal("comments of 3", text_of(get("/users/3/comments")))
+    data = get("/api/data", {"Accept" => "application/json"})
+    assert_equal("json", JSON.parse(text_of(data))["format"].as_s)
+    assert_equal(406, get("/api/data", {"Accept" => "text/html"}).status)
+    assert_equal(404, get("/nothing").status)
+    assert_equal(200, RtEndpoint.call(HTTP::Server::Request.head("/users")).status)
+  end
+
+  def test_controller_plugs
+    assert_equal("user 5", text_of(get("/users/5")))
+    assert_equal(404, get("/users/500").status)
+    assert_equal(403, get("/users/5/edit").status)
+    assert_equal("edit 5", text_of(get("/users/5/edit", {"X-Admin" => "1"})))
+    assert_equal(403, form("POST", "/users", "user[name]=Ann", admin: false).status)
+    created = form("POST", "/users", "user[name]=Ann")
+    assert_equal(201, created.status)
+    assert_equal("created Ann", text_of(created))
+    assert_equal("updated 5", text_of(form("POST", "/users/5", "_method=patch")))
+    assert_equal(204, form("POST", "/users/5", "_method=delete").status)
+  end
+
+  def test_method_not_allowed
+    res = RtEndpoint.call(HTTP::Server::Request.build("POST", "/users/5", HTTP::Headers.empty, ""))
+    assert_equal(405, res.status)
+    assert_equal("DELETE, GET, HEAD, PATCH, PUT", res.headers["allow"])
+  end
+
+  def test_dispatch_unknown_action
+    c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    assert_raise(Bezel::NotFound) { RtPages.new.dispatch(:nope, c) }
+    assert_raise(Bezel::NotFound) { RtPages.new.dispatch(:text, c) }
+  end
+
+  def test_builder_errors
+    assert_raise(ArgumentError) do
+      b = Bezel::RouteBuilder.new
+      b.get("/a/{x}", RtPages, :home)
+      b.get("/a/{y}", RtPages, :me)
+    end
+    assert_raise(ArgumentError) { Bezel::RouteBuilder.new.resources("/users", RtUsers, only: [:shwo]) }
+    assert_raise(ArgumentError) { Bezel::RouteBuilder.new.get("users", RtPages, :home) }
+    assert_raise(ArgumentError) do
+      b = Bezel::RouteBuilder.new
+      b.get("/a", RtPages, :home, as: "x")
+      b.get("/b", RtPages, :me, as: "x")
+    end
+  end
+
+  # (The fixtures are checked by `quarz` on the PATH, or by $QUARZ.)
+  def check(fixture: String) -> Process::Output
+    Process.sh("cd test/fixtures/#{fixture} && exec \"${QUARZ:-quarz}\" check")
+  end
+
+  def test_a_missing_action_is_a_compile_error
+    out = check("missing_action")
+    assert(!out.success?)
+    assert_match(/main\.qz:7:3: error: `routes` raised ArgumentError: GET \/about: Pages has no action `about`/, out.stderr)
+  end
+
+  def test_a_missing_pipeline_is_a_compile_error
+    out = check("missing_pipeline")
+    assert(!out.success?)
+    assert_match(/`AppRouter` has no class method `brwoser`/, out.stderr)
+  end
+
+  def test_controller_plugs_are_checked_at_compile_time
+    out = check("controller_plugs")
+    assert(!out.success?)
+    assert_match(/`Pages` has no method `requre_login`/, out.stderr)
+    assert_match(/Others: plug :check names :hom, which is not an action \(:home\)/, out.stderr)
+  end
+
+  def test_route_helpers_are_typed
+    out = check("helper_keywords")
+    assert(!out.success?)
+    assert_match(/post_item_path\(post_id: Object, id: Object\) -> String has no parameter `idd`/, out.stderr)
+    assert_match(/post_item_path\(post_id: Object, id: Object\) -> String is missing the argument `id`/, out.stderr)
+  end
+end

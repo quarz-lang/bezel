@@ -1,0 +1,13 @@
+class Pages < Bezel::Controller
+  controller
+  def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "show")
+end
+
+class AppRouter < Bezel::Router
+  routes do
+    get "/posts/{post_id}/items/{id}", Pages, :show, as: "post_item"
+  end
+end
+
+puts AppRouter.post_item_path(post_id: 1, idd: 2)
+puts AppRouter.post_item_path(post_id: 1)

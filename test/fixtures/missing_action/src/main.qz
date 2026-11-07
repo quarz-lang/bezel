@@ -1,0 +1,11 @@
+class Pages < Bezel::Controller
+  controller
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+end
+
+class AppRouter < Bezel::Router
+  routes do
+    get "/", Pages, :home
+    get "/about", Pages, :about
+  end
+end

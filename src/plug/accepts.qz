@@ -1,0 +1,103 @@
+# Chooses the response's format among `formats` (`["html", "json"]`) and
+# sets `Conn#format` (`:html`): the `_format` parameter when there is
+# one, else the request's Accept (its media ranges by their quality;
+# `*/*` or no Accept takes the first of `formats`). A request that
+# accepts none of them, or names another `_format`, is
+# `Bezel::NotAcceptable` (`406`).
+#
+# The formats and their media types: `html` (`text/html`), `json`
+# (`application/json`), `text` (`text/plain`), `xml` (`application/xml`
+# and `text/xml`), `csv` (`text/csv`).
+#
+# ```
+# req = HTTP::Server::Request.get("/", HTTP::Headers.of({"Accept" => "application/json, text/html;q=0.5"}))
+# Bezel::Plug::Accepts.new(["html", "json"]).call(Bezel::Conn.build(req)).format   # => :json
+# ```
+class Plug::Accepts
+  include Plug
+
+  @formats: Array[String]
+
+  # The media types of the formats known.
+  TYPES = {
+    "html" => ["text/html", "application/xhtml+xml"], "json" => ["application/json"],
+    "text" => ["text/plain"], "xml" => ["application/xml", "text/xml"], "csv" => ["text/csv"]
+  }
+
+  # The plug, accepting `formats` (preferred first).
+  def initialize(@formats: Array[String])
+    raise ArgumentError.new("Accepts needs at least one format") if @formats.empty?
+    @formats.each do |f|
+      raise ArgumentError.new("unknown format #{f.inspect}: #{TYPES.keys.join(", ")}") unless TYPES.key?(f)
+    end
+  end
+
+  def call(conn: Conn) -> Conn
+    given = conn.params.string?("_format")
+    if given
+      raise NotAcceptable.new("format #{given.inspect} is not served here") unless @formats.include?(given)
+      return conn.with(format: given.to_sym)
+    end
+    accept = conn.header("accept")
+    return conn.with(format: @formats[0].to_sym) if accept.nil? || accept.strip.empty?
+    chosen = choose(accept)
+    raise NotAcceptable.new("none of #{@formats.join(", ")} is acceptable") if chosen.nil?
+    conn.with(format: chosen.to_sym)
+  end
+
+  # :nodoc:
+  # The format the Accept header prefers, or nil (RFC 9110 §12.5.1):
+  # a media type takes the quality of the most specific range matching
+  # it (`text/html;q=0` refuses HTML even under `*/*`), a format the best
+  # of its media types', and the highest quality above 0 wins, the format
+  # listed first among equals.
+  def choose(accept: String) -> String?
+    ranges: Array[[String, Float]] = []
+    accept.split(",").each do |part|
+      bits = part.split(";").map(&:strip)
+      range = (bits[0]? || "").downcase
+      next if range.empty?
+      q = 1.0
+      bits.drop(1).each do |o|
+        k, _, v = o.partition("=")
+        if k.strip.downcase == "q"
+          vs = v.strip
+          q = vs.match?(/\A(0(\.[0-9]{0,3})?|1(\.0{0,3})?)\z/) ? vs.to_f : 0.0
+        end
+      end
+      ranges = ranges.push([range, q])
+    end
+    best: String? = nil
+    best_q = 0.0
+    @formats.each do |f|
+      fq = 0.0
+      (TYPES[f]? || []).each do |t|
+        main = t.partition("/")[0]
+        spec = 0
+        tq = 0.0
+        ranges.each do |rq|
+          range, q = rq
+          s = if range == t
+            3
+          elsif range == "#{main}/*"
+            2
+          elsif range == "*/*"
+            1
+          else
+            0
+          end
+          if s > spec
+            spec = s
+            tq = q
+          end
+        end
+        fq = tq if tq > fq
+      end
+      if fq > best_q
+        best = f
+        best_q = fq
+      end
+    end
+    best
+  end
+end

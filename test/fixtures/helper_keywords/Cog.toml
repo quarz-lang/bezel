@@ -1,0 +1,11 @@
+# A program `quarz check` refuses (test/router_test.qz): a route helper called with a misspelt or missing keyword. It is
+# checked against this checkout of bezel.
+[cog]
+name = "helper_keywords"
+version = "0.1.0"
+
+[dependencies]
+Bezel = { git = "https://github.com/quarz-lang/bezel", branch = "main" }
+
+[patch]
+Bezel = { path = "../../.." }
