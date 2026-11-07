@@ -23,7 +23,7 @@ class HtCard
   @title: String
   def initialize(@title: String); end
   def render(h: Bezel::HtmlBuilder, content: Bezel::Html) -> Void
-    h.section(css: "card") do
+    h.section(class_name: "card") do
       h.h2(@title)
       h.append(content)
     end
@@ -61,10 +61,10 @@ class HtmlTest < Test::Case
   def test_attributes
     assert_equal("<input type=\"checkbox\" name=\"a&quot;b\" checked id=\"x\" class=\"a c\" hidden tabindex=\"2\" data-user-id=\"7\" aria-label=\"L\" form=\"f\">",
                  page { |h| h.input(type: "checkbox", name: "a\"b", checked: true, disabled: false, id: "x",
-                                    css: ["a", nil, "", "c"], hidden: true, tabindex: 2, data: {"user-id" => "7"},
+                                    class_name: ["a", nil, "", "c"], hidden: true, tabindex: 2, data: {"user-id" => "7"},
                                     aria: {"label" => "L"}, attrs: {"form" => "f"}) })
-    assert_equal("<p class=\"one\">x</p>", page { |h| h.p("x", css: "one") })
-    assert_equal("<p>x</p>", page { |h| h.p("x", css: [nil]) })
+    assert_equal("<p class=\"one\">x</p>", page { |h| h.p("x", class_name: "one") })
+    assert_equal("<p>x</p>", page { |h| h.p("x", class_name: [nil]) })
     assert_equal("<td colspan=\"2\">c</td>", page { |h| h.td("c", colspan: 2) })
     assert_equal("<meta content=\"5\" http-equiv=\"refresh\">", page { |h| h.meta(http_equiv: "refresh", content: "5") })
   end
@@ -88,7 +88,7 @@ class HtmlTest < Test::Case
   end
 
   def test_void_and_raw_text_elements
-    assert_equal("<br><hr class=\"x\">", page { |h| h.br; h.hr(css: "x") })
+    assert_equal("<br><hr class=\"x\">", page { |h| h.br; h.hr(class_name: "x") })
     assert_equal("<script>if (a < b) { go() }</script>", page { |h| h.script("if (a < b) { go() }") })
     assert_equal("<script src=\"/app.js\" defer></script>", page { |h| h.script(src: "/app.js", defer: true) })
     assert_raise(ArgumentError) { page { |h| h.script("x = '</SCRIPT><b>'") } }

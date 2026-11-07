@@ -58,10 +58,10 @@ SPECIFIC = {
   "track" => "src:u kind:s srclang:s label:s default:b"
 }
 
-GLOBAL_PARAMS = "id: String? = nil, css: (String | Array[String?])? = nil, style: String? = nil, title: String? = nil, " +
+GLOBAL_PARAMS = "id: String? = nil, class_name: (String | Array[String?])? = nil, style: String? = nil, title: String? = nil, " +
   "lang: String? = nil, dir: String? = nil, hidden: Bool = false, tabindex: Int? = nil, role: String? = nil, " +
   "data: Hash[String, String] = {}, aria: Hash[String, String] = {}, attrs: Hash[String, String] = {}"
-GLOBAL_ARGS = "id, css, style, title, lang, dir, hidden, tabindex, role, data, aria, attrs"
+GLOBAL_ARGS = "id, class_name, style, title, lang, dir, hidden, tabindex, role, data, aria, attrs"
 
 def attrs_of(tag: String) -> Array[[String, String]]
   (SPECIFIC[tag]? || "").split(" ").reject(&:empty?).map do |spec|

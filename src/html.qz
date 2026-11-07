@@ -6,7 +6,7 @@
 # ```
 # page = Bezel.html do |h|
 #   h.h1("Tom & Jerry")
-#   h.p(css: ["note", nil]) { h.text("<b>not bold</b>") }
+#   h.p(class_name: ["note", nil]) { h.text("<b>not bold</b>") }
 # end
 # page.to_s   # => "<h1>Tom &amp; Jerry</h1><p class=\"note\">&lt;b&gt;not bold&lt;/b&gt;</p>"
 # ```
@@ -44,7 +44,7 @@ end
 #   @title: String
 #   def initialize(@title: String); end
 #   def render(h: Bezel::HtmlBuilder, content: Bezel::Html) -> Void
-#     h.section(css: "card") do
+#     h.section(class_name: "card") do
 #       h.h2(@title)
 #       h.append(content)
 #     end
@@ -70,18 +70,19 @@ end
 # Writes HTML: an element per method (`h.div`, `h.a`, ...; see
 # `HtmlBuilder` in src/html/elements.qz), each taking its content as a
 # text (escaped) or a block, its attributes as keywords, and the global
-# ones (`id:`, `css:` for `class`, `style:`, `title:`, `lang:`, `dir:`,
-# `hidden:`, `tabindex:`, `role:`, `data:` for `data-*`, `aria:` for
-# `aria-*`, and `attrs:` for any other). A `String` attribute is escaped,
-# nil leaves it out, `true` writes a boolean attribute and `false` none;
-# an attribute given twice is an `ArgumentError`. A URL attribute
-# (`href`, `src`, `action`, `formaction`, `cite`, `poster`, a `srcset`'s
-# candidates, a meta refresh's `url=`, and those names and the other
-# URL attributes of `AttrList::URL_NAMES` in `attrs:`) must be relative
-# or of the schemes http, https, mailto or tel (`data:image/` for
-# images): another (`javascript:`) is an `ArgumentError`. `srcdoc` is
-# refused. A `style` is escaped but not checked: do not build one from
-# input.
+# ones (`id:`, `class_name:` for `class`, `style:`, `title:`, `lang:`,
+# `dir:`, `hidden:`, `tabindex:`, `role:`, `data:` for `data-*`, `aria:`
+# for `aria-*`, and `attrs:` for any other). (`class` cannot name a
+# parameter; `class:` waits for quarz-lang/quarz#382.) A `String`
+# attribute is escaped, nil leaves it out, `true` writes a boolean
+# attribute and `false` none; an attribute given twice is an
+# `ArgumentError`. A URL attribute (`href`, `src`, `action`,
+# `formaction`, `cite`, `poster`, a `srcset`'s candidates, a meta
+# refresh's `url=`, and those names and the other URL attributes of
+# `AttrList::URL_NAMES` in `attrs:`) must be relative or of the schemes
+# http, https, mailto or tel (`data:image/` for images): another
+# (`javascript:`) is an `ArgumentError`. `srcdoc` is refused. A `style`
+# is escaped but not checked: do not build one from input.
 #
 # A form or link carries a CSRF token only when the builder has one:
 # `Bezel.html(conn)`, with the CSRF plug (bezel#6) setting it.
@@ -155,18 +156,18 @@ class HtmlBuilder
   # button labelled `text`, carrying `_method` (`Plug::MethodOverride`)
   # and the CSRF token: a link cannot send another method, and a GET
   # must not change anything.
-  def link(text: String, *, to: String, method: Symbol = :get, css: (String | Array[String?])? = nil,
+  def link(text: String, *, to: String, method: Symbol = :get, class_name: (String | Array[String?])? = nil,
            confirm: String? = nil) -> Void
     if method == :get
-      a(text, href: to, css: css, data: confirm ? {"confirm" => confirm} : Hash[String, String].new)
+      a(text, href: to, class_name: class_name, data: confirm ? {"confirm" => confirm} : Hash[String, String].new)
     else
       verb = method.to_s.upcase
       raise ArgumentError.new("link method: :get, :post, :put, :patch or :delete, not #{method.inspect}") unless ["POST", "PUT", "PATCH", "DELETE"].include?(verb)
       d: Hash[String, String] = confirm ? {"confirm" => confirm} : {}
-      form(action: to, method: "post", css: "bezel-link", data: d) do
+      form(action: to, method: "post", class_name: "bezel-link", data: d) do
         hidden_input("_method", verb.downcase) unless verb == "POST"
         csrf_input
-        button(text, type: "submit", css: css)
+        button(text, type: "submit", class_name: class_name)
       end
     end
   end
@@ -187,13 +188,13 @@ class HtmlBuilder
   # `FormBuilder`). The fields' names are `<as>[<field>]`, `as` by
   # default the model's class name in snake_case (`user[email]`).
   def form_for[M <: Rotor::Model](cs: Rotor::Changeset[M], *, action: String, method: Symbol = :post,
-                                  as: String? = nil, css: (String | Array[String?])? = nil,
+                                  as: String? = nil, class_name: (String | Array[String?])? = nil,
                                   &block: (FormBuilder) -> Void) -> Void
     verb = method.to_s.upcase
     raise ArgumentError.new("form method: :get, :post, :put, :patch or :delete, not #{method.inspect}") unless ["GET", "POST", "PUT", "PATCH", "DELETE"].include?(verb)
     prefix = as || Rotor::Inflector.underscore(cs.data.class.name.split("::").last? || "form")
     fb = FormBuilder.new(self, prefix, FormBuilder.values_of(cs), FormBuilder.errors_of(cs))
-    form(action: action, method: verb == "GET" ? "get" : "post", css: css) do
+    form(action: action, method: verb == "GET" ? "get" : "post", class_name: class_name) do
       hidden_input("_method", verb.downcase) unless verb == "GET" || verb == "POST"
       csrf_input unless verb == "GET"
       block.call(fb)
@@ -400,14 +401,14 @@ class AttrList
   end
 
   # The global attributes.
-  def global(id: String?, css: (String | Array[String?])?, style: String?, title: String?, lang: String?,
+  def global(id: String?, class_name: (String | Array[String?])?, style: String?, title: String?, lang: String?,
              dir: String?, hidden: Bool, tabindex: Int?, role: String?, data: Hash[String, String],
              aria: Hash[String, String], attrs: Hash[String, String]) -> AttrList
     str("id", id)
-    classes = case css
+    classes = case class_name
               in nil then ""
-              in String then css
-              in Array then css.select { |c| !c.nil? && !c.empty? }.join(" ")
+              in String then class_name
+              in Array then class_name.select { |c| !c.nil? && !c.empty? }.join(" ")
               end
     str("class", classes.empty? ? nil : classes)
     str("style", style).str("title", title).str("lang", lang).str("dir", dir).bool("hidden", hidden)

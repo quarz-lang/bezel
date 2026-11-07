@@ -116,10 +116,10 @@ Shop::Router.user_post_path(user_id: 5, id: 2)      # => "/users/5/posts/2"
 
 Views are Quarz code: `Bezel.html` gives a builder with a method per
 HTML element, every text and attribute escaped, attributes as typed
-keywords (`css:` is the `class` attribute, since `class` cannot name a
-parameter). A layout is a function taking the inner HTML; a component
-includes `Bezel::Component`; a form over a changeset shows its values
-and errors:
+keywords (`class_name:` is the `class` attribute, since `class` cannot
+name a parameter; `class:` waits for quarz-lang/quarz#382). A layout is
+a function taking the inner HTML; a component includes
+`Bezel::Component`; a form over a changeset shows its values and errors:
 
 ```ruby
 module UserView

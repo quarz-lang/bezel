@@ -56,32 +56,32 @@ class FormBuilder
 
   # Writes `<label for="...">text</label>` (the field's name, humanized,
   # without `text`).
-  def label(field: Symbol, text: String? = nil, *, css: (String | Array[String?])? = nil) -> Void
-    @h.label(text || FormBuilder.humanize(field), for: id(field), css: css)
+  def label(field: Symbol, text: String? = nil, *, class_name: (String | Array[String?])? = nil) -> Void
+    @h.label(text || FormBuilder.humanize(field), for: id(field), class_name: class_name)
   end
 
   # Writes an `<input type="text">` for `field`.
   def text_field(field: Symbol, *, placeholder: String? = nil, required: Bool = false,
-                 css: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
-    input_of("text", field, value(field), placeholder, required, css, attrs)
+                 class_name: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
+    input_of("text", field, value(field), placeholder, required, class_name, attrs)
   end
 
   # Writes an `<input type="email">` for `field`.
   def email_field(field: Symbol, *, placeholder: String? = nil, required: Bool = false,
-                  css: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
-    input_of("email", field, value(field), placeholder, required, css, attrs)
+                  class_name: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
+    input_of("email", field, value(field), placeholder, required, class_name, attrs)
   end
 
   # Writes an `<input type="number">` for `field`.
   def number_field(field: Symbol, *, placeholder: String? = nil, required: Bool = false,
-                   css: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
-    input_of("number", field, value(field), placeholder, required, css, attrs)
+                   class_name: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
+    input_of("number", field, value(field), placeholder, required, class_name, attrs)
   end
 
   # Writes an `<input type="password">` for `field`, never with a value.
   def password_field(field: Symbol, *, placeholder: String? = nil, required: Bool = false,
-                     css: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
-    input_of("password", field, nil, placeholder, required, css, attrs)
+                     class_name: (String | Array[String?])? = nil, attrs: Hash[String, String] = {}) -> Void
+    input_of("password", field, nil, placeholder, required, class_name, attrs)
   end
 
   # Writes an `<input type="hidden">` for `field`.
@@ -91,30 +91,30 @@ class FormBuilder
 
   # Writes a `<textarea>` for `field`, its value the content.
   def textarea(field: Symbol, *, rows: Int? = nil, placeholder: String? = nil, required: Bool = false,
-               css: (String | Array[String?])? = nil) -> Void
+               class_name: (String | Array[String?])? = nil) -> Void
     @h.textarea(value(field) || "", name: name(field), id: id(field), rows: rows, placeholder: placeholder,
-                required: required, css: FormBuilder.with_invalid(css, !errors_on(field).empty?),
+                required: required, class_name: FormBuilder.with_invalid(class_name, !errors_on(field).empty?),
                 aria: invalid_aria(field))
   end
 
   # Writes a checkbox for `field`: a hidden `false` first, so that an
   # unchecked box still sends the field, then the box (value `true`),
   # checked when the value is true (`true`, `1`, `on`).
-  def checkbox(field: Symbol, *, css: (String | Array[String?])? = nil) -> Void
+  def checkbox(field: Symbol, *, class_name: (String | Array[String?])? = nil) -> Void
     v = value(field)
     on = !v.nil? && ["true", "1", "on"].include?(v.downcase)
     @h.input(type: "hidden", name: name(field), value: "false")
     @h.input(type: "checkbox", name: name(field), value: "true", id: id(field), checked: on,
-             css: FormBuilder.with_invalid(css, !errors_on(field).empty?), aria: invalid_aria(field))
+             class_name: FormBuilder.with_invalid(class_name, !errors_on(field).empty?), aria: invalid_aria(field))
   end
 
   # Writes a `<select>` for `field` of `options` (`[label, value]` pairs),
   # the one of the field's value selected; `prompt` adds a first option
   # with an empty value.
   def select(field: Symbol, options: Array[[String, String]], *, prompt: String? = nil,
-             css: (String | Array[String?])? = nil) -> Void
+             class_name: (String | Array[String?])? = nil) -> Void
     current = value(field)
-    @h.select(name: name(field), id: id(field), css: FormBuilder.with_invalid(css, !errors_on(field).empty?),
+    @h.select(name: name(field), id: id(field), class_name: FormBuilder.with_invalid(class_name, !errors_on(field).empty?),
               aria: invalid_aria(field)) do
       @h.option(prompt, value: "") if prompt
       options.each do |pair|
@@ -128,19 +128,19 @@ class FormBuilder
   # joined by `, `), or nothing without one.
   def errors(field: Symbol) -> Void
     es = errors_on(field)
-    @h.span(es.join(", "), css: "error", id: "#{id(field)}_error") unless es.empty?
+    @h.span(es.join(", "), class_name: "error", id: "#{id(field)}_error") unless es.empty?
   end
 
   # Writes the submit button.
-  def submit(text: String = "Save", *, css: (String | Array[String?])? = nil) -> Void
-    @h.button(text, type: "submit", css: css)
+  def submit(text: String = "Save", *, class_name: (String | Array[String?])? = nil) -> Void
+    @h.button(text, type: "submit", class_name: class_name)
   end
 
   # :nodoc:
   def input_of(type: String, field: Symbol, v: String?, placeholder: String?, required: Bool,
-               css: (String | Array[String?])?, attrs: Hash[String, String]) -> Void
+               class_name: (String | Array[String?])?, attrs: Hash[String, String]) -> Void
     @h.input(type: type, name: name(field), value: v, id: id(field), placeholder: placeholder,
-             required: required, css: FormBuilder.with_invalid(css, !errors_on(field).empty?),
+             required: required, class_name: FormBuilder.with_invalid(class_name, !errors_on(field).empty?),
              aria: invalid_aria(field), attrs: attrs)
   end
 
@@ -150,12 +150,12 @@ class FormBuilder
   end
 
   # :nodoc:
-  def self.with_invalid(css: (String | Array[String?])?, invalid: Bool) -> (String | Array[String?])?
-    return css unless invalid
-    case css
+  def self.with_invalid(class_name: (String | Array[String?])?, invalid: Bool) -> (String | Array[String?])?
+    return class_name unless invalid
+    case class_name
     in nil then "invalid"
-    in String then [css, "invalid"]
-    in Array then css.push("invalid")
+    in String then [class_name, "invalid"]
+    in Array then class_name.push("invalid")
     end
   end
 
