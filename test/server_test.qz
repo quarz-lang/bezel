@@ -21,7 +21,7 @@ class ServerTest < Test::Case
     port = server.local_address.port
     Task.scope do |s|
       s.spawn { server.serve }
-      client = HTTP::Client.new
+      client = HTTP::Client.new(proxy: nil)
       res = client.post("http://127.0.0.1:#{port}/echo", "name=Ann", "application/x-www-form-urlencoded")
       assert_equal(200, res.status)
       assert_equal("Ann", res.json["name"].as_s)
@@ -44,12 +44,12 @@ class ServerTest < Test::Case
         Bezel.start(ServerTestApp, config: c, grace: 1.second)
         "stopped"
       end
-      # (The traps are set before the server is bound and answers.)
+      # (The traps are set before the server answers.)
       up = false
       100.times do
         break if up
         begin
-          HTTP::Client.new(timeout: 1.second).get("http://127.0.0.1:#{port}/nothing").close
+          HTTP::Client.new(timeout: 1.second, proxy: nil).get("http://127.0.0.1:#{port}/nothing").close
           up = true
         rescue HTTP::Client::Error
           Task.sleep(50.ms)

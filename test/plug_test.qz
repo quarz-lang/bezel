@@ -188,10 +188,23 @@ class PlugTest < Test::Case
   end
 
   def test_a_wrap_sees_errors_as_conn_error
-    custom = Bezel.plug { |c| c }
-    pages = Bezel::Pipeline.new([custom])
-    plugs: Array[Bezel::Plug] = [pages, Bezel.plug { |c| raise Bezel::NotFound.new }]
+    plugs: Array[Bezel::Plug] = [PlugTestPages.new, Bezel.plug { |c| raise Bezel::NotFound.new }]
     out = Bezel::Plug.run(plugs, Bezel::Conn.build(req))
+    assert_nil(out.error)
     assert_equal(404, out.final_status)
+    assert_equal("x-pages", out.resp_headers["x-seen"])
+  end
+end
+
+# A wrap answering a later plug's NotFound with a page of its own.
+class PlugTestPages
+  include Bezel::Plug
+  def initialize; end
+  def call(conn: Bezel::Conn) -> Bezel::Conn = conn
+  def wrap(conn: Bezel::Conn, rest: (Bezel::Conn) -> Bezel::Conn) -> Bezel::Conn
+    out = rest.call(conn)
+    e = out.error
+    return out unless e.is_a?(Bezel::NotFound)
+    out.with(error: nil).put_resp_header("x-seen", "x-pages").html("<p>none</p>", status: 404)
   end
 end

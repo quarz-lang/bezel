@@ -137,4 +137,24 @@ class EndpointTest < Test::Case
     res = EndpointTestApp.call(HTTP::Server::Request.get("/halted"))
     assert_equal(404, res.status)
   end
+
+  def test_a_wrap_sees_the_no_route_404
+    res = EndpointTestPages.call(HTTP::Server::Request.get("/anything"))
+    assert_equal(404, res.status)
+    assert_equal("<p>none</p>", text_of(res))
+  end
+end
+
+class EndpointTestPages < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [PlugTestPagesE.new]
+end
+
+class PlugTestPagesE
+  include Bezel::Plug
+  def initialize; end
+  def call(conn: Bezel::Conn) -> Bezel::Conn = conn
+  def wrap(conn: Bezel::Conn, rest: (Bezel::Conn) -> Bezel::Conn) -> Bezel::Conn
+    out = rest.call(conn)
+    out.error.is_a?(Bezel::NotFound) ? out.with(error: nil).html("<p>none</p>", status: 404) : out
+  end
 end
