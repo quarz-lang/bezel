@@ -85,7 +85,8 @@ module Tasks
   # use (a placeholder stands for it, used by nothing).
   def self.config(app: String, settings: Hash[Symbol, Settings]) -> Config
     env = Process.env
-    env = env.put("SECRET_KEY_BASE", "-" * 64) unless env.key?("SECRET_KEY_BASE")
+    given = Config.var(env, "SECRET_KEY_BASE")
+    env = env.put("SECRET_KEY_BASE", "-" * 64) unless given && given.bytesize >= 64
     Config.load(app, settings, environ: env)
   end
 

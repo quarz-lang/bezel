@@ -9,10 +9,13 @@ module Cli::Skeleton
 
   # Modules an application's cannot be named like: the standard
   # library's and its dependencies' (a clash fails to compile).
-  TAKEN = ["Bezel", "Rotor", "PG", "Test", "Time", "Duration", "File", "Dir", "IO", "Set", "Array", "Hash", "String",
-           "Int", "Float", "Bool", "Symbol", "Object", "Kernel", "Process", "Signal", "Task", "Channel", "Atom", "Math",
-           "Random", "Regexp", "Range", "Bytes", "JSON", "HTTP", "URI", "Socket", "TLS", "Crypto", "Digest", "Base64",
-           "Meta", "Nil", "Enumerable", "Comparable", "Exception", "Main", "Cli", "Type", "Proc", "Struct"]
+  TAKEN = ["Bezel", "Rotor", "Test", "Time", "Duration", "File", "Dir", "Set", "Array", "Hash", "String", "Int",
+           "Integer", "Float", "Bool", "Symbol", "Object", "Kernel", "Process", "Signal", "Task", "Channel", "Atom",
+           "Math", "Random", "Regexp", "Range", "Bytes", "Socket", "Crypto", "Digest", "Base64", "Meta", "Nil",
+           "Enumerable", "Enumerator", "Comparable", "Exception", "Main", "Cli", "Type", "Proc", "Result", "Quoted",
+           "Shareable", "Unshareable", "DslScope", "MatchData", "Mutex", "Selector", "Time", "Fiber", "Env",
+           "StandardError", "ArgumentError", "RuntimeError", "IndexError", "KeyError", "TypeError", "IOError",
+           "SystemCallError", "NotImplementedError", "ZeroDivisionError", "OverflowError", "SystemExit"]
 
   # Runs the command.
   def self.command(args: Array[String], cwd: String, out: IO) -> Int
@@ -157,7 +160,7 @@ module Cli::Skeleton
         end
       QZ
       "src/router.qz" => <<~QZ,
-        # The routes. `bezel gen` adds its routes after the line marked below.
+        # The routes. `bezel gen` adds its routes before the line marked below.
         class #{m}::Router < Bezel::Router
           # The plugs of pages for browsers: sessions, the flash, CSRF protection.
           def self.browser -> Array[Bezel::Plug]

@@ -31,6 +31,11 @@ module Cli::Gen
     raise Cli::Error.new("gen #{what} needs a NAME") if arg.nil?
     n = Cli.snake(arg)
     raise Cli::Error.new("#{arg.inspect} is not a name (letters, digits and _)") unless n.match?(/\A[a-z][a-z0-9_]*\z/)
+    # (The class name must give the name back, as `form_for` derives a
+    # form's parameter key from it: `x_1` is X1, read back `x1`.)
+    unless Cli.snake(Cli.camel(n)) == n
+      raise Cli::Error.new("#{n}: its class #{Cli.camel(n)} reads back as #{Cli.snake(Cli.camel(n))}; use that name")
+    end
     n
   end
 
@@ -49,6 +54,21 @@ module Cli::Gen
     end
   end
 
+  # Fails when the application declares `name` (a class or module of its
+  # own, `Shop::Router`) already.
+  def self.undeclared(app: Cli::App, name: String) -> Void
+    pattern = Regexp.new("(?m)^[ \\t]*(class|module)[ \\t]+#{Regexp.escape(name)}\\b")
+    Dir.glob("src/**/*.qz", app.root).each do |f|
+      raise Cli::Error.new("#{name} is declared already (#{f})") if File.read(File.join(app.root, f)).match?(pattern)
+    end
+  end
+
+  # Names an action cannot have: `Bezel::Controller`'s and `Object`'s
+  # methods.
+  RESERVED_ACTIONS = ["render", "json", "text", "redirect", "send_file", "dispatch", "repo", "initialize", "halt",
+                      "class", "controller_plugs", "inspect", "to_s", "hash", "dup", "clone", "freeze", "send",
+                      "method", "methods", "object_id", "then", "tap", "display", "is_a", "nil"]
+
   # Writes `files` (path from the root, content), none of which may
   # exist, adds `routes` to the router, then recompiles the templates
   # and the migrations' list when `files` holds some; takes everything
@@ -59,6 +79,16 @@ module Cli::Gen
     old_router = File.exist?(router) ? File.read(router) : nil
     new_router = routes.empty? ? nil : Cli::Gen.with_routes(old_router || "", routes)
     created = Array::Builder[String].new
+    # (The directories it makes, to take back too: deepest last.)
+    dirs = Array::Builder[String].new
+    files.each do |f|
+      d = File.dirname(File.join(app.root, f[0]))
+      while !File.exist?(d) && !dirs.to_a.include?(d)
+        dirs << d
+        d = File.dirname(d)
+      end
+    end
+    made_dirs = dirs.to_a
     begin
       files.each do |f|
         Cli.create(app.root, f[0], f[1], out)
@@ -73,7 +103,12 @@ module Cli::Gen
       none: Array[String] = []
       Cli::Migrations.command(none, app, out) if files.any? { |f| f[0].start_with?("src/migrations/") }
     rescue Exception => e
-      created.to_a.each { |p| File.delete(File.join(app.root, p)) if File.exist?(File.join(app.root, p)) }
+      created.to_a.each do |p|
+        next unless File.exist?(File.join(app.root, p))
+        File.delete(File.join(app.root, p))
+        out.puts "  remove  #{p}"
+      end
+      made_dirs.sort_by { |d| -d.size }.each { |d| Dir.rmdir(d) if File.directory?(d) && Dir.empty?(d) }
       orig = old_router
       File.write(router, orig) if orig && !new_router.nil?
       raise e
@@ -105,9 +140,12 @@ module Cli::Gen
       raise Cli::Error.new("#{a.inspect} is not an action name (snake_case)") unless a.match?(/\A[a-z][a-z0-9_]*\z/)
     end
     raise Cli::Error.new("an action is given twice") unless actions.uniq.size == actions.size
+    actions.each { |a| raise Cli::Error.new("#{a}: a controller's own method, not an action's name") if RESERVED_ACTIONS.include?(a) }
     m = app.module_name
     cls = "#{m}::#{Cli.camel(n)}Controller"
     view = "#{m}::#{Cli.camel(n)}View"
+    Cli::Gen.undeclared(app, cls)
+    Cli::Gen.undeclared(app, view)
     defs = actions.map do |a|
       "  def #{a}(conn: Bezel::Conn) -> Bezel::Conn\n" +
         "    render(conn, #{m}::LayoutsView.app(conn, #{Cli.camel(n).inspect}, #{view}.#{a}(conn)))\n" +
@@ -160,7 +198,7 @@ module Cli::Gen
   def self.migration(app: Cli::App, name: String, body: String, version: String?) -> [String, String]
     found = Cli::Migrations.found(app)
     v = version || Cli::Gen.next_version(found)
-    raise Cli::Error.new("#{v.inspect} is not a version (14 digits, a UTC time)") unless v.match?(/\A[0-9]{14}\z/)
+    raise Cli::Error.new("#{v.inspect} is not a version (14 digits, a UTC time, not starting with 0)") unless v.match?(/\A[1-9][0-9]{13}\z/)
     cls = "#{app.module_name}::Migrations::#{Cli.camel(name)}"
     found.each do |row|
       raise Cli::Error.new("#{cls} exists already") if row[1] == cls
@@ -188,6 +226,8 @@ module Cli::Gen
   def self.model_files(app: Cli::App, n: String, fields: Array[Field]) -> Array[[String, String]]
     m = app.module_name
     cls = "#{m}::#{Cli.camel(n)}"
+    Cli::Gen.undeclared(app, cls)
+    raise Cli::Error.new("#{n}: #{cls} would be the application's own (Config, Router, Endpoint, Migrations)") if ["config", "router", "endpoint", "migrations"].include?(n)
     table = Rotor::Inflector.pluralize(n)
     columns = fields.map { |f| "    column :#{f.name}, #{f.type}\n" }.join
     names = fields.map { |f| ":#{f.name}" }.join(", ")
@@ -228,6 +268,8 @@ module Cli::Gen
     unless back == n
       raise Cli::Error.new("#{n}: the router would name its routes `#{back}` (from the plural `#{plural}`); give a name whose plural singularizes back to it")
     end
+    Cli::Gen.undeclared(app, "#{app.module_name}::#{Cli.camel(plural)}Controller")
+    Cli::Gen.undeclared(app, "#{app.module_name}::#{Cli.camel(plural)}View")
     ctl: [String, String] = ["src/controllers/#{plural}_controller.qz", Cli::Resource.controller(app, n, plural)]
     views: [String, String] = ["src/views/#{plural}_view.qz", Cli::Resource.views(app, n, plural, fields)]
     files = Cli::Gen.model_files(app, n, fields).push(ctl).push(views)

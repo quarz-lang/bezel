@@ -261,7 +261,7 @@ bezel test
 - Migrations are `src/migrations/<version>_<name>.qz`, each a
   `Shop::Migrations::<Name> < Rotor::Migration`; `gen` writes them with a
   UTC timestamp and rewrites the list `Shop::Migrations.all`.
-- `bezel gen` adds its routes after the router's `# bezel gen: routes`
+- `bezel gen` adds its routes before the router's `# bezel gen: routes`
   line. `bezel server` (restart on change) waits for quarz-lang/quarz#385,
   and the output of `routes`, `migrate` and `test` comes when they end
   until then; `gen resource`'s code compiles once quarz-lang/quarz#386
