@@ -1,0 +1,210 @@
+# `bezel new NAME [--bezel PATH]`: a new application in the directory
+# NAME (snake_case; its module is NAME in CamelCase), depending on bezel,
+# rotor and pg from git (bezel from the directory PATH with `--bezel`).
+module Cli::Skeleton
+  # The git source of each dependency.
+  BEZEL_GIT = "https://github.com/quarz-lang/bezel"
+  ROTOR_GIT = "https://github.com/quarz-lang/rotor"
+  PG_GIT = "https://github.com/quarz-lang/pg"
+
+  # Runs the command.
+  def self.command(args: Array[String], cwd: String, out: IO) -> Int
+    name: String? = nil
+    bezel: String? = nil
+    i = 0
+    while i < args.size
+      a = args[i]
+      if a == "--bezel"
+        raise Cli::Error.new("--bezel needs a directory") if i + 1 >= args.size
+        bezel = File.expand_path(args[i + 1], cwd)
+        i += 2
+      elsif name.nil? && !a.start_with?("-")
+        name = a
+        i += 1
+      else
+        raise Cli::Error.new("new takes NAME [--bezel PATH], not #{a}")
+      end
+    end
+    n = name
+    raise Cli::Error.new("new needs the application's NAME") if n.nil?
+    raise Cli::Error.new("#{n.inspect}: an application's name is snake_case (shop, my_shop)") unless n.match?(/\A[a-z][a-z0-9_]*\z/)
+    root = File.join(cwd, n)
+    raise Cli::Error.new("#{n} exists already") if File.exist?(root)
+    app = Cli::App.new(root, n, Cli.camel(n))
+    Cli::Skeleton.files(app, bezel).each { |path, content| Cli.create(root, path, content, out) }
+    Cli::Views.write(app, out)
+    none: Array[String] = []
+    Cli::Migrations.command(none, app, out)
+    out.puts ""
+    out.puts "Next: cd #{n}, then `BEZEL_ENV=dev quarz run` serves it on http://localhost:4000"
+    0
+  end
+
+  # The skeleton's files, by path.
+  def self.files(app: Cli::App, bezel: String?) -> Hash[String, String]
+    files = Cli::Skeleton.common(app)
+    # (A local bezel is this machine's patch, kept out of the repository.)
+    files = files.put("Cog.local.toml", "[patch]\nBezel = { path = #{bezel.inspect} }\n") if bezel
+    files
+  end
+
+  # The skeleton's files but Cog.local.toml.
+  def self.common(app: Cli::App) -> Hash[String, String]
+    m = app.module_name
+    n = app.name
+    {
+      "Cog.toml" => <<~TOML,
+        [cog]
+        name = "#{n}"
+        version = "0.1.0"
+
+        [dependencies]
+        Bezel = { git = #{BEZEL_GIT.inspect}, branch = "main" }
+        Rotor = { git = #{ROTOR_GIT.inspect}, branch = "main" }
+        PG = { git = #{PG_GIT.inspect}, branch = "main" }
+      TOML
+      ".gitignore" => "/#{n}\nCog.local.toml\n",
+      "README.md" => <<~MD,
+        # #{m}
+
+        A [bezel](#{BEZEL_GIT}) application.
+
+        ```sh
+        BEZEL_ENV=dev quarz run       # serves http://localhost:4000
+        bezel test                    # the tests
+        bezel gen resource post title:string body:text
+        bezel migrate                 # with DATABASE_URL set
+        ```
+
+        - src/endpoint.qz: the plugs every request goes through; src/router.qz:
+          the routes; src/controllers/, src/views/ (templates `*.html.bz`,
+          compiled by `bezel templates` into src/views/generated/, committed),
+          src/models/, src/migrations/ (listed by src/migrations.qz).
+        - Settings per environment in src/config.qz; HOST, PORT, DATABASE_URL,
+          SECRET_KEY_BASE (required in prod) and the others from the environment.
+      MD
+      ".github/workflows/ci.yml" => <<~YML,
+        name: CI
+        on:
+          push:
+            branches: [main]
+          pull_request:
+        jobs:
+          test:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@v4
+              - name: Check out Quarz (main), to build it
+                uses: actions/checkout@v4
+                with:
+                  repository: quarz-lang/quarz
+                  path: .quarz
+              - uses: dtolnay/rust-toolchain@stable
+              - name: Build Quarz
+                run: |
+                  cargo build --release --manifest-path .quarz/Cargo.toml
+                  echo "$GITHUB_WORKSPACE/.quarz/target/release" >> "$GITHUB_PATH"
+              - run: quarz check
+              - run: quarz test
+      YML
+      "src/main.qz" => <<~QZ,
+        # Serves the application, or runs a `bezel` task in it (`quarz run -- routes`).
+        exit(Bezel.main(ARGV, #{m}::Endpoint, #{m}::Config.settings, router: #{m}::Router,
+                        migrations: #{m}::Migrations.all))
+      QZ
+      "src/#{n}.qz" => <<~QZ,
+        # The application #{m}.
+        module #{m}
+        end
+      QZ
+      "src/config.qz" => <<~QZ,
+        # The application's settings per environment; the environment's
+        # variables (HOST, PORT, DATABASE_URL, ...) override them.
+        module #{m}::Config
+          # The settings of each environment (BEZEL_ENV).
+          def self.settings -> Hash[Symbol, Bezel::Settings]
+            {dev: Bezel::Settings.new(database_url: "postgres://localhost/#{n}_dev"),
+             test: Bezel::Settings.new(database_url: "postgres://localhost/#{n}_test")}
+          end
+        end
+      QZ
+      "src/endpoint.qz" => <<~QZ,
+        # Every request goes through these plugs, the router last.
+        class #{m}::Endpoint < Bezel::Endpoint
+          def self.plugs -> Array[Bezel::Plug]
+            [Bezel::Plug::RequestId.new,
+             Bezel::Plug::Logger.new,
+             Bezel::Plug::Static.new(at: "/", from: "priv/static"),
+             Bezel::Plug::Parsers.new,
+             Bezel::Plug::MethodOverride.new,
+             Bezel::Plug::Head.new,
+             #{m}::Router.new]
+          end
+        end
+      QZ
+      "src/router.qz" => <<~QZ,
+        # The routes. `bezel gen` adds its routes after the line marked below.
+        class #{m}::Router < Bezel::Router
+          # The plugs of pages for browsers: sessions, the flash, CSRF protection.
+          def self.browser -> Array[Bezel::Plug]
+            [Bezel::Plug::SecureHeaders.new,
+             Bezel::Plug::Accepts.new(["html"]),
+             Bezel::Plug::Session.new(key: "_#{n}"),
+             Bezel::Plug::Flash.new,
+             Bezel::Plug::CSRF.new]
+          end
+
+          routes do
+            scope "/", pipeline: :browser do
+              get "/", #{m}::PageController, :home, as: "home"
+              # bezel gen: routes
+            end
+          end
+        end
+      QZ
+      "src/controllers/page_controller.qz" => <<~QZ,
+        # The home page.
+        class #{m}::PageController < Bezel::Controller
+          controller
+
+          def home(conn: Bezel::Conn) -> Bezel::Conn
+            render(conn, #{m}::LayoutsView.app(conn, "#{m}", #{m}::PageView.home(conn)))
+          end
+        end
+      QZ
+      "src/views/layouts/app.html.bz" => <<~BZ,
+        {@args conn: Bezel::Conn, title: String, content: Bezel::Html}
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>{title}</title>
+            <link rel="stylesheet" href="/app.css">
+          </head>
+          <body>
+            <p :if={conn.flash[:info]} class="flash info">{conn.flash[:info]}</p>
+            <p :if={conn.flash[:error]} class="flash error">{conn.flash[:error]}</p>
+            <main>{content}</main>
+          </body>
+        </html>
+      BZ
+      "src/views/page/home.html.bz" => <<~BZ,
+        {@args conn: Bezel::Conn}
+        <h1>Welcome to #{m}</h1>
+        <p>This page is src/views/page/home.html.bz; run <code>bezel templates</code> after changing it.</p>
+      BZ
+      "priv/static/app.css" => "body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 48rem; }\n.flash.error { color: #b00; }\n",
+      "test/page_test.qz" => <<~QZ
+        require "test"
+
+        class PageTest < Test::Case
+          def test_home
+            page = Bezel::Testing.html_response(Bezel::Testing.get(#{m}::Endpoint, "/"), 200)
+            assert(page.has_text?("Welcome to #{m}"))
+          end
+        end
+      QZ
+    }
+  end
+end

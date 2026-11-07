@@ -1,0 +1,142 @@
+# The application's program: what `bezel` runs in it (`quarz run --
+# routes`), and serving without arguments. Returns the exit status.
+#
+# - (no arguments) or `server`: serves, as `Bezel.start`.
+# - `routes`: prints the router's routes, a line each (`Route#to_s`).
+# - `migrate [--to VERSION]`, `rollback [--steps N | --to VERSION]`,
+#   `status`: runs `Rotor::Migrator` with `migrations` over the
+#   database of DATABASE_URL, logging each migration to the standard
+#   output; options `--allow-out-of-order`, `--lock-timeout MS` and
+#   `--table NAME` pass through.
+#
+# A wrong command or option prints the usage on the standard error and
+# returns 2; a failure (no DATABASE_URL, a migration error) prints it
+# and returns 1. `config` replaces the configuration `Config.load` makes
+# of the environment and `settings`.
+#
+# ```quarz no_run
+# # src/main.qz of an application (`bezel new` writes one, with its
+# # router and `Shop::Migrations.all`)
+# class ShopEndpoint < Bezel::Endpoint
+#   def self.plugs -> Array[Bezel::Plug] = [Bezel.plug { |conn| conn.text("hi") }]
+# end
+#
+# exit(Bezel.main(ARGV, ShopEndpoint, {dev: Bezel::Settings.new(port: 4000)}))
+# ```
+public def main(argv: Array[String], endpoint: Type[Endpoint], settings: Hash[Symbol, Settings] = {}, *,
+                router: Type[Router]? = nil, migrations: Array[Type[Rotor::Migration]] = [],
+                config: Config? = nil, out: IO = STDOUT) -> Int
+  cmd = argv.first? || "server"
+  rest = argv.empty? ? argv : argv[1...argv.size]
+  begin
+    case cmd
+    when "server"
+      Tasks.no_options(cmd, rest)
+      start(endpoint, settings, config: config)
+      0
+    when "routes"
+      Tasks.no_options(cmd, rest)
+      r = router
+      raise Tasks::UsageError.new("routes: no router was given to Bezel.main") if r.nil?
+      r.route_table.each { |route| out.puts route.to_s }
+      0
+    when "migrate", "rollback", "status"
+      Tasks.migrations(cmd, Tasks.options(cmd, rest), config || Config.load(app_name(endpoint), settings), migrations, out)
+    else
+      raise Tasks::UsageError.new("unknown command #{cmd.inspect}")
+    end
+  rescue Tasks::UsageError => e
+    STDERR.puts "bezel: #{e.message}"
+    STDERR.puts Tasks::USAGE
+    2
+  rescue Rotor::MigrationError, ArgumentError, ConfigError => e
+    STDERR.puts "bezel: #{e.message}"
+    1
+  end
+end
+
+# :nodoc:
+# The commands of `Bezel.main`.
+module Tasks
+  # A command or option `Bezel.main` does not take.
+  class UsageError < StandardError
+  end
+
+  # The usage `Bezel.main` prints.
+  USAGE = "usage: (no arguments) | server | routes | migrate [--to VERSION] | rollback [--steps N | --to VERSION] | status\n" +
+          "       migrate, rollback, status: [--allow-out-of-order] [--lock-timeout MS] [--table NAME]"
+
+  # The options each command takes, with whether they take a value.
+  OPTIONS = {
+    "migrate" => {"--to" => true, "--allow-out-of-order" => false, "--lock-timeout" => true, "--table" => true},
+    "rollback" => {"--steps" => true, "--to" => true, "--lock-timeout" => true, "--table" => true},
+    "status" => {"--table" => true}
+  }
+
+  # Refuses arguments to a command that takes none.
+  def self.no_options(cmd: String, rest: Array[String]) -> Void
+    raise UsageError.new("#{cmd} takes no arguments, not #{rest.join(" ")}") unless rest.empty?
+  end
+
+  # The options of `rest` for `cmd`, by name (a flag's value is "").
+  def self.options(cmd: String, rest: Array[String]) -> Hash[String, String]
+    allowed = OPTIONS[cmd]? || Hash[String, Bool].new
+    out: Hash[String, String] = {}
+    i = 0
+    while i < rest.size
+      name = rest[i]
+      takes = allowed[name]?
+      raise UsageError.new("#{cmd} takes no option #{name}") if takes.nil?
+      raise UsageError.new("#{name} is given twice") if out.key?(name)
+      if takes
+        raise UsageError.new("#{name} needs a value") if i + 1 >= rest.size
+        out = out.put(name, rest[i + 1])
+        i += 2
+      else
+        out = out.put(name, "")
+        i += 1
+      end
+    end
+    raise UsageError.new("rollback takes --steps or --to, not both") if out.key?("--steps") && out.key?("--to")
+    out
+  end
+
+  # The integer value of option `name`, or nil without it.
+  def self.int(opts: Hash[String, String], name: String) -> Int?
+    v = opts[name]?
+    return nil if v.nil?
+    raise UsageError.new("#{name} takes an integer, not #{v.inspect}") unless v.match?(/\A[0-9]+\z/) && v.size <= 18
+    v.to_i
+  end
+
+  # Runs `migrate`, `rollback` or `status`.
+  def self.migrations(cmd: String, opts: Hash[String, String], c: Config,
+                      migrations: Array[Type[Rotor::Migration]], out: IO) -> Int
+    to = Tasks.int(opts, "--to")
+    steps = Tasks.int(opts, "--steps")
+    timeout_ms = Tasks.int(opts, "--lock-timeout")
+    table = opts["--table"]? || "schema_migrations"
+    url = c.database_url
+    if url.nil?
+      STDERR.puts "bezel: #{cmd}: DATABASE_URL is not set"
+      return 1
+    end
+    PG::Pool.open(url, 1) do |pool|
+      m = Rotor::Migrator.new(Rotor::Repo.new(pool: pool), migrations, table: table,
+                              allow_out_of_order: opts.key?("--allow-out-of-order"),
+                              lock_timeout: timeout_ms ? timeout_ms.milliseconds : nil,
+                              log: ->(line: String) { puts line })
+      case cmd
+      when "migrate"
+        done = m.migrate(to: to)
+        out.puts(done.empty? ? "Nothing to migrate." : "Migrated #{done.size}: #{done.join(", ")}")
+      when "rollback"
+        done = to ? m.rollback(to: to) : m.rollback(steps: steps || 1)
+        out.puts(done.empty? ? "Nothing to roll back." : "Rolled back #{done.size}: #{done.join(", ")}")
+      else
+        m.status.each { |row| out.puts "#{row[2].to_s.ljust(7)} #{row[0]}  #{row[1]}" }
+      end
+    end
+    0
+  end
+end

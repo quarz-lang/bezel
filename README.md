@@ -18,7 +18,7 @@ parameters, plugs, endpoints, configuration, error pages, `Bezel.start`,
 the built-in plugs, the router and controllers, and the HTML DSL with
 forms over rotor's changesets, sessions, the flash, CSRF protection,
 secure headers, host authorization, password hashes and signed tokens,
-test helpers, and the template compiler. The `bezel` command comes next.
+test helpers, the template compiler, and the `bezel` command.
 
 ```ruby
 class Shop::Endpoint < Bezel::Endpoint
@@ -230,6 +230,40 @@ Bezel::Testing.json_response(c.get("/api/users"), 200)
 
 Requests in tests skip the CSRF check (a flag of the test application,
 refused in `prod`); `Bezel::Testing.app(skip_csrf: false)` tests it.
+
+## The `bezel` command
+
+`cli/` is the `bezel` executable (`cd cli && quarz build -o bezel`, then
+put it on the PATH):
+
+```sh
+bezel new shop                  # an application: endpoint, router, a page, layout, test, CI
+cd shop
+BEZEL_ENV=dev quarz run         # serves http://localhost:4000
+bezel gen controller about index team
+bezel gen model tag name:string
+bezel gen migration add_index_to_tags
+bezel gen resource post title:string body:text   # model, migration, controller, views, routes
+bezel templates [--check]       # src/views/*/*.html.bz -> src/views/generated/ (Shop::PageView.home)
+bezel migrations [--check]      # src/migrations.qz, the list of src/migrations/
+bezel routes                    # the routes of Shop::Router
+bezel migrate | rollback | status   # with DATABASE_URL (and BEZEL_ENV) set
+bezel test
+```
+
+- The application's `src/main.qz` calls `Bezel.main(ARGV, Shop::Endpoint, settings, router:, migrations:)`:
+  without arguments it serves; `routes`, `migrate [--to V]`,
+  `rollback [--steps N | --to V]` and `status` (`--allow-out-of-order`,
+  `--lock-timeout MS`, `--table NAME`) are what `bezel` runs in it
+  (`quarz run -- routes`).
+- Migrations are `src/migrations/<version>_<name>.qz`, each a
+  `Shop::Migrations::<Name> < Rotor::Migration`; `gen` writes them with a
+  UTC timestamp and rewrites the list `Shop::Migrations.all`.
+- `bezel gen` adds its routes after the router's `# bezel gen: routes`
+  line. `bezel server` (restart on change) waits for quarz-lang/quarz#385,
+  and the output of `routes`, `migrate` and `test` comes when they end
+  until then; `gen resource`'s code compiles once quarz-lang/quarz#386 is
+  fixed. divider and `gen job` come with divider (#20).
 
 ## License
 

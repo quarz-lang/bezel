@@ -1,0 +1,149 @@
+# The code `bezel gen resource` writes: a controller of the seven actions
+# of `resources` and its views, DSL code (a form needs `form_for`, which
+# a template cannot call).
+module Cli::Resource
+  # The controller of the resource `n` (plural `plural`).
+  def self.controller(app: Cli::App, n: String, plural: String) -> String
+    m = app.module_name
+    model = "#{m}::#{Cli.camel(n)}"
+    view = "#{m}::#{Cli.camel(plural)}View"
+    r = "#{m}::Router"
+    human = n.gsub("_", " ")
+    title = human.capitalize
+    <<~QZ
+      # The #{plural.gsub("_", " ")}: the seven actions of `resources`.
+      class #{m}::#{Cli.camel(plural)}Controller < Bezel::Controller
+        controller
+
+        def index(conn: Bezel::Conn) -> Bezel::Conn
+          in_layout(conn, #{Cli.camel(plural).inspect}, #{view}.index(conn, conn.repo.all(#{model}.query)))
+        end
+
+        def show(conn: Bezel::Conn) -> Bezel::Conn
+          #{n} = #{n}_of(conn)
+          in_layout(conn, "#{title} \#{#{n}.id}", #{view}.show(conn, #{n}))
+        end
+
+        def new(conn: Bezel::Conn) -> Bezel::Conn
+          cs = #{model}.changeset(Hash[String, Object?].new)
+          in_layout(conn, "New #{human}", #{view}.form(conn, cs, #{r}.#{plural}_path, :post))
+        end
+
+        def create(conn: Bezel::Conn) -> Bezel::Conn
+          case conn.repo.insert(#{model}.changeset(conn.params["#{n}"].to_h))
+          in Rotor::Outcome::Ok(#{n})
+            redirect(conn.put_flash(:info, "#{title} created."), to: #{r}.#{n}_path(id: #{n}.id))
+          in Rotor::Outcome::Invalid(cs)
+            in_layout(conn.put_status(422), "New #{human}", #{view}.form(conn, cs, #{r}.#{plural}_path, :post))
+          end
+        end
+
+        def edit(conn: Bezel::Conn) -> Bezel::Conn
+          #{n} = #{n}_of(conn)
+          cs = #{n}.changeset(Hash[String, Object?].new)
+          in_layout(conn, "Edit #{human}", #{view}.form(conn, cs, #{r}.#{n}_path(id: #{n}.id), :patch))
+        end
+
+        def update(conn: Bezel::Conn) -> Bezel::Conn
+          #{n} = #{n}_of(conn)
+          case conn.repo.update(#{n}.changeset(conn.params["#{n}"].to_h))
+          in Rotor::Outcome::Ok(saved)
+            redirect(conn.put_flash(:info, "#{title} updated."), to: #{r}.#{n}_path(id: saved.id))
+          in Rotor::Outcome::Invalid(cs)
+            in_layout(conn.put_status(422), "Edit #{human}", #{view}.form(conn, cs, #{r}.#{n}_path(id: #{n}.id), :patch))
+          end
+        end
+
+        def delete(conn: Bezel::Conn) -> Bezel::Conn
+          conn.repo.delete(#{n}_of(conn))
+          redirect(conn.put_flash(:info, "#{title} deleted."), to: #{r}.#{plural}_path)
+        end
+
+        # The #{human} of the path's id; 404 without one.
+        private def #{n}_of(conn: Bezel::Conn) -> #{model}
+          found = conn.repo.get(#{model}, conn.params.int("id"))
+          raise Bezel::NotFound.new if found.nil?
+          found
+        end
+
+        # `body` in the layout.
+        private def in_layout(conn: Bezel::Conn, title: String, body: Bezel::Html) -> Bezel::Conn
+          render(conn, #{m}::LayoutsView.app(conn, title, body))
+        end
+      end
+    QZ
+  end
+
+  # The form field of `f` for a field of type `type`.
+  def self.input(f: Cli::Gen::Field) -> String
+    case f.type
+    when "Int", "Float" then "f.number_field(:#{f.name})"
+    when "Bool" then "f.checkbox(:#{f.name})"
+    else f.text ? "f.textarea(:#{f.name})" : "f.text_field(:#{f.name})"
+    end
+  end
+
+  # The views of the resource `n`.
+  def self.views(app: Cli::App, n: String, plural: String, fields: Array[Cli::Gen::Field]) -> String
+    m = app.module_name
+    model = "#{m}::#{Cli.camel(n)}"
+    r = "#{m}::Router"
+    human = n.gsub("_", " ")
+    heads = fields.map { |f| "            h.th(#{f.name.gsub("_", " ").capitalize.inspect})\n" }.join
+    cells = fields.map { |f| "              h.td(#{n}.#{f.name}.to_s)\n" }.join
+    items = fields.map { |f| "        h.dt(#{f.name.gsub("_", " ").capitalize.inspect})\n        h.dd(#{n}.#{f.name}.to_s)\n" }.join
+    inputs = fields.map do |f|
+      "        h.p do\n          f.label(:#{f.name})\n          #{Cli::Resource.input(f)}\n          f.errors(:#{f.name})\n        end\n"
+    end.join
+    "# The views of the #{plural.gsub("_", " ")} (written by `bezel gen resource`: edit as you like).\n" +
+      "module #{m}::#{Cli.camel(plural)}View\n" +
+      "  # The list.\n" +
+      "  def self.index(conn: Bezel::Conn, #{plural}: Array[#{model}]) -> Bezel::Html\n" +
+      "    Bezel.html(conn) do |h|\n" +
+      "      h.h1(#{Cli.camel(plural).inspect})\n" +
+      "      h.table do\n" +
+      "        h.thead do\n" +
+      "          h.tr do\n" +
+      heads +
+      "            h.th(\"\")\n" +
+      "          end\n" +
+      "        end\n" +
+      "        h.tbody do\n" +
+      "          #{plural}.each do |#{n}|\n" +
+      "            h.tr do\n" +
+      cells +
+      "              h.td { h.a(\"Show\", href: #{r}.#{n}_path(id: #{n}.id)) }\n" +
+      "            end\n" +
+      "          end\n" +
+      "        end\n" +
+      "      end\n" +
+      "      h.p { h.a(\"New #{human}\", href: #{r}.new_#{n}_path) }\n" +
+      "    end\n" +
+      "  end\n\n" +
+      "  # One #{human}.\n" +
+      "  def self.show(conn: Bezel::Conn, #{n}: #{model}) -> Bezel::Html\n" +
+      "    Bezel.html(conn) do |h|\n" +
+      "      h.dl do\n" +
+      items +
+      "      end\n" +
+      "      h.p do\n" +
+      "        h.a(\"Edit\", href: #{r}.edit_#{n}_path(id: #{n}.id))\n" +
+      "        h.text(\" \")\n" +
+      "        h.a(\"Back\", href: #{r}.#{plural}_path)\n" +
+      "      end\n" +
+      "      h.link(\"Delete\", to: #{r}.#{n}_path(id: #{n}.id), method: :delete, confirm: \"Delete this #{human}?\")\n" +
+      "    end\n" +
+      "  end\n\n" +
+      "  # The form of a new #{human} or an edited one, posting to `action`.\n" +
+      "  def self.form(conn: Bezel::Conn, cs: Rotor::Changeset[#{model}], action: String, method: Symbol) -> Bezel::Html\n" +
+      "    Bezel.html(conn) do |h|\n" +
+      "      h.form_for(cs, action: action, method: method) do |f|\n" +
+      inputs +
+      "        f.submit(\"Save\")\n" +
+      "      end\n" +
+      "      h.p { h.a(\"Back\", href: #{r}.#{plural}_path) }\n" +
+      "    end\n" +
+      "  end\n" +
+      "end\n"
+  end
+end

@@ -56,3 +56,9 @@ jobs:
         run: quarz test --doc
       - name: Docs
         run: quarz doc --check
+      - name: The bezel command (cli/)
+        working-directory: cli
+        run: |
+          quarz check
+          quarz test --timeout=600s
+          quarz test --release --timeout=600s

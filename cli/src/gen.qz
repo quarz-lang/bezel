@@ -1,0 +1,205 @@
+# `bezel gen controller|model|migration|resource`.
+module Cli::Gen
+  # The field types `gen model` and `gen resource` take, as Quarz types.
+  TYPES = {"string" => "String", "text" => "String", "integer" => "Int", "int" => "Int", "float" => "Float",
+           "boolean" => "Bool", "bool" => "Bool", "time" => "Time", "datetime" => "Time"}
+
+  # A model's field: its name, Quarz type, and whether it is long text.
+  data Field = (name: String, type: String, text: Bool)
+
+  # Runs the command.
+  def self.command(args: Array[String], app: Cli::App, out: IO) -> Int
+    kind = args.first?
+    rest = args.empty? ? args : args[1...args.size]
+    case kind
+    when "controller" then Cli::Gen.controller(rest, app, out)
+    when "model" then Cli::Gen.model(rest, app, out)
+    when "migration" then Cli::Gen.migration_command(rest, app, out)
+    when "resource" then Cli::Gen.resource(rest, app, out)
+    else raise Cli::Error.new("gen takes controller, model, migration or resource, not #{(kind || "nothing").inspect}")
+    end
+  end
+
+  # The snake_case name of `arg` (`UserProfile` or `user_profile`).
+  def self.name_of(arg: String?, what: String) -> String
+    raise Cli::Error.new("gen #{what} needs a NAME") if arg.nil?
+    n = Cli.snake(arg)
+    raise Cli::Error.new("#{arg.inspect} is not a name (letters, digits and _)") unless n.match?(/\A[a-z][a-z0-9_]*\z/)
+    n
+  end
+
+  # The fields of `specs` (`title:string`).
+  def self.fields(specs: Array[String]) -> Array[Field]
+    seen: Set[String] = Set.new
+    specs.map do |spec|
+      name, _, type = spec.partition(":")
+      t = TYPES[type]?
+      raise Cli::Error.new("#{spec.inspect}: a field is NAME:TYPE, the type one of #{TYPES.keys.join(", ")}") if t.nil?
+      raise Cli::Error.new("#{name.inspect} is not a field name (snake_case)") unless name.match?(/\A[a-z][a-z0-9_]*\z/)
+      raise Cli::Error.new("#{name}: id, created_at and updated_at are the model's own") if ["id", "created_at", "updated_at"].include?(name)
+      raise Cli::Error.new("#{name} is given twice") if seen.include?(name)
+      seen = seen.add(name)
+      Field.new(name, t, type == "text")
+    end
+  end
+
+  # Adds `lines` to the router after its `# bezel gen: routes` line; when
+  # it has none, prints them for the user to add.
+  def self.routes(app: Cli::App, lines: Array[String], out: IO) -> Void
+    path = File.join(app.root, "src", "router.qz")
+    marker = "# bezel gen: routes"
+    text = File.exist?(path) ? File.read(path) : ""
+    at = text.index(marker)
+    if at.nil?
+      out.puts "Add to the router (src/router.qz has no `#{marker}` line):"
+      lines.each { |l| out.puts "  #{l}" }
+      return
+    end
+    line_start = (text[0, at].rindex("\n") || -1) + 1
+    indent = text[line_start, at - line_start]
+    eol = text.index("\n", at) || text.size
+    added = lines.map { |l| "#{indent}#{l}\n" }.join
+    File.write(path, text[0, eol + 1] + added + text[(eol + 1)..])
+    out.puts "  update  src/router.qz"
+  end
+
+  # `gen controller NAME [ACTION...]`.
+  def self.controller(args: Array[String], app: Cli::App, out: IO) -> Int
+    n = Cli::Gen.name_of(args.first?, "controller")
+    actions = args.size > 1 ? args[1...args.size] : ["index"]
+    actions.each do |a|
+      raise Cli::Error.new("#{a.inspect} is not an action name (snake_case)") unless a.match?(/\A[a-z][a-z0-9_]*\z/)
+    end
+    Cli::Gen.absent(app, ["src/controllers/#{n}_controller.qz"] + actions.map { |a| "src/views/#{n}/#{a}.html.bz" })
+    m = app.module_name
+    cls = "#{m}::#{Cli.camel(n)}Controller"
+    view = "#{m}::#{Cli.camel(n)}View"
+    defs = actions.map do |a|
+      "  def #{a}(conn: Bezel::Conn) -> Bezel::Conn\n" +
+        "    render(conn, #{m}::LayoutsView.app(conn, #{Cli.camel(n).inspect}, #{view}.#{a}(conn)))\n" +
+        "  end\n"
+    end
+    Cli.create(app.root, "src/controllers/#{n}_controller.qz",
+               "# The #{n} pages.\nclass #{cls} < Bezel::Controller\n  controller\n\n#{defs.join("\n")}end\n", out)
+    actions.each do |a|
+      Cli.create(app.root, "src/views/#{n}/#{a}.html.bz",
+                 "{@args conn: Bezel::Conn}\n<h1>#{Cli.camel(n)}: #{a}</h1>\n<p>This page is src/views/#{n}/#{a}.html.bz.</p>\n", out)
+    end
+    Cli::Views.write(app, out)
+    Cli::Gen.routes(app, actions.map { |a| "get \"/#{n}#{a == "index" ? "" : "/#{a}"}\", #{cls}, :#{a}" }, out)
+    0
+  end
+
+  # `gen migration NAME [--version V]`: an empty migration.
+  def self.migration_command(args: Array[String], app: Cli::App, out: IO) -> Int
+    version: String? = nil
+    names = Array::Builder[String].new
+    i = 0
+    while i < args.size
+      if args[i] == "--version"
+        raise Cli::Error.new("--version needs a value") if i + 1 >= args.size
+        version = args[i + 1]
+        i += 2
+      else
+        names << args[i]
+        i += 1
+      end
+    end
+    given = names.to_a
+    raise Cli::Error.new("gen migration takes one NAME") unless given.size == 1
+    Cli::Gen.migration(app, Cli::Gen.name_of(given[0], "migration"), "", version, out)
+    0
+  end
+
+  # The version of a new migration: the UTC time now, or one after the
+  # latest when that is not later (two made within a second).
+  def self.next_version(found: Array[[Int, String]]) -> String
+    now = Time.now.utc.strftime("%Y%m%d%H%M%S").to_i
+    latest = found.empty? ? 0 : found[found.size - 1][0]
+    (now > latest ? now : latest + 1).to_s
+  end
+
+  # Fails when one of `paths` (from the root) exists: checked before a
+  # generator writes anything.
+  def self.absent(app: Cli::App, paths: Array[String]) -> Void
+    paths.each { |p| raise Cli::Error.new("#{p} exists already") if File.exist?(File.join(app.root, p)) }
+  end
+
+  # Writes the migration `name` (its `change` body `body`) and the list.
+  def self.migration(app: Cli::App, name: String, body: String, version: String?, out: IO) -> Void
+    found = Cli::Migrations.found(app)
+    v = version || Cli::Gen.next_version(found)
+    raise Cli::Error.new("#{v.inspect} is not a version (14 digits, a UTC time)") unless v.match?(/\A[0-9]{14}\z/)
+    cls = "#{app.module_name}::Migrations::#{Cli.camel(name)}"
+    found.each do |row|
+      raise Cli::Error.new("#{cls} exists already") if row[1] == cls
+      raise Cli::Error.new("a migration has the version #{v} already") if row[0] == v.to_i
+    end
+    content = "# #{Cli.camel(name)}.\n" +
+              "class #{cls} < Rotor::Migration\n" +
+              "  version #{v}\n\n" +
+              "  def change -> Void\n" +
+              body +
+              "  end\nend\n"
+    Cli.create(app.root, "src/migrations/#{v}_#{name}.qz", content, out)
+    none: Array[String] = []
+    Cli::Migrations.command(none, app, out)
+  end
+
+  # `gen model NAME [FIELD:TYPE...]`.
+  def self.model(args: Array[String], app: Cli::App, out: IO) -> Int
+    n = Rotor::Inflector.singularize(Cli::Gen.name_of(args.first?, "model"))
+    fields = Cli::Gen.fields(args.size > 1 ? args[1...args.size] : Array[String].new)
+    Cli::Gen.write_model(app, n, fields, nil, out)
+    0
+  end
+
+  # Writes the model `n`, its changeset and its migration.
+  def self.write_model(app: Cli::App, n: String, fields: Array[Field], version: String?, out: IO) -> Void
+    Cli::Gen.absent(app, ["src/models/#{n}.qz"])
+    m = app.module_name
+    cls = "#{m}::#{Cli.camel(n)}"
+    table = Rotor::Inflector.pluralize(n)
+    columns = fields.map { |f| "    column :#{f.name}, #{f.type}\n" }.join
+    names = fields.map { |f| ":#{f.name}" }.join(", ")
+    human = n.gsub("_", " ")
+    content = "# A #{human}.\n" +
+              "class #{cls} < Rotor::Model\n" +
+              "  table #{table.inspect} do\n" +
+              "    column :id, Int, primary: true\n" +
+              columns +
+              "    timestamps\n" +
+              "  end\n\n" +
+              "  # A changeset of `params` (a form's) for a new #{human}.\n" +
+              "  def self.changeset(params: Hash[String, Object?]) -> Rotor::Changeset[#{cls}]\n" +
+              "    Rotor::Changeset.cast(#{cls}, params, [#{names}]).validate_required([#{names}])\n" +
+              "  end\n\n" +
+              "  # A changeset of `params` for this #{human}.\n" +
+              "  def changeset(params: Hash[String, Object?]) -> Rotor::Changeset[#{cls}]\n" +
+              "    Rotor::Changeset.cast(self, params, [#{names}]).validate_required([#{names}])\n" +
+              "  end\n" +
+              "end\n"
+    body = "    create_table :#{table} do |t|\n" +
+           fields.map { |f| "      t.column :#{f.name}, #{f.type}\n" }.join +
+           "      t.timestamps\n    end\n"
+    Cli::Gen.migration(app, "create_#{table}", body, version, out)
+    Cli.create(app.root, "src/models/#{n}.qz", content, out)
+  end
+
+  # `gen resource NAME [FIELD:TYPE...]`: the model, its migration, a
+  # controller of the seven actions, its views (DSL code in
+  # src/views/<plural>_view.qz) and `resources` in the router.
+  def self.resource(args: Array[String], app: Cli::App, out: IO) -> Int
+    n = Rotor::Inflector.singularize(Cli::Gen.name_of(args.first?, "resource"))
+    fields = Cli::Gen.fields(args.size > 1 ? args[1...args.size] : Array[String].new)
+    raise Cli::Error.new("gen resource needs at least one FIELD:TYPE") if fields.empty?
+    plural = Rotor::Inflector.pluralize(n)
+    raise Cli::Error.new("#{n}: its plural is the same word; name it otherwise") if plural == n
+    Cli::Gen.absent(app, ["src/controllers/#{plural}_controller.qz", "src/views/#{plural}_view.qz", "src/views/#{plural}"])
+    Cli::Gen.write_model(app, n, fields, nil, out)
+    Cli.create(app.root, "src/controllers/#{plural}_controller.qz", Cli::Resource.controller(app, n, plural), out)
+    Cli.create(app.root, "src/views/#{plural}_view.qz", Cli::Resource.views(app, n, plural, fields), out)
+    Cli::Gen.routes(app, ["resources \"/#{plural}\", #{app.module_name}::#{Cli.camel(plural)}Controller"], out)
+    0
+  end
+end
