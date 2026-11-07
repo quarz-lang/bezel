@@ -1,0 +1,18 @@
+{@args conn: Bezel::Conn, title: String, content: Bezel::Html}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>{title} · Shop</title>
+    <link rel="stylesheet" href="/app.css">
+    <style>body > p { margin: 0 }</style>
+  </head>
+  <body>
+    <main>{content}</main>
+    <form action="/logout" method="post">
+      <input type="hidden" name="_csrf_token" value={conn.csrf_token || ""}>
+      <button type="submit">Log out</button>
+    </form>
+    <script>if (a < b && c) { go("</p>") }</script>
+  </body>
+</html>

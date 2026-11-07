@@ -1,0 +1,12 @@
+{@args locked: Bool, size: Int, kind: String?, url: String}
+<form action={url} method="post" novalidate>
+  <input type="text" name="q" required maxlength="40" size={size} disabled={locked} placeholder="Tom &amp; Jerry's">
+  <input type="checkbox" checked>
+  <div id="box" class={["box", kind]} data-id="7" data-kind={kind || "none"} aria-label="Box" hx-get="/more" x-on:click="open = true">
+    <a href='/a?x=1&amp;y=2' target=_blank>A &lt;link&gt;</a>
+  </div>
+  <td :if={false} colspan="2"></td>
+  <img src="/logo.png" alt="">
+  <br/>
+  <div/>
+</form>

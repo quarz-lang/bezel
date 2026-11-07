@@ -1,0 +1,13 @@
+{@args code: String, html: String, n: Int, missing: String?}
+<pre>
+  line one
+    {code}
+</pre>
+<textarea name="body">
+{code} &amp; more</textarea>
+<p>
+  A <b>bold</b>
+  <i>move</i>, {n} items{missing}.
+</p>
+<p>{raw(html)} and {"{"}braces{"}"}</p>
+<p>{Bezel::Html.raw("<em>safe</em>")}</p>

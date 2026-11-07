@@ -1,0 +1,136 @@
+require "test"
+require_relative "templates/support"
+require_relative "templates/corpus"
+
+# The template compiler: the corpus in test/templates (each template, the
+# module `bezel templates` makes of them, test/templates/corpus.qz, and
+# what each renders, `<name>.html`), and the errors.
+class TemplatesTest < Test::Case
+  NAMES = ["attrs", "basic", "components", "layout", "text"]
+
+  def dir -> String = File.join(File.dirname(__FILE__), "templates")
+
+  def source(name: String) -> Bezel::Templates::Source
+    Bezel::Templates::Source.new("test/templates/#{name}.html.bz", name, File.read(File.join(dir, "#{name}.html.bz")))
+  end
+
+  # The rendered page is `<name>.html`; with BEZEL_UPDATE_CORPUS=1, writes
+  # it instead (check the new one by hand).
+  def check_page(name: String, page: Bezel::Html) -> Void
+    path = File.join(dir, "#{name}.html")
+    if ENV["BEZEL_UPDATE_CORPUS"]? == "1"
+      File.write(path, page.to_s)
+      return
+    end
+    assert_equal(File.read(path), page.to_s)
+  end
+
+  def test_the_corpus_compiles_to_corpus_qz
+    out = Bezel::Templates.compile_module("Corpus", NAMES.map { |n| source(n) })
+    path = File.join(dir, "corpus.qz")
+    if ENV["BEZEL_UPDATE_CORPUS"]? == "1"
+      File.write(path, out)
+      return
+    end
+    assert_equal(File.read(path), out)
+  end
+
+  def test_basic
+    check_page("basic", Corpus.basic("Ann & Bob", ["<one>", "two"]))
+    assert_equal("<h1 class=\"title\">Hello, x!</h1>\n<p>Tom &amp; Jerry say &lt;hi&gt;.</p>\n\n<p>Nothing yet.</p>",
+                 Corpus.basic("x", []).to_s)
+  end
+
+  def test_attrs
+    check_page("attrs", Corpus.attrs(true, 20, "red", "/search"))
+    out = Corpus.attrs(false, 5, nil, "/s").to_s
+    assert(out.include?("<div id=\"box\" class=\"box\" data-id=\"7\" data-kind=\"none\""))
+    assert(!out.include?("disabled"))
+  end
+
+  def test_attrs_url_checked_by_the_dsl
+    assert_raise(ArgumentError) { Corpus.attrs(false, 5, nil, "javascript:alert(1)") }
+  end
+
+  def test_components
+    check_page("components", Corpus.components(User.new(7, "Ann", "ann@example.com"), ["a", "", "<b>"]))
+  end
+
+  def test_layout
+    conn = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    check_page("layout", Corpus.layout(conn, "Users", Bezel.html { |h| h.p("Hi") }))
+  end
+
+  def test_text
+    check_page("text", Corpus.text("\nx < y", "<b>raw</b>", 3, nil))
+  end
+
+  def test_the_header_names_digests
+    src = source("basic")
+    out = Bezel::Templates.compile_module("Corpus", [src])
+    assert_equal({"test/templates/basic.html.bz" => Bezel::Templates.digest(src.text)}, Bezel::Templates.digests(out))
+  end
+
+  # The message of compiling `text`, which must fail.
+  def error_of(text: String) -> String
+    e = assert_raise(Bezel::Templates::Error) do
+      Bezel::Templates.compile(Bezel::Templates::Source.new("v/t.html.bz", "t", text))
+    end
+    e.message
+  end
+
+  def test_errors_name_the_line
+    assert_equal("v/t.html.bz:2: </p> does not close <span> (line 2)", error_of("<p>\n<span>x</p>"))
+    [
+      ["<div>\n\n<p>x", "v/t.html.bz:3: <p> is not closed"],
+      ["<div>\n<p>x</p>", "v/t.html.bz:1: <div> is not closed"],
+      ["<p>x</p>\n</div>", "v/t.html.bz:2: </div> closes no element"],
+      ["<blink>x</blink>", "v/t.html.bz:1: <blink> is not an element the DSL writes"],
+      ["<p\n  colour=\"red\">x</p>", "v/t.html.bz:2: <p> has no attribute colour (a custom one has a - in its name)"],
+      ["<p onclick=\"x()\"></p>", "v/t.html.bz:1: <p> has no attribute onclick (a custom one has a - in its name)"],
+      ["<p on-x=\"y\"></p>", "v/t.html.bz:1: on-x: event handler attributes are refused (no inline script)"],
+      ["<input disabled=\"disabled\">", "v/t.html.bz:1: disabled of <input> is boolean: bare (disabled) or an expression (disabled={...})"],
+      ["<td colspan=\"two\"></td>", "v/t.html.bz:1: colspan of <td> needs an integer, not \"two\""],
+      ["<p id=\"a\" id=\"b\"></p>", "v/t.html.bz:1: id is given twice"],
+      ["<p>\n{x</p>", "v/t.html.bz:2: { is not closed (a { in a text is written {\"{\"})"],
+      ["<p>{ }</p>", "v/t.html.bz:1: {} holds no expression"],
+      ["<p>x</p>\n{@args x: Int}", "v/t.html.bz:2: {@args ...} comes before the rest of the template"],
+      ["{@args h: Int}", "v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)"],
+      ["{@foo}", "v/t.html.bz:1: @foo is not a directive (only {@args ...})"],
+      ["<li :for={x in xs}>x</li>", "v/t.html.bz:1: :for is written {pattern <- expr}"],
+      ["<li :for={h <- xs}>x</li>", "v/t.html.bz:1: :for cannot name a variable `h` (the builder's name)"],
+      ["<li :each={xs}>x</li>", "v/t.html.bz:1: :each is not a special attribute (:for, :if)"],
+      ["<li :if=\"x\">x</li>", "v/t.html.bz:1: :if takes an expression ({...})"],
+      ["<p>\n  <:footer>x</:footer></p>", "v/t.html.bz:2: <:footer> is a slot: it goes directly inside a component"],
+      ["<.card><:f>a</:f><:f>b</:f></.card>", "v/t.html.bz:1: f is given twice"],
+      ["<.card>\n<:f x=\"1\">a</:f></.card>", "v/t.html.bz:2: <:f> takes no attributes"],
+      ["<script>x", "v/t.html.bz:1: <script> is not closed"],
+      ["<!-- x", "v/t.html.bz:1: the comment is not closed (-->)"],
+      ["<!DOCTYPE html5>", "v/t.html.bz:1: only <!DOCTYPE html> is written"],
+      ["<p title=\"x>y</p>", "v/t.html.bz:1: the value of title is not closed (\")"],
+      ["<p class>x</p>", "v/t.html.bz:1: class needs a value"],
+      ["<td colspan>x</td>", "v/t.html.bz:1: colspan of <td> needs an integer"]
+    ].each do |pair|
+      assert_equal(pair[1], error_of(pair[0]))
+    end
+  end
+
+  def test_names_are_checked
+    assert_raise(ArgumentError) { Bezel::Templates.compile(Bezel::Templates::Source.new("t", "Show", "")) }
+    assert_raise(ArgumentError) { Bezel::Templates.compile_module("user_view", []) }
+  end
+
+  def test_literals_escape_interpolation
+    assert_equal("\"a\\\#{b}\\\\\\\"\\n\\u{1}\"", Bezel::Templates.literal("a\#{b}\\\"\n\u{1}"))
+  end
+
+  def test_braces_skip_strings
+    out = Bezel::Templates.compile(Bezel::Templates::Source.new("t", "t", "<p>{\"}\" + \"\#{\"{\"}\" + '}'}</p>"))
+    assert(out.include?("h.put(\"}\" + \"\#{\"{\"}\" + '}')"))
+  end
+
+  def test_raw_only_as_a_whole_call
+    out = Bezel::Templates.compile(Bezel::Templates::Source.new("t", "t", "<p>{raw(a) + raw(b)}</p>"))
+    assert(out.include?("h.put(raw(a) + raw(b))"))
+  end
+end
