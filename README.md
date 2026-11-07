@@ -17,8 +17,8 @@ Work in progress (the plan is issue #1). What exists: the connection,
 parameters, plugs, endpoints, configuration, error pages, `Bezel.start`,
 the built-in plugs, the router and controllers, and the HTML DSL with
 forms over rotor's changesets, sessions, the flash, CSRF protection,
-secure headers, host authorization, password hashes and signed tokens.
-Test helpers, templates and the `bezel` command come next.
+secure headers, host authorization, password hashes and signed tokens,
+and test helpers. Templates and the `bezel` command come next.
 
 ```ruby
 class Shop::Endpoint < Bezel::Endpoint
@@ -181,12 +181,25 @@ end
 - `conn.session.renew` after a login drops the CSRF secret; `drop` then
   `put` starts a new session.
 
-An endpoint is tested without a socket:
+An application is tested through its endpoint, in the test's task,
+without sockets (`Bezel::Testing`):
 
 ```ruby
-res = Shop::Endpoint.call(HTTP::Server::Request.get("/?name=Ann"))
-res.status     # => 200
+res = Bezel::Testing.get(Shop::Endpoint, "/users")
+page = Bezel::Testing.html_response(res, 200)          # a parsed page
+page.has_element?("form[action=\"/users\"] input[name=\"user[email]\"]")
+page.has_text?("Users")
+
+c = Bezel::Testing::Client.new(Shop::Endpoint, session_key: "_shop")   # keeps cookies
+c.login_as({"user_id" => "7"})                          # the session cookie, as a login writes it
+c.post("/users", params: {"user[email]" => "ann@example.com"})
+c.flash[:info]                                          # => "Welcome", for the next request
+c.follow_redirect                                       # which shows it (and takes it)
+Bezel::Testing.json_response(c.get("/api/users"), 200)
 ```
+
+Requests in tests skip the CSRF check (a flag of the test application,
+refused in `prod`); `Bezel::Testing.app(skip_csrf: false)` tests it.
 
 ## License
 

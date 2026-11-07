@@ -1,0 +1,320 @@
+# :nodoc:
+# The tolerant HTML reader of `Testing::Doc`: the source cut into tokens
+# by one regular expression (linear), then a tree built from them, with
+# HTML's implied end tags for the common cases (`p`, `li`, `tr`, `td`,
+# `th`, `dt`, `dd`, `option`).
+class Testing::Parser
+  @src: String
+
+  # Elements without content.
+  VOID = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]
+
+  # Elements whose content is text up to their end tag.
+  TEXT = ["script", "style", "textarea", "title"]
+
+  # A comment, a doctype or processing instruction, an end tag, a start
+  # tag, a lone `<`, or text. A start tag never runs past a `<` (a quoted
+  # value holding one is cut, rare in practice), so that a `<` in a
+  # script (`a<b`) cannot hide the script's end tag; an unbalanced quote
+  # is a character of the tag.
+  TOKEN = /<!--.*?(?:-->|\z)|<![^>]*>?|<\?[^>]*>?|<\/[A-Za-z][^>]*>?|<[A-Za-z][A-Za-z0-9\-]*(?:"[^"<]*"|'[^'<]*'|[^'"<>]|['"])*>?|<|[^<]+/m
+
+  # An attribute in a start tag.
+  ATTR = /([^\s"'>\/=]+)(?:\s*=\s*(?:"([^"]*)"?|'([^']*)'?|([^\s>]*)))?/
+
+  # The elements a start tag closes when one is open (the implied end
+  # tags), searched down the open elements until a boundary.
+  CLOSES = {
+    "p" => ["p"], "li" => ["li"], "dt" => ["dt", "dd"], "dd" => ["dt", "dd"], "option" => ["option"],
+    "tr" => ["td", "th", "tr"], "td" => ["td", "th"], "th" => ["td", "th"],
+    "optgroup" => ["option", "optgroup"], "thead" => ["td", "th", "tr", "thead", "tbody", "tfoot"],
+    "tbody" => ["td", "th", "tr", "thead", "tbody", "tfoot"], "tfoot" => ["td", "th", "tr", "thead", "tbody", "tfoot"],
+    "div" => ["p"], "ul" => ["p"], "ol" => ["p"], "dl" => ["p"], "table" => ["p"], "form" => ["p"],
+    "h1" => ["p"], "h2" => ["p"], "h3" => ["p"], "h4" => ["p"], "h5" => ["p"], "h6" => ["p"],
+    "section" => ["p"], "article" => ["p"], "header" => ["p"], "footer" => ["p"], "nav" => ["p"],
+    "pre" => ["p"], "blockquote" => ["p"], "hr" => ["p"]
+  }
+
+  # Elements the search for an element to close does not go past.
+  BOUNDARIES = ["html", "body", "table", "ul", "ol", "dl", "select", "template", "button", "td", "th", "li",
+                "div", "section", "article", "form", "blockquote", "optgroup", "thead", "tbody", "tfoot"]
+
+  # Boundaries a list item's search goes past (HTML's list item steps).
+  ITEM_PASSES = ["div", "p", "address"]
+
+  def initialize(@src: String); end
+
+  # The tree of the source, under a root node.
+  def parse -> Testing::Node
+    tokens = Array::Builder[String].new
+    @src.gsub(TOKEN) { |t| tokens << t; "" }
+    root = Testing::Node.new("", {})
+    stack = Array::Builder[Testing::Node].new
+    stack << root
+    raw_tag: String? = nil
+    raw_node = root
+    raw = String::Builder.new
+    tokens.to_a.each do |t|
+      rt = raw_tag
+      if rt
+        # (Inside script, style, textarea or title: text up to its end tag.)
+        if t.start_with?("</") && Testing::Parser.end_name(t) == rt
+          inner = raw.to_s
+          raw_node.add(Testing::Node.new("", {}, Testing::Parser.decode(inner))) unless inner.empty?
+          raw_tag = nil
+        else
+          raw << t
+        end
+        next
+      end
+      if t.start_with?("<!") || t.start_with?("<?")
+        next
+      elsif t.start_with?("</")
+        name = Testing::Parser.end_name(t)
+        i = stack.size - 1
+        while i > 0 && stack[i].tag != name
+          i -= 1
+        end
+        while i > 0 && stack.size > i
+          stack.pop
+        end
+      elsif t.size > 1 && t.start_with?("<")
+        tag, attrs = Testing::Parser.start_tag(t)
+        # (In SVG and MathML, `/>` ends the element, as browsers read it.)
+        foreign = tag == "svg" || tag == "math" || (0...stack.size).any? { |i| stack[i].tag == "svg" || stack[i].tag == "math" }
+        self_closing = foreign && t.match?(/(\A<[A-Za-z][A-Za-z0-9\-]*|\s|["'])\/>\z/)
+        closes = CLOSES[tag]?
+        if closes
+          k = stack.size - 1
+          found = -1
+          # (The outermost open element to close before a boundary: a
+          # new row closes its cells and the row.)
+          while k > 0
+            t2 = stack[k].tag
+            if closes.include?(t2)
+              found = k
+            elsif BOUNDARIES.include?(t2) && !(["li", "dt", "dd"].include?(tag) && ITEM_PASSES.include?(t2))
+              break
+            end
+            k -= 1
+          end
+          while found > 0 && stack.size > found
+            stack.pop
+          end
+        end
+        node = Testing::Node.new(tag, attrs)
+        stack.last&.add(node)
+        if self_closing
+          nil
+        elsif TEXT.include?(tag)
+          raw_tag = tag
+          raw_node = node
+          raw = String::Builder.new
+        elsif !VOID.include?(tag)
+          stack << node
+        end
+      else
+        stack.last&.add(Testing::Node.new("", {}, Testing::Parser.decode(t)))
+      end
+    end
+    rest = raw.to_s
+    raw_node.add(Testing::Node.new("", {}, Testing::Parser.decode(rest))) if raw_tag && !rest.empty?
+    root
+  end
+
+  # The name of an end tag token, lowercase.
+  def self.end_name(token: String) -> String
+    token[2, token.size - 2].delete_suffix(">").strip.downcase
+  end
+
+  # The name and attributes of a start tag token. (`/>` is ignored, as
+  # HTML does outside SVG and MathML: a void element has no content
+  # anyway, and `<a href=/>` is a link to `/`.)
+  def self.start_tag(token: String) -> [String, Hash[String, String]]
+    m = token.match(/\A<([A-Za-z][A-Za-z0-9\-]*)/)
+    name = m ? (m[1] || "") : ""
+    body = token[name.size + 1, token.size - name.size - 1]
+    attrs: Hash[String, String] = {}
+    body.delete_suffix(">").gsub(ATTR) do |a|
+      am = a.match(ATTR)
+      if am
+        n = (am[1] || "").downcase
+        v = am[2] || am[3] || am[4] || ""
+        attrs = attrs.put(n, Testing::Parser.decode(v)) unless attrs.key?(n) || n.empty?
+      end
+      ""
+    end
+    [name.downcase, attrs]
+  end
+
+  # `text` with its character references decoded (a reference that is no
+  # character is left as it is).
+  def self.decode(text: String) -> String
+    return text unless text.include?("&")
+    text.gsub(/&(#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|amp|lt|gt|quot|apos|nbsp);/) do |ref|
+      body = ref[1, ref.size - 2]
+      case body
+      when "amp" then "&"
+      when "lt" then "<"
+      when "gt" then ">"
+      when "quot" then "\""
+      when "apos" then "'"
+      when "nbsp" then "\u00a0"
+      else
+        code = body.start_with?("#x") || body.start_with?("#X") ? body[2, body.size - 2].to_i(16) : body[1, body.size - 1].to_i
+        code > 0 && code <= 0x10FFFF && !(code >= 0xD800 && code <= 0xDFFF) ? code.chr : ref
+      end
+    end
+  end
+end
+
+# :nodoc:
+# One selector of a `Testing::Doc` query: compound parts by descendant
+# steps.
+class Testing::Selector
+  @steps: Array[Testing::Compound]
+
+  def initialize(@steps: Array[Testing::Compound]); end
+
+  # The selector of `text`; `ArgumentError` for one it cannot read.
+  def self.parse(text: String) -> Testing::Selector
+    Testing::Selector.new(Testing::Selector.split_steps(text.strip).map { |s| Testing::Compound.parse(s) })
+  end
+
+  # :nodoc:
+  # `text` split at the spaces outside brackets and quotes.
+  def self.split_steps(text: String) -> Array[String]
+    out: Array[String] = []
+    cur = String::Builder.new
+    depth = 0
+    quote = ""
+    text.each_char do |c|
+      if quote != ""
+        quote = "" if c == quote
+        cur << c
+      elsif c == "\"" || c == "'"
+        quote = c
+        cur << c
+      elsif c == "["
+        depth += 1
+        cur << c
+      elsif c == "]"
+        depth -= 1
+        cur << c
+      elsif depth == 0 && c.match?(/\s/)
+        part = cur.to_s
+        out = out.push(part) unless part.empty?
+      else
+        cur << c
+      end
+    end
+    last = cur.to_s
+    out = out.push(last) unless last.empty?
+    raise ArgumentError.new("empty selector") if out.empty?
+    out
+  end
+
+  # Whether `node`, below `ancestors` (outermost first), matches: its own
+  # part the last, and the earlier ones its ancestors, in order.
+  def matches?(node: Testing::Node, ancestors: Array::Builder[Testing::Node]) -> Bool
+    return false unless @steps[@steps.size - 1].matches?(node)
+    i = @steps.size - 2
+    j = ancestors.size - 1
+    while i >= 0 && j >= 0
+      i -= 1 if @steps[i].matches?(ancestors[j])
+      j -= 1
+    end
+    i < 0
+  end
+
+  # `text` split at the commas outside brackets and quotes.
+  def self.split_list(text: String) -> Array[String]
+    out: Array[String] = []
+    cur = String::Builder.new
+    depth = 0
+    quote = ""
+    text.each_char do |c|
+      if quote != ""
+        quote = "" if c == quote
+        cur << c
+      elsif c == "\"" || c == "'"
+        quote = c
+        cur << c
+      elsif c == "["
+        depth += 1
+        cur << c
+      elsif c == "]"
+        depth -= 1
+        cur << c
+      elsif depth == 0 && c == ","
+        out = out.push(cur.to_s)
+      else
+        cur << c
+      end
+    end
+    out.push(cur.to_s)
+  end
+end
+
+# :nodoc:
+# A compound selector: a tag, an id, classes and attribute tests.
+class Testing::Compound
+  @tag: String?
+  @id: String?
+  @classes: Array[String]
+  @attrs: Array[[String, String?]]
+
+  def initialize(@tag: String?, @id: String?, @classes: Array[String], @attrs: Array[[String, String?]]); end
+
+  # The compound of `text` (`form.search#main[method=get]`).
+  def self.parse(text: String) -> Testing::Compound
+    tag: String? = nil
+    id: String? = nil
+    classes: Array[String] = []
+    attrs: Array[[String, String?]] = []
+    rest = text
+    m = rest.match(/\A([A-Za-z][A-Za-z0-9\-]*|\*)/)
+    if m
+      t = m[1] || ""
+      tag = t == "*" ? nil : t.downcase
+      rest = rest[t.size, rest.size - t.size]
+    end
+    while !rest.empty?
+      if rest.start_with?("#")
+        im = rest.match(/\A#([A-Za-z0-9_\-]+)/) || raise ArgumentError.new("bad selector #{text.inspect}")
+        id = im[1]
+        rest = rest[(im[0] || "").size, rest.size - (im[0] || "").size]
+      elsif rest.start_with?(".")
+        cm = rest.match(/\A\.([A-Za-z0-9_\-]+)/) || raise ArgumentError.new("bad selector #{text.inspect}")
+        classes = classes.push(cm[1] || "")
+        rest = rest[(cm[0] || "").size, rest.size - (cm[0] || "").size]
+      elsif rest.start_with?("[")
+        am = rest.match(/\A\[\s*([^\s=\]]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]*)))?\s*\]/) || raise ArgumentError.new("bad selector #{text.inspect}")
+        name = (am[1] || "").downcase
+        value = am[2] || am[3] || am[4]
+        has_value = (am[0] || "").include?("=")
+        attrs = attrs.push([name, has_value ? (value || "") : nil])
+        rest = rest[(am[0] || "").size, rest.size - (am[0] || "").size]
+      else
+        raise ArgumentError.new("bad selector #{text.inspect}")
+      end
+    end
+    Testing::Compound.new(tag, id, classes, attrs)
+  end
+
+  # Whether the element `node` matches.
+  def matches?(node: Testing::Node) -> Bool
+    return false if node.text? || node.tag.empty?
+    t = @tag
+    return false if t && node.tag != t
+    i = @id
+    return false if i && node.attr("id") != i
+    cs = node.classes
+    return false unless @classes.all? { |c| cs.include?(c) }
+    @attrs.all? do |pair|
+      name, value = pair
+      have = node.attr(name)
+      value.nil? ? !have.nil? : have == value
+    end
+  end
+end

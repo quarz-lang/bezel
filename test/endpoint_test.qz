@@ -29,13 +29,7 @@ class EndpointTestApp < Bezel::Endpoint
 end
 
 class EndpointTest < Test::Case
-  def text_of(res: HTTP::Server::Response) -> String
-    case res.body
-    in HTTP::Content::Text(text:) then text
-    in HTTP::Content::Empty then ""
-    else ""
-    end
-  end
+  def text_of(res: HTTP::Server::Response) -> String = Bezel::Testing.body_of(res)
 
   def prod -> Bezel::App
     Bezel::App.new(Bezel::Config.load("t", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "k" * 64}))
