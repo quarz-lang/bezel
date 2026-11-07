@@ -85,6 +85,10 @@ class RouteBuilder
   def patch(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("PATCH", path, controller, action, as)
   # A DELETE route: `#get`.
   def delete(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("DELETE", path, controller, action, as)
+  # A HEAD route (a GET route serves HEAD already): `#get`.
+  def head(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("HEAD", path, controller, action, as)
+  # An OPTIONS route: `#get`.
+  def options(path: String, controller: Type[Controller], action: Symbol, *, as: String? = nil) -> Void = add("OPTIONS", path, controller, action, as)
 
   # The routes of a resource's actions (`ACTIONS`, or `only:` of them,
   # without `except:`), named by the path's last segment (`/users`:
@@ -111,7 +115,7 @@ class RouteBuilder
                 except: Array[Symbol] = [], &block: RouteBuilder.() -> Void) -> Void
     singular = resource_routes(path, controller, only, except)
     saved = [@prefix, @name_prefix]
-    @prefix = RouteBuilder.join(@prefix, path) + "/{#{singular}_id}"
+    @prefix = RouteBuilder.join(@prefix, path.delete_suffix("/")) + "/{#{singular}_id}"
     @name_prefix = "#{@name_prefix}#{singular}_"
     begin
       instance_exec(&block)
@@ -133,11 +137,13 @@ class RouteBuilder
     singular = Rotor::Inflector.singularize(plural)
     plural = "#{singular}_index" if plural == singular
     acts = ACTIONS.select { |a| only.include?(a) && !except.include?(a) }
-    member = path.delete_suffix("/") + "/{id}"
+    # (`"/users/"` is `"/users"`: the collection has no trailing slash.)
+    path = path.delete_suffix("/")
+    member = path + "/{id}"
     acts.each do |a|
       case a
       when :index then add("GET", path, controller, :index, plural)
-      when :new then add("GET", path.delete_suffix("/") + "/new", controller, :new, "new_#{singular}")
+      when :new then add("GET", path + "/new", controller, :new, "new_#{singular}")
       when :create then add("POST", path, controller, :create, plural)
       when :show then add("GET", member, controller, :show, singular)
       when :edit then add("GET", member + "/edit", controller, :edit, "edit_#{singular}")

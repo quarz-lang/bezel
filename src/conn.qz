@@ -114,6 +114,16 @@ data Conn(
   # The configuration.
   def config -> Config = app.config
 
+  # `path` (a route helper's) as a URL of this request's scheme and host:
+  # `Conn#url(Router.user_path(id: 1))`. The host is the request's Host header
+  # (`localhost` without one), which the proxy in front sets: behind
+  # none, a client chooses it, so a URL meant for elsewhere (an email's
+  # link) should use a host of the configuration's instead.
+  def url(path: String) -> String
+    host = request.host || "localhost"
+    "#{request.scheme}://#{host}#{path}"
+  end
+
   # A repository over the application's database pool: `Bezel::ConfigError`
   # when the application has none (no DATABASE_URL). Cheap: the pool is
   # the application's, the repository a view of it.

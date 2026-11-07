@@ -34,11 +34,20 @@
 # `params`.
 #
 # The `routes` statement checks, where the router is compiled, that each
-# route's controller has its action and each pipeline named is a class
-# method of the router returning plugs; it generates the route helpers:
-# for each named route, a class method `<name>_path` taking the
-# pattern's parameters as keywords (`item_path(id: 7)`; an `Int` or a
-# `String`, percent-encoded), a misspelt or missing one a compile error.
+# route's controller has its action (a public method taking and returning
+# a `Conn`) and each pipeline named is a class method of the router
+# returning plugs. It generates the route helpers: for each named route,
+# a class method `<name>_path` taking the pattern's parameters as
+# keywords (`item_path(id: 7)`). A misspelt or missing keyword is a
+# compile error; a value is an `Int` or a `String`, checked when the
+# helper runs (`ArgumentError` for another, or for an empty, `.` or `..`
+# segment), and percent-encoded. `with_query` adds a query, and
+# `Conn#url` makes the path a URL.
+#
+# A controller whose `controller` statement does not cover the action
+# routed to (none at all, or a subclass's action under its superclass's
+# statement) answers with an `ArgumentError` (a 500, reported to
+# `on_error`).
 abstract class Router
   include Plug
 
@@ -72,8 +81,8 @@ abstract class Router
     b.instance_exec(&block)
     table = b.routes
     table.each do |r|
-      unless r.controller.method?(r.action)
-        raise ArgumentError.new("#{r.method} #{r.pattern}: #{r.controller.name} has no action `#{r.action}`")
+      unless r.controller.methods.any? { |m| m.name == r.action && Controller.action?(m) }
+        raise ArgumentError.new("#{r.method} #{r.pattern}: #{r.controller.name} has no action `#{r.action}` (a public method taking and returning a Bezel::Conn)")
       end
     end
     doc "The routes, in order."
@@ -151,13 +160,29 @@ abstract class Router
         else
           raise ArgumentError.new("#{key}: an Int or a String, not #{v.nil? ? "nil" : v.class.name}")
         end
-        raise ArgumentError.new("#{key}: empty") if text.empty? && !rest
-        rest ? text.split("/", -1).map { |p| URI.encode_component(p) }.join("/") : URI.encode_component(text)
+        pieces = rest ? text.split("/", -1) : [text]
+        pieces.each do |p|
+          # (A dot segment would leave the route once a client resolves
+          # the path.)
+          raise ArgumentError.new("#{key}: #{p.inspect} is not a path segment") if p.empty? || p == "." || p == ".."
+        end
+        pieces.map { |p| URI.encode_component(p) }.join("/")
       else
         seg
       end
     end
     parts.join("/")
+  end
+
+  # `path` with the query `params` (keys in order; an array value repeats
+  # its key), or `path` alone when `params` is empty.
+  #
+  # ```
+  # Bezel::Router.with_query("/users", {"page" => "2", "tag" => ["a b", "c"]})
+  # # => "/users?page=2&tag=a+b&tag=c"
+  # ```
+  def self.with_query(path: String, params: Hash[String, String | Array[String]]) -> String
+    params.empty? ? path : "#{path}?#{URI.encode_www_form(params)}"
   end
 
   def call(conn: Conn) -> Conn

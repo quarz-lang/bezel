@@ -5,7 +5,8 @@
 # accepts none of them, or names another `_format`, is
 # `Bezel::NotAcceptable` (`406`).
 #
-# The formats and their media types: `html` (`text/html`), `json`
+# The formats and their media types: `html` (`text/html`; not
+# `application/xhtml+xml`, so that `application/*` is no HTML), `json`
 # (`application/json`), `text` (`text/plain`), `xml` (`application/xml`
 # and `text/xml`), `csv` (`text/csv`).
 #
@@ -20,7 +21,7 @@ class Plug::Accepts
 
   # The media types of the formats known.
   TYPES = {
-    "html" => ["text/html", "application/xhtml+xml"], "json" => ["application/json"],
+    "html" => ["text/html"], "json" => ["application/json"],
     "text" => ["text/plain"], "xml" => ["application/xml", "text/xml"], "csv" => ["text/csv"]
   }
 

@@ -41,6 +41,38 @@ class RtPages < Bezel::Controller
   def data(conn: Bezel::Conn) -> Bezel::Conn = json(conn, JSON.parse("{\"format\": \"#{conn.format}\"}"))
 end
 
+class RtAdminBase < Bezel::Controller
+  controller do
+    plug :require_admin
+  end
+
+  private def require_admin(conn: Bezel::Conn) -> Bezel::Conn
+    conn.header("x-admin") == "1" ? conn.assign(:admin, "yes") : conn.text("forbidden", status: 403)
+  end
+end
+
+class RtAdminUsers < RtAdminBase
+  controller do
+    plug :mark
+  end
+
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "secret #{conn.assign(:admin)} #{conn.assign(:mark)}")
+
+  private def mark(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:mark, "m")
+end
+
+class RtAdminBare < RtAdminBase
+  controller
+
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "bare #{conn.assign(:admin)}")
+end
+
+# A subclass with an action of its own but no statement: its superclass's
+# dispatch does not know it.
+class RtPagesMore < RtPages
+  def more(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "more")
+end
+
 class RtRouter < Bezel::Router
   def self.browser -> Array[Bezel::Plug]
     [Bezel.plug { |c| c.assign(:piped, "browser") }, Bezel::Plug::Accepts.new(["html"])]
@@ -60,11 +92,22 @@ class RtRouter < Bezel::Router
     scope "/api", pipeline: :api, as: "api" do
       get "/data", RtPages, :data, as: "data"
     end
+    scope "/admin", as: "admin" do
+      get "/users", RtAdminUsers, :index, as: "users"
+      get "/bare", RtAdminBare, :index
+      get "/more", RtPagesMore, :more
+      options "/data", RtPages, :data
+      resources "/posts/", RtComments, only: [:index] do
+        get "/x", RtPages, :me, as: "x"
+      end
+    end
   end
 end
 
 class RtEndpoint < Bezel::Endpoint
   def self.plugs -> Array[Bezel::Plug] = [Bezel::Plug::Parsers.new, Bezel::Plug::MethodOverride.new, RtRouter.new]
+  # (Quiet: a test's 500s are expected.)
+  def self.on_error(error: Exception, conn: Bezel::Conn) -> Void = nil
 end
 
 class RouterTest < Test::Case
@@ -101,7 +144,13 @@ class RouterTest < Test::Case
       "DELETE /users/{id} user delete",
       "GET /users/{user_id}/comments user_comments index",
       "GET /users/{user_id}/comments/{id} user_comment show",
-      "GET /api/data api_data data"
+      "GET /api/data api_data data",
+      "GET /admin/users admin_users index",
+      "GET /admin/bare - index",
+      "GET /admin/more - more",
+      "OPTIONS /admin/data - data",
+      "GET /admin/posts admin_posts index",
+      "GET /admin/posts/{post_id}/x admin_post_x me"
     ], names)
     assert_equal([:browser], RtRouter.route_table[0].pipelines)
   end
@@ -117,6 +166,14 @@ class RouterTest < Test::Case
     assert_equal("/files/a/b%20c.txt", RtRouter.file_path(path: "a/b c.txt"))
     assert_equal("/api/data", RtRouter.api_data_path)
     assert_raise(ArgumentError) { RtRouter.user_path(id: 1.5) }
+    [".", "..", ""].each { |bad| assert_raise(ArgumentError) { RtRouter.user_path(id: bad) } }
+    assert_raise(ArgumentError) { RtRouter.file_path(path: "../../etc/passwd") }
+    assert_raise(ArgumentError) { RtRouter.file_path(path: "a//b") }
+    assert_equal("/users/.x", RtRouter.user_path(id: ".x"))
+    assert_equal("/users?page=2&tag=a+b&tag=c", Bezel::Router.with_query(RtRouter.users_path, {"page" => "2", "tag" => ["a b", "c"]}))
+    assert_equal("/users", Bezel::Router.with_query("/users", Hash[String, String | Array[String]].new))
+    c = Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Host" => "shop.example"})))
+    assert_equal("http://shop.example/users/1", c.url(RtRouter.user_path(id: 1)))
   end
 
   def test_routing_and_pipelines
@@ -156,8 +213,28 @@ class RouterTest < Test::Case
 
   def test_dispatch_unknown_action
     c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
-    assert_raise(Bezel::NotFound) { RtPages.new.dispatch(:nope, c) }
-    assert_raise(Bezel::NotFound) { RtPages.new.dispatch(:text, c) }
+    assert_raise(ArgumentError) { RtPages.new.dispatch(:nope, c) }
+    assert_raise(ArgumentError) { RtPages.new.dispatch(:text, c) }
+    assert_raise(ArgumentError) { Bezel::Controller.new.dispatch(:home, c) }
+  end
+
+  def test_inherited_plugs
+    assert_equal(403, get("/admin/users").status)
+    assert_equal("secret yes m", text_of(get("/admin/users", {"X-Admin" => "1"})))
+    assert_equal(403, get("/admin/bare").status)
+    assert_equal("bare yes", text_of(get("/admin/bare", {"X-Admin" => "1"})))
+    assert_equal(2, RtAdminUsers.controller_plugs.size)
+  end
+
+  def test_an_action_the_statement_does_not_cover_is_a_500
+    res = get("/admin/more")
+    assert_equal(500, res.status)
+    assert_match(/RtPagesMore|RtPages has no action more/, text_of(res))
+  end
+
+  def test_options_route
+    res = RtEndpoint.call(HTTP::Server::Request.build("OPTIONS", "/admin/data", HTTP::Headers.empty, ""))
+    assert_equal(200, res.status)
   end
 
   def test_builder_errors
@@ -184,6 +261,8 @@ class RouterTest < Test::Case
     out = check("missing_action")
     assert(!out.success?)
     assert_match(/main\.qz:7:3: error: `routes` raised ArgumentError: GET \/about: Pages has no action `about`/, out.stderr)
+    # A helper of Bezel::Controller is no action.
+    assert_match(/main\.qz:14:3: error: `routes` raised ArgumentError: GET \/halt: Pages has no action `halt`/, out.stderr)
   end
 
   def test_a_missing_pipeline_is_a_compile_error
@@ -199,7 +278,7 @@ class RouterTest < Test::Case
     assert_match(/Others: plug :check names :hom, which is not an action \(:home\)/, out.stderr)
   end
 
-  def test_route_helpers_are_typed
+  def test_route_helper_keywords_are_checked
     out = check("helper_keywords")
     assert(!out.success?)
     assert_match(/post_item_path\(post_id: Object, id: Object\) -> String has no parameter `idd`/, out.stderr)
