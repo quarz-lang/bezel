@@ -259,6 +259,7 @@ class TestingTest < Test::Case
     svg = Bezel::Testing::Doc.parse("<svg><path d=\"M0\"/><circle r=\"1\" /></svg><p>after</p>")
     assert_false(svg.has_element?("path circle"))
     assert_equal(2, svg.select("svg path, svg circle").size)
+    assert_false(Bezel::Testing::Doc.parse("<svg width=\"10\"/><p>x</p>").has_element?("svg p"))
     opt = Bezel::Testing::Doc.parse("<select><optgroup label=A><option>a<optgroup label=B><option>b</select>")
     assert_equal("b", node(opt, "optgroup[label=B] option").text)
     assert_false(opt.has_element?("optgroup optgroup"))

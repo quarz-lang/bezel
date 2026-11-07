@@ -81,7 +81,7 @@ class Testing::Parser
       elsif t.size > 1 && t.start_with?("<")
         tag, attrs = Testing::Parser.start_tag(t)
         # (In SVG and MathML, `/>` ends the element, as browsers read it.)
-        foreign = (0...stack.size).any? { |i| stack[i].tag == "svg" || stack[i].tag == "math" }
+        foreign = tag == "svg" || tag == "math" || (0...stack.size).any? { |i| stack[i].tag == "svg" || stack[i].tag == "math" }
         self_closing = foreign && t.match?(/(\A<[A-Za-z][A-Za-z0-9\-]*|\s|["'])\/>\z/)
         closes = CLOSES[tag]?
         if closes
