@@ -186,7 +186,8 @@ class TemplatesTest < Test::Case
     # (What the DSL would refuse at render time.)
     assert_equal("v/t.html.bz:1: a <script> cannot hold </script", error_of("<script>var a = \"</scripts>\";</script>"))
     assert_equal("v/t.html.bz:1: a <style> cannot hold </style", error_of("<style>a::after{content:\"</styles>\"}</style>"))
-    assert_equal("v/t.html.bz:2: a <textarea> cannot hold </textarea", error_of("<textarea>\n</textareas></textarea>"))
+    # (Text in a textarea is escaped: `</textareas>` cannot end it.)
+    assert(code_of("<textarea>\n</textareas></textarea>").include?("h.textarea(\"</textareas>\")"))
     # (Lines as written.)
     assert_equal("v/t.html.bz:3: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("\n\n&bogus;"))
     assert_equal("v/t.html.bz:4: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<p>a\n\n\n&bogus;</p>"))
@@ -219,9 +220,9 @@ class TemplatesTest < Test::Case
     # (`b"..."` does not interpolate: the `}` inside it is its own.)
     assert(code_of("<p>{b\"\#{\".size}</p>").include?("h.put((b\"\#{\".size))"))
     # (After a keyword that is no value, a `/` starts a literal.)
-    assert_equal("v/t.html.bz:1: :for's pattern is names, commas, parentheses and braces", error_of("<p :for={f(\" <- '\") <- list}>x</p>it's"))
-    assert_equal("v/t.html.bz:1: a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal right after (, [ or a comma (`f(/x/)`), on one line; no \\ outside literals", error_of("{@args / }/"))
-    assert_equal("v/t.html.bz:1: :for's pattern is names, commas, parentheses and braces", error_of("<p :for={\"a\" <- list}>x</p>"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, commas and parentheses, or those in braces", error_of("<p :for={f(\" <- '\") <- list}>x</p>it's"))
+    assert_equal("v/t.html.bz:1: a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal after (, [, a comma, the opening brace or a spaced = == =~ !~ => && || or keyword argument's colon (`f(/x/)`, `s =~ /x/`), on one line; no \\ outside literals or as a % delimiter", error_of("{@args / }/"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, commas and parentheses, or those in braces", error_of("<p :for={\"a\" <- list}>x</p>"))
     assert(code_of("<p :for={x <- f(\" <- \")}>x</p>").include?("(f(\" <- \")).each do |x|"))
   end
 
@@ -239,7 +240,7 @@ class TemplatesTest < Test::Case
     ].each do |code|
       assert(code_of("<p>#{code}</p>").include?("h.put("), code)
     end
-    amb = "a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal right after (, [ or a comma (`f(/x/)`), on one line; no \\ outside literals"
+    amb = "a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal after (, [, a comma, the opening brace or a spaced = == =~ !~ => && || or keyword argument's colon (`f(/x/)`, `s =~ /x/`), on one line; no \\ outside literals or as a % delimiter"
     [
       # (Spacing: `a /b` is a call's argument unless `a` is a local.)
       "{n/2}", "{a /2}", "{a/ 2}", "{items.size /2}", "{a %|b|}", "{puts %|}|, 0)}",
@@ -256,6 +257,37 @@ class TemplatesTest < Test::Case
     assert_equal("v/t.html.bz:1: `:b\"` in {...} reads as a label or a symbol: put a space after the colon", error_of("<p>{f(a:b\"x\")}</p>"))
     # (Regular expression flags are the literal's, so `b` here is one.)
     assert(code_of("<p>{f(/r/b, \"\#{\"}\"}\")}</p>").include?("f(/r/b, \"\#{\"}\"}\")"))
+  end
+
+  def test_sixth_review
+    amb = "v/t.html.bz:1: #{"a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal after (, [, a comma, the opening brace or a spaced = == =~ !~ => && || or keyword argument's colon (`f(/x/)`, `s =~ /x/`), on one line; no \\ outside literals or as a % delimiter"}"
+    # (`#` and `\\` as percent delimiters: the lexer ends the literal there first.)
+    assert_equal(amb, error_of("<p>{%#a\#{1}\"#}</p><p>TEXT</p>"))
+    assert_equal(amb, error_of("<p>{f(%Q#a\#{1}\"#)}</p>"))
+    assert_equal(amb, error_of("<p>{f(%\\a\\)}</p>"))
+    esc = "v/t.html.bz:1: a \\u{...} escape in {...} holds hexadecimal digits only"
+    assert_equal(esc, error_of("<p>{\"\\u{\#{\"}\"}\"} more</p>"))
+    assert_equal(esc, error_of("<p>{f(%Q}\\u{\":})}</p>"))
+    assert(code_of("<p>{\"\\u{41 42}\"}</p>").include?("h.put((\"\\u{41 42}\"))"))
+    # (Patterns.)
+    assert_equal("v/t.html.bz:1: :for's pattern is names, commas and parentheses, or those in braces", error_of("<li :for={{a}, {b} <- xs}>x</li>"))
+    assert(code_of("<li :for={{a, b} <- xs}>x</li>").include?("xs.each do |a, b|"))
+    # (Comments in a textarea are its text; texts around a comment are one.)
+    assert(code_of("<textarea><!-- c --></textarea>").include?("h.textarea(\"<!-- c -->\")"))
+    assert(code_of("<p>a\n<!-- c -->\n b</p>").include?("h.p(#{lit("a\nb")})"))
+    assert(code_of("<!DOCTYPE html>\n<!-- c -->\n<html></html>").include?("h.doctype\n      h.html"))
+    # (Parameters are found by name, not by text.)
+    assert(code_of("{@args a: Int = f(1, conn: 2)}").include?("Bezel.html do |h|"))
+    assert(code_of("{@args a: Hash[String, Int] = {\"x\" => 1,\"h\" => 2}}").include?("def self.t(a:"))
+    assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of("{@args a: Int, *h: Int}"))
+    # (Literals after operators and labels; `A::B / 2`.)
+    ["{s =~ /x/}", "{s !~ /x/}", "{x = /x/}", "{a == /x/}", "{f(pattern: /x/)}", "{{\"a\" => /x/}}", "{a && /x/}",
+     "{a || %w[x]}", "{A::B / 2}", "{A::b / 2}"].each do |code|
+      assert(code_of("<p>#{code}</p>").include?("h.put("), code)
+    end
+    ["{a ? b : /x/}", "{s=~/x/}", "{a.== /x/}", "{:== /x/}", "{f(a:/x/)}"].each do |code|
+      assert_equal(amb, error_of("<p>#{code}</p>"), code)
+    end
   end
 
   def test_module_sources_are_checked

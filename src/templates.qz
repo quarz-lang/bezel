@@ -37,7 +37,8 @@
 #   bare one `true`) and given the content as its `content`. A slot
 #   `<:footer>...</:footer>` directly inside one is the keyword argument
 #   `footer:`, a `Bezel::Html`.
-# - `<!-- ... -->`: a comment of the template, left out of the page.
+# - `<!-- ... -->`: a comment of the template, left out of the page
+#   (but in `textarea` and `title`, whose content is text).
 #
 # Elements are the DSL's (an unknown one is an error) and are closed
 # explicitly (`<br>` or `<br/>` for a void element, `<div/>` for an empty
@@ -59,11 +60,14 @@
 # An expression's code goes in the generated code as written, in
 # parentheses, so it is one expression without `#` comments, heredocs,
 # lines starting with `__END__` or `=begin`, or backslashes outside
-# literals; a `/` or `%` is an operator with a space on each side after
-# a value (`a.size / 2`, `n % 3`), or starts a regular expression or a
-# percent literal right after `(`, `[`, a comma or the opening brace
-# (`{name.gsub(/\s/, "")}`, `{%w[a b]}`): the compiler must see where
-# the code ends as Quarz will, and refuses what it cannot. The
+# literals; a `/` (or a `%` that could start a percent literal, `%w[`)
+# is an operator with a space on each side after a value
+# (`a.size / 2`, `n % 3`), or starts a regular expression or a percent
+# literal after `(`, `[`, a comma, the opening brace, or one of
+# `= == =~ !~ => && ||` or a keyword argument's colon spaced
+# (`{name.gsub(/\s/, "")}`, `{%w[a b]}`, `{s =~ /x/}`): the compiler
+# must see where the code ends as Quarz will, and refuses what it
+# cannot. The
 # generated code names the builder `h` and the slots' contents
 # `__bz_slot_<n>`, which the template's own names avoid.
 #
@@ -114,14 +118,15 @@ module Templates
     parser = Templates::Parser.new(source.path, source.text)
     nodes = parser.parse
     args = parser.args || ""
-    if args.match?(/(\A|,)\s*(&|\*\*?)?h\s*:/)
+    names = Templates::Parser.param_names(args)
+    if names.include?("h")
       raise Templates::Error.new(source.path, parser.args_line, "a parameter cannot be named `h` (the builder's name)")
     end
     gen = Templates::Generator.new(source.path)
     b = String::Builder.new
     b << "  # Renders " << source.path << ".\n"
     b << "  def self." << source.name << (args.empty? ? "" : "(#{args})") << " -> Bezel::Html\n"
-    b << "    Bezel.html" << (args.match?(/(\A|,)\s*conn\s*:/) ? "(conn)" : "") << " do |h|\n"
+    b << "    Bezel.html" << (names.include?("conn") ? "(conn)" : "") << " do |h|\n"
     gen.nodes(Templates.trim(nodes), 3, false)
     b << gen.output
     b << "    end\n"
@@ -210,6 +215,27 @@ module Templates
         known
       end
     end
+  end
+
+  # :nodoc:
+  # `nodes` with adjacent texts (a comment between them left out) made
+  # one, so that whitespace is compacted across the comment.
+  def self.merge_texts(nodes: Array[Templates::Node]) -> Array[Templates::Node]
+    out = Array::Builder[Templates::Node].new
+    pending: Templates::Node? = nil
+    nodes.each do |n|
+      last = pending
+      if n.kind == :text && last
+        pending = last.with_text(last.name + n.name)
+      else
+        out << last if last
+        pending = n.kind == :text ? n : nil
+        out << n unless n.kind == :text
+      end
+    end
+    last = pending
+    out << last if last
+    out.to_a
   end
 
   # :nodoc:
@@ -351,7 +377,7 @@ class Templates::Parser
     while true
       if eof?
         fail(open_line, "<#{tag}> is not closed") if tag
-        return out.to_a
+        return Templates.merge_texts(out.to_a)
       end
       line = @line
       if at?("<!--")
@@ -377,7 +403,7 @@ class Templates::Parser
         elsif name != tag
           fail(line, "</#{name}> does not close <#{tag}> (line #{open_line})")
         end
-        return out.to_a
+        return Templates.merge_texts(out.to_a)
       elsif peek == "<" && peek(1).match?(/\A[A-Za-z.:]\z/)
         @started = true
         out << element
@@ -451,13 +477,47 @@ class Templates::Parser
   # `code` without the spaces (to the lexer: not a form feed) around it.
   def self.trim_code(code: String) -> String = code.sub(/\A[ \t\r\n]+/, "").sub(/[ \t\r\n]+\z/, "")
 
+  # The names of the parameters `args` declares (`a: Int = f(1, b: 2),
+  # *rest: Int, &blk: () -> Void` has `a`, `rest`, `blk`): split at
+  # the commas outside brackets and literals.
+  def self.param_names(args: String) -> Array[String]
+    cs = "(#{args})".chars
+    parts = Array::Builder[String].new
+    depth = 0
+    start = 1
+    j = 1
+    while j < cs.size - 1
+      c = cs[j]
+      if c == "(" || c == "[" || c == "{"
+        depth += 1
+      elsif c == ")" || c == "]" || c == "}"
+        depth -= 1
+      elsif c == "\"" || c == "'"
+        e = Templates::Parser.string_end(cs, j, c == "\"")
+        j = e if e > j
+      elsif c == "," && depth == 0
+        parts << cs[start...j].join
+        start = j + 1
+      end
+      j += 1
+    end
+    parts << cs[start...(cs.size - 1)].join
+    out = Array::Builder[String].new
+    parts.to_a.each do |part|
+      m = part.match(/\A\s*(?:\*\*?|&)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/)
+      out << (m[1] || "") if m
+    end
+    out.to_a
+  end
+
   # Fails at `line` for what `matching` found (a negative result).
   def code_problem(line: Int, found: Int) -> Void
     fail(line, "a # comment cannot be in {...}") if found == -2
     if found == -3
-      fail(line, "a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal right after (, [ or a comma (`f(/x/)`), on one line; no \\ outside literals")
+      fail(line, "a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal after (, [, a comma, the opening brace or a spaced = == =~ !~ => && || or keyword argument's colon (`f(/x/)`, `s =~ /x/`), on one line; no \\ outside literals or as a % delimiter")
     end
     fail(line, "a heredoc cannot be in {...} (write `<< x` with a space for the operator)") if found == -4
+    fail(line, "a \\u{...} escape in {...} holds hexadecimal digits only") if found == -6
     fail(line, "`:b\"` in {...} reads as a label or a symbol: put a space after the colon") if found == -5
     fail(line, "{ is not closed (a { in a text is written {\"{\"})") if found < 0
   end
@@ -587,6 +647,18 @@ class Templates::Parser
     end
     q = cs[p]
     return :literal if !literal && (p == open || q == "(" || q == "," || q == "[")
+    # (After a keyword argument's `:` or one of `= == =~ !~ => && ||`,
+    # spaced on both sides, a literal: none of them ends a value, and
+    # spaced they are no symbol or method name.)
+    if !literal && p < j - 1
+      k = p
+      k -= 1 while k > open && "=~!>&|:".include?(cs[k])
+      op = cs[(k + 1)..p].join
+      before = cs[k]
+      if [":", "=", "==", "=~", "!~", "=>", "&&", "||"].include?(op) && (op != ":" || Templates::Parser.ident_char?(before))
+        return :literal if op == ":" || Templates::Parser.space?(before)
+      end
+    end
     spaced = p < j - 1 && Templates::Parser.space?(cs[j + 1]? || "\n")
     return :ambiguous unless spaced
     # (An operator needs an operand after it, on its line: the code is
@@ -603,8 +675,9 @@ class Templates::Parser
     k -= 1 while k > open && Templates::Parser.ident_char?(cs[k])
     sigil = k > open ? cs[k] : ""
     word = cs[(k > open ? k + 1 : open + 1)..e].join
-    # (A symbol, an instance, class or global variable: refused.)
-    return :ambiguous if sigil == ":" || sigil == "@" || sigil == "$"
+    # (A symbol, an instance, class or global variable: refused; after
+    # `::`, a constant or a method's name.)
+    return :ambiguous if (sigil == ":" && !(k - 1 > open && cs[k - 1] == ":")) || sigil == "@" || sigil == "$"
     if word.match?(/\A[0-9A-Z]/)
       # (A number or a constant takes no `?`/`!`.)
       return suffix ? :ambiguous : :operator
@@ -642,6 +715,9 @@ class Templates::Parser
     else
       return open
     end
+    # (The lexer ends a literal at its delimiter before reading `#{` or
+    # an escape: `#` and `\` as delimiters are refused.)
+    return -3 if d == "#" || d == "\\"
     # (`%Q`, `%r` and `%(...)` interpolate.)
     interpolates = letter == "Q" || letter == "r" || letter == ""
     closer = {"(" => ")", "[" => "]", "{" => "}", "<" => ">"}[d]? || d
@@ -650,22 +726,36 @@ class Templates::Parser
     j = open + (letter.empty? ? 2 : 3)
     while j < cs.size
       c = cs[j]
-      if c == "\\"
-        j += 2
-        next
-      end
-      if interpolates && c == "#" && cs[j + 1]? == "{"
-        j = Templates::Parser.matching(cs, j + 1)
-        return j if j < 0
-      elsif c == closer
+      if c == closer
         depth -= 1
         return j if depth == 0
       elsif paired && c == d
         depth += 1
+      elsif c == "\\"
+        return -6 unless Templates::Parser.escape_ok?(cs, j)
+        j += 2
+        next
+      elsif interpolates && c == "#" && cs[j + 1]? == "{"
+        j = Templates::Parser.matching(cs, j + 1)
+        return j if j < 0
       end
       j += 1
     end
     -1
+  end
+
+  # Whether the escape at `j` is one the lexer reads as the compiler
+  # does (two characters): not a `\u{` without hex digits up to its `}`,
+  # after which the lexer skips ahead.
+  def self.escape_ok?(cs: Array[String], j: Int) -> Bool
+    return true unless cs[j + 1]? == "u" && cs[j + 2]? == "{"
+    k = j + 3
+    digits = 0
+    while k < cs.size && (cs[k].match?(/\A[0-9A-Fa-f]\z/) || cs[k] == " ")
+      digits += 1 if cs[k] != " "
+      k += 1
+    end
+    digits > 0 && cs[k]? == "}"
   end
 
   # The index of the quote (or `/`) closing the string (or regular
@@ -676,6 +766,7 @@ class Templates::Parser
     while j < cs.size
       c = cs[j]
       if c == "\\"
+        return -6 unless Templates::Parser.escape_ok?(cs, j)
         j += 2
         next
       end
@@ -738,7 +829,7 @@ class Templates::Parser
           parts = f.partition(" <- ")
           fail(a.line, ":for is written {pattern <- expr}") if parts[1].empty? || Templates::Parser.trim_code(parts[0]).empty? || Templates::Parser.trim_code(parts[2]).empty?
           fail(a.line, ":for cannot name a variable `h` (the builder's name)") if parts[0].match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
-          fail(a.line, ":for's pattern is names, commas, parentheses and braces") unless Templates::Parser.trim_code(parts[0]).match?(/\A[A-Za-z0-9_,(){}*\s]+\z/)
+          fail(a.line, ":for's pattern is names, commas and parentheses, or those in braces") unless Templates::Parser.trim_code(parts[0]).match?(/\A(\{[A-Za-z0-9_,()*\s]+\}|[A-Za-z0-9_,()*\s]+)\z/)
           check_code(a.line, Templates::Parser.trim_code(parts[2]))
           for_code = f
         when ":if" then if_code = a.value
@@ -832,10 +923,7 @@ class Templates::Parser
       if peek == "{"
         brace(out)
       else
-        piece = text(["{", "<"])
-        # (The DSL refuses content holding the start of its end tag.)
-        fail(piece.line, "a <#{tag}> cannot hold </#{tag}") if piece.name.downcase.include?("</#{tag}")
-        out << piece
+        out << text(["{", "<"])
         # (A `<` that does not end the element is text.)
       end
     end
@@ -888,7 +976,7 @@ class Templates::Generator
       # (`h.doctype` ends its line: the template's line break after it is
       # left out.)
       if i > 0 && nodes[i - 1].kind == :doctype && n.kind == :text
-        node(n.with_text(n.name.sub(/\A[ \t\r\f]*\n/, "")), depth, pre)
+        node(n.with_text(n.name.sub(/\A[ \t\r\n\f]*\n/, "")), depth, pre)
       else
         node(n, depth, pre)
       end
@@ -925,7 +1013,8 @@ class Templates::Generator
         # (Checked by the parser.)
         parts = f.partition(" <- ")
         pattern = Templates::Parser.trim_code(parts[0])
-        pattern = pattern[1, pattern.size - 2] if pattern.start_with?("{") && pattern.end_with?("}")
+        # (The parser took `{a, b}` or plain names only.)
+        pattern = pattern[1, pattern.size - 2] if pattern.start_with?("{")
         list = Templates::Parser.trim_code(parts[2])
         emit(d, "#{Templates::Generator.paren(list)}.each do |#{pattern}|#{at(n.line)}")
         d += 1
