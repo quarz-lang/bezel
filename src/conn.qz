@@ -25,7 +25,9 @@ data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: 
   # The session without `key`.
   def delete(key: String) -> Session = with(values: values.delete(key), changed: true, dropped: false)
 
-  # An empty session, whose cookie is to be dropped (logging out).
+  # The session dropped (logging out): none of its values kept, but a
+  # fresh CSRF secret when it had one; a store deletes its cookie when
+  # nothing is left, else writes the new one.
   # The CSRF secret goes too, replaced by a fresh one when the session had
   # one, so that a page rendered after `drop` has a token that holds.
   def drop -> Session

@@ -86,8 +86,13 @@ class SecurityTest < Test::Case
     assert_equal("user -", text_of(jar.request("GET", "/me")))
     jar.request("GET", "/login?id=7")
     assert_equal("user 7", text_of(jar.request("GET", "/me")))
+    secret = text_of(jar.request("GET", "/secret"))
     jar.request("GET", "/logout")
     assert_equal("user -", text_of(jar.request("GET", "/me")))
+    # The CSRF secret is a new one: nothing of the old session is kept.
+    after = text_of(jar.request("GET", "/secret"))
+    assert_false(after == "-")
+    assert_false(after == secret)
   end
 
   def test_cookie_attributes_per_environment
@@ -301,8 +306,10 @@ class SecurityTest < Test::Case
   def test_tokens_rendered_after_renew_or_drop_hold
     jar = SecJar.new
     jar.request("GET", "/me")
+    before = text_of(jar.request("GET", "/token"))
     token = text_of(jar.request("GET", "/renew-token"))
     assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token}").status)
+    assert_equal(403, jar.request("POST", "/thing", "_csrf_token=#{before}").status)
     token2 = text_of(jar.request("GET", "/drop-token"))
     assert_false(token2.empty?)
     assert_equal(200, jar.request("POST", "/thing", "_csrf_token=#{token2}").status)

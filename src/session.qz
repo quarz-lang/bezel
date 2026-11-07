@@ -9,7 +9,9 @@ module Session::Store
   # it does not read back).
   abstract def load(conn: Conn) -> Session
 
-  # `conn` with its session saved (a cookie set or dropped).
+  # `conn` with its session saved (a cookie set, or deleted when the
+  # session is empty). A `dropped` session may have values: a new
+  # session's.
   abstract def save(conn: Conn, session: Session) -> Conn
 end
 
@@ -22,7 +24,7 @@ end
 # session over `MAX_BYTES` once encoded is a `Bezel::CookieOverflow`.
 #
 # The values can be read by nobody without the secret, but the cookie as
-# a whole can be replayed: logging out drops it from the browser, not
+# a whole can be replayed: logging out replaces it in the browser, not
 # from a copy someone kept. With `max_age`, the cookie holds its expiry
 # (set when it is written), and an older one reads as empty: the
 # session ends `max_age` after its last change, whatever the browser
