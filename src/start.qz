@@ -1,0 +1,57 @@
+# Serves `endpoint` until the process is told to stop: loads the
+# configuration (`Bezel::Config.load`, the application's name from the
+# endpoint's namespace, `MyApp::Endpoint` giving `my_app`, unless
+# `config` is given), opens the database's pool when there is a
+# `DATABASE_URL`, and runs an `HTTP::Server` with the endpoint's handler
+# on `HOST`:`PORT` (HTTPS with `TLS_CERT` and `TLS_KEY`). `SIGTERM`
+# shuts it down gracefully: no new connections, the requests in flight
+# given `grace` to finish, then cancelled; `SIGINT` (Ctrl-C) does the
+# same with one second. Returns once the server has stopped and the pool
+# is closed.
+#
+# ```quarz no_run
+# # src/main.qz of an application
+# class Store < Bezel::Endpoint
+#   def self.plugs -> Array[Bezel::Plug] = [Bezel::Plug::Logger.new, Bezel.plug { |conn| conn.text("hi") }]
+# end
+#
+# Bezel.start(Store)
+# ```
+public def start(endpoint: Type[Endpoint], config: Config? = nil, *, grace: Duration = 30.seconds) -> Void
+  c = config || Config.load(app_name(endpoint))
+  pool = open_pool(c)
+  begin
+    srv = server(endpoint, App.new(c, pool))
+    Signal.trap(:TERM) { srv.shutdown(timeout: grace) }
+    Signal.trap(:INT) { srv.shutdown(timeout: 1.second) }
+    a = srv.local_address
+    STDERR.puts "bezel: #{c.app} (#{c.env}) listening on #{c.tls_cert ? "https" : "http"}://#{a.host}:#{a.port}"
+    Task.scope do |s|
+      s.spawn { srv.serve }
+    end
+  ensure
+    pool&.close
+  end
+end
+
+# The server `Bezel.start` runs, for `endpoint` in `app`, bound at once
+# (`port` 0 picks a free port: a test reads it from `local_address`),
+# not yet serving.
+public def server(endpoint: Type[Endpoint], app: App, *, port: Int? = nil) -> HTTP::Server
+  c = app.config
+  HTTP::Server.new(endpoint.handler(app), host: c.host, port: port || c.port,
+                   trusted_proxies: c.trusted_proxies, tls: c.tls)
+end
+
+# The application's name for `endpoint`: its outermost namespace in
+# snake_case (`MyApp::Endpoint` is `my_app`).
+public def app_name(endpoint: Type[Endpoint]) -> String
+  Rotor::Inflector.underscore(endpoint.name.partition("::")[0])
+end
+
+# :nodoc:
+# The pool of `config`'s database, or nil without one.
+def open_pool(config: Config) -> PG::Pool?
+  url = config.database_url
+  url ? PG::Pool.new(url, config.pool_size) : nil
+end

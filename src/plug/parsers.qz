@@ -1,0 +1,83 @@
+# Reads the request's body into its parameters (`Conn#params`, and
+# `Conn#body_params` alone) by its `Content-Type`:
+#
+# - `:urlencoded`: `application/x-www-form-urlencoded`, with the nesting
+#   of `Bezel::Params.from_query`;
+# - `:json`: `application/json` and `application/*+json`; an object's
+#   members are the parameters, anything else is under `"_json"`.
+#
+# A body over `max_body` bytes is `Bezel::PayloadTooLarge` (`413`), one
+# that does not parse (or is not UTF-8) `Bezel::BadRequest` (`400`). A
+# body of another type is left unread when its media type matches one of
+# `pass` (`"*/*"`, the default, passes every type; `"text/*"` a family;
+# `"application/xml"` one), and is `Bezel::UnsupportedMediaType` (`415`)
+# otherwise. A request without a body, or without a `Content-Type`, is
+# passed on as it is.
+class Plug::Parsers
+  include Plug
+
+  @parsers: Array[Symbol]
+  @max_body: Int
+  @pass: Array[String]
+
+  # The plug, with the parsers named (`:urlencoded`, `:json`).
+  def initialize(*, parsers: Array[Symbol] = [:urlencoded, :json], max_body: Int = 1_048_576,
+                 pass: Array[String] = ["*/*"])
+    parsers.each do |p|
+      raise ArgumentError.new("unknown parser #{p.inspect}: :urlencoded or :json") unless p == :urlencoded || p == :json
+    end
+    raise ArgumentError.new("max_body must be positive") if max_body <= 0
+    @parsers = parsers
+    @max_body = max_body
+    @pass = pass
+  end
+
+  def call(conn: Conn) -> Conn
+    ctype = conn.header("content-type")
+    return conn if ctype.nil?
+    body = conn.request.body
+    return conn if body.size == 0
+    type = ctype.partition(";")[0].strip.downcase
+    if @parsers.include?(:urlencoded) && type == "application/x-www-form-urlencoded"
+      ps = Params.from_query(read(conn))
+    elsif @parsers.include?(:json) && (type == "application/json" || (type.start_with?("application/") && type.end_with?("+json")))
+      text = read(conn)
+      begin
+        value = JSON.parse(text)
+      rescue JSON::ParseError
+        raise BadRequest.new("malformed JSON body")
+      end
+      ps = Params.from_json(value)
+    elsif passes?(type)
+      return conn
+    else
+      raise UnsupportedMediaType.new("unsupported media type #{type}")
+    end
+    conn.with(body_params: ps).merge_params(ps)
+  end
+
+  # :nodoc:
+  # The body as text, at most `max_body` bytes.
+  def read(conn: Conn) -> String
+    body = conn.request.body
+    size = body.size
+    raise PayloadTooLarge.new if size && size > @max_body
+    bytes = Bytes.build do |b|
+      seen = 0
+      loop do
+        chunk = body.read_chunk
+        break if chunk.size == 0
+        seen += chunk.size
+        raise PayloadTooLarge.new if seen > @max_body
+        b << chunk
+      end
+    end
+    bytes.decode? || raise BadRequest.new("body is not UTF-8")
+  end
+
+  # :nodoc:
+  def passes?(type: String) -> Bool
+    main = type.partition("/")[0]
+    @pass.any? { |p| p == "*/*" || p == type || p == "#{main}/*" }
+  end
+end

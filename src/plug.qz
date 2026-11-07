@@ -1,0 +1,75 @@
+# A step of an endpoint's pipeline: takes the connection and returns it
+# changed, as Elixir's Plug does. A plug that answers the request calls
+# `Conn#halt` (or one of `Conn#text`, `#html`, `#json`, `#redirect`,
+# `#send_resp`, which halt), and the plugs after it do not run.
+#
+# Plugs are Shareable values, made once when the endpoint starts and
+# used by every request: their settings are fields, their state per
+# request goes in the `Conn`.
+#
+# A plug that must act after the rest of the pipeline (logging the
+# status, a time limit) overrides `wrap`, which is given the rest as a
+# procedure.
+#
+# ```
+# data Hello(name: String)
+#   include Bezel::Plug
+#   def call(conn: Bezel::Conn) -> Bezel::Conn = conn.text("hello #{name}")
+# end
+#
+# conn = Bezel::Plug.run([Hello.new("you")], Bezel::Conn.build(HTTP::Server::Request.get("/")))
+# conn.to_response.body          # => HTTP::Content::Text(text: "hello you")
+# ```
+module Plug
+  include Shareable
+
+  # The connection changed by this plug.
+  abstract def call(conn: Conn) -> Conn
+
+  # Runs this plug, then `rest` (the plugs after it) unless it halted.
+  # Override it to act around the rest: its result is the request's.
+  def wrap(conn: Conn, rest: (Conn) -> Conn) -> Conn
+    c = call(conn)
+    c.halted? ? c : rest.call(c)
+  end
+
+  # Runs `plugs` on `conn` in order, until one halts.
+  def self.run(plugs: Array[Plug], conn: Conn) -> Conn = Plug.run_from(plugs, 0, conn, ->(c: Conn) { c })
+
+  # Runs `plugs` on `conn` in order, then `rest`, until one halts: the
+  # plugs' `wrap`s are around `rest` too.
+  def self.run(plugs: Array[Plug], conn: Conn, rest: (Conn) -> Conn) -> Conn = Plug.run_from(plugs, 0, conn, rest)
+
+  # :nodoc:
+  def self.run_from(plugs: Array[Plug], i: Int, conn: Conn, rest: (Conn) -> Conn) -> Conn
+    return conn if conn.halted?
+    return rest.call(conn) if i >= plugs.size
+    plugs[i].wrap(conn, ->(c: Conn) { Plug.run_from(plugs, i + 1, c, rest) })
+  end
+end
+
+# :nodoc:
+# A plug from a procedure (`Bezel.plug { |conn| ... }`).
+data ProcPlug(f: shareable (Conn) -> Conn)
+  include Plug
+
+  def call(conn: Conn) -> Conn = f.call(conn)
+end
+
+# A plug calling the block (which captures by value).
+#
+# ```
+# hi = Bezel.plug { |conn| conn.put_resp_header("x-hi", "1") }
+# hi.call(Bezel::Conn.build(HTTP::Server::Request.get("/"))).resp_headers["x-hi"]   # => "1"
+# ```
+public def plug(&f: shareable (Conn) -> Conn) -> Plug = ProcPlug.new(f)
+
+# A plug running other plugs in order (a pipeline as one plug), halting
+# when one of them does.
+data Pipeline(plugs: Array[Plug])
+  include Plug
+
+  def call(conn: Conn) -> Conn = Plug.run(plugs, conn)
+
+  def wrap(conn: Conn, rest: (Conn) -> Conn) -> Conn = Plug.run(plugs, conn, rest)
+end

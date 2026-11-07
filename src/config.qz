@@ -1,0 +1,176 @@
+# What an application's `config/<env>.qz` gives for one environment
+# (`MyApp::Config.dev` returns one): every setting optional, the
+# environment variables taking precedence over it. Secrets are not here:
+# `SECRET_KEY_BASE` comes from the environment only.
+data Settings(
+  # The address to listen on.
+  host: String? = nil,
+  # The port.
+  port: Int? = nil,
+  # The database (`postgres://...`); nil for an application without one.
+  database_url: String? = nil,
+  # The proxies whose `X-Forwarded-*` headers are believed (addresses or
+  # networks, as `HTTP::Server`'s `trusted_proxies:`).
+  trusted_proxies: Array[String]? = nil,
+  # `:debug`, `:info`, `:warn` or `:error`.
+  log_level: Symbol? = nil,
+  # The size of the database's connection pool.
+  pool_size: Int? = nil
+)
+end
+
+# An application's settings, for one environment: what `Config.load`
+# makes of the environment variables over the application's `Settings`.
+#
+# | Variable | Setting | Default |
+# |---|---|---|
+# | `BEZEL_ENV` | `env`: `dev`, `test` or `prod` | `dev` |
+# | `HOST`, `PORT` | where the server listens | `0.0.0.0`, `4000` |
+# | `DATABASE_URL` | the database, a `PG::Pool` behind `Rotor::Repo` | none |
+# | `POOL_SIZE` | the pool's connections | 10 |
+# | `SECRET_KEY_BASE` | the key sessions and tokens derive theirs from, 64 bytes or more | required in `prod`; derived from the application's name in `dev` and `test`, with a warning |
+# | `TRUSTED_PROXIES` | proxies, separated by commas | none |
+# | `TLS_CERT`, `TLS_KEY` | paths of the certificate chain and its key (PEM): HTTPS | none (behind a proxy) |
+# | `LOG_LEVEL` | `debug`, `info`, `warn` or `error` | `info` |
+#
+# A value that does not parse, or a missing one that is required, is a
+# `Bezel::ConfigError` when the configuration is loaded, before the
+# server starts. Its `inspect` and `to_s` do not show the secret or the
+# database's URL.
+#
+# ```
+# c = Bezel::Config.load("shop", environ: {"BEZEL_ENV" => "test", "PORT" => "8080"})
+# c.env                   # => :test
+# c.port                  # => 8080
+# c.secret_key_base.size  # => 64
+# ```
+data Config(
+  # The application's name (`my_app`).
+  app: String,
+  # `:dev`, `:test` or `:prod`.
+  env: Symbol,
+  # The address to listen on.
+  host: String,
+  # The port.
+  port: Int,
+  # The database's URL, or nil.
+  database_url: String?,
+  # The size of the database's connection pool.
+  pool_size: Int,
+  # The key sessions and tokens derive theirs from.
+  secret_key_base: String,
+  # The trusted proxies.
+  trusted_proxies: Array[String],
+  # The path of the certificate chain, for HTTPS.
+  tls_cert: String?,
+  # The path of the certificate's key, for HTTPS.
+  tls_key: String?,
+  # `:debug`, `:info`, `:warn` or `:error`.
+  log_level: Symbol
+)
+  # The levels, least severe first.
+  LOG_LEVELS = [:debug, :info, :warn, :error]
+
+  # The environments.
+  ENVS = [:dev, :test, :prod]
+
+  # The configuration of the application `app` from the environment
+  # variables `environ` over the `Settings` its environment has in
+  # `settings` (`{dev: MyApp::Config.dev, prod: MyApp::Config.prod}`).
+  # A secret derived for `dev` or `test` is announced on standard error,
+  # once per load, unless `quiet`.
+  def self.load(app: String, settings: Hash[Symbol, Settings] = {},
+                environ: Hash[String, String] = ENV, quiet: Bool = false) -> Config
+    raise ConfigError.new("the application's name is empty") if app.empty?
+    env_name = Config.var(environ, "BEZEL_ENV") || "dev"
+    env = env_name.to_sym
+    unless ENVS.include?(env)
+      raise ConfigError.new("BEZEL_ENV must be dev, test or prod, not #{env_name.inspect}")
+    end
+    s = settings[env]? || Settings.new
+    host = Config.var(environ, "HOST") || s.host || "0.0.0.0"
+    port = Config.int_var(environ, "PORT") || s.port || 4000
+    raise ConfigError.new("PORT must be within 0..65535, not #{port}") if port < 0 || port > 65_535
+    pool_size = Config.int_var(environ, "POOL_SIZE") || s.pool_size || 10
+    raise ConfigError.new("POOL_SIZE must be positive, not #{pool_size}") if pool_size < 1
+    db = Config.var(environ, "DATABASE_URL") || s.database_url
+    proxies = Config.var(environ, "TRUSTED_PROXIES")&.split(",")&.map(&:strip)&.reject(&:empty?) || s.trusted_proxies || []
+    level_name = Config.var(environ, "LOG_LEVEL")
+    level = level_name ? level_name.downcase.to_sym : (s.log_level || :info)
+    unless LOG_LEVELS.include?(level)
+      raise ConfigError.new("LOG_LEVEL must be debug, info, warn or error, not #{(level_name || level.to_s).inspect}")
+    end
+    cert = Config.var(environ, "TLS_CERT")
+    key = Config.var(environ, "TLS_KEY")
+    if cert.nil? != key.nil?
+      raise ConfigError.new("TLS_CERT and TLS_KEY go together: #{cert ? "TLS_KEY" : "TLS_CERT"} is missing")
+    end
+    secret = Config.var(environ, "SECRET_KEY_BASE")
+    if secret
+      raise ConfigError.new("SECRET_KEY_BASE must be at least 64 bytes (it has #{secret.bytesize})") if secret.bytesize < 64
+    elsif env == :prod
+      raise ConfigError.new("SECRET_KEY_BASE is required in prod (64 bytes or more; `openssl rand -hex 32` gives one)")
+    else
+      secret = Config.dev_secret(app)
+      STDERR.puts "bezel: SECRET_KEY_BASE is not set; #{env} uses one derived from the application's name, not for production" unless quiet || env == :test
+    end
+    Config.new(app, env, host, port, db, pool_size, secret, proxies, cert, key, level)
+  end
+
+  # The secret `dev` and `test` use without `SECRET_KEY_BASE`: a digest
+  # of the application's name, the same on every run so that sessions
+  # survive a restart.
+  def self.dev_secret(app: String) -> String
+    Digest::SHA256.hexdigest("bezel dev secret for #{app}")
+  end
+
+  # :nodoc:
+  def self.var(environ: Hash[String, String], name: String) -> String?
+    v = environ[name]?
+    v.nil? || v.strip.empty? ? nil : v.strip
+  end
+
+  # :nodoc:
+  def self.int_var(environ: Hash[String, String], name: String) -> Int?
+    v = Config.var(environ, name)
+    return nil if v.nil?
+    raise ConfigError.new("#{name} must be an integer, not #{v.inspect}") unless v.match?(/\A[0-9]+\z/)
+    begin
+      v.to_i
+    rescue OverflowError
+      raise ConfigError.new("#{name} is out of range")
+    end
+  end
+
+  # Whether this is `dev`.
+  def dev? -> Bool = env == :dev
+  # Whether this is `test`.
+  def test? -> Bool = env == :test
+  # Whether this is `prod`.
+  def prod? -> Bool = env == :prod
+
+  # Whether a message of `level` is logged at this configuration's level.
+  def log?(level: Symbol) -> Bool
+    (LOG_LEVELS.index(level) || 0) >= (LOG_LEVELS.index(log_level) || 0)
+  end
+
+  # The server's TLS settings, read from `tls_cert` and `tls_key`, or nil
+  # without them.
+  def tls -> TLS::ServerConfig?
+    cert = tls_cert
+    key = tls_key
+    return nil if cert.nil? || key.nil?
+    TLS::ServerConfig.new(certificate: File.read_bytes(cert), private_key: File.read_bytes(key),
+                          alpn: ["http/1.1"])
+  end
+
+  # The settings without the secret and the database's URL.
+  def inspect -> String
+    "#<Bezel::Config app: #{app.inspect}, env: #{env.inspect}, host: #{host.inspect}, port: #{port}, " +
+      "database_url: #{database_url ? "(set)" : "nil"}, pool_size: #{pool_size}, secret_key_base: <hidden>, " +
+      "trusted_proxies: #{trusted_proxies.inspect}, tls: #{tls_cert ? "on" : "off"}, log_level: #{log_level.inspect}>"
+  end
+
+  # As `inspect`.
+  def to_s -> String = inspect
+end

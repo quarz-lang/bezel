@@ -1,0 +1,283 @@
+# One parameter's value: a string, a list (`tags[]=a&tags[]=b`, a JSON
+# array) or a nested map (`user[email]=x`, a JSON object).
+enum Param
+  # A string: what a form or a query sends, and a JSON scalar (`12`,
+  # `true`) written as JSON writes it.
+  variant Str(value: String)
+  # A list.
+  variant List(items: Array[Param])
+  # A nested map.
+  variant Map(entries: Hash[String, Param])
+
+  # The value as a plain one: a `String`, an `Array` of plain values or a
+  # `Hash[String, Object?]`, which rotor's changesets take.
+  def to_plain -> Object?
+    case self
+    in Str(value:) then value
+    in List(items:) then items.map(&:to_plain)
+    in Map(entries:) then Params.new(entries).to_h
+    end
+  end
+end
+
+# A request's parameters, merged: the query's, then the body's (a form
+# or a JSON object, `Bezel::Plug::Parsers`), then the path's (the
+# router's), a later one replacing an earlier one of the same name.
+# Values are strings, lists and nested maps (`Bezel::Param`); the typed
+# readers raise `Bezel::BadRequest` (a `400`) for a parameter missing or
+# malformed, so that an action reads what it needs in one call.
+#
+# ```
+# ps = Bezel::Params.from_query("id=12&user[email]=a%40b.c&tags[]=x&tags[]=y")
+# ps.int("id")                    # => 12
+# ps["user"].fetch("email")       # => "a@b.c"
+# ps.array("tags")                # => ["x", "y"]
+# ps.string?("missing")           # => nil
+# ```
+data Params(entries: Hash[String, Param])
+  # No parameters.
+  def self.empty -> Params = Params.new({})
+
+  # The parameters of a query string or an `application/x-www-form-urlencoded`
+  # body, with Rack's nesting: `a[b]=1` is a map, `a[]=1&a[]=2` a list,
+  # `a[][b]=1` a list of maps; a plain name given twice keeps the last.
+  def self.from_query(query: String) -> Params
+    out = Params.empty
+    return out if query.empty?
+    query.split("&").each do |pair|
+      next if pair.empty?
+      k, _, v = pair.partition("=")
+      key = HTTP.percent_decode(k, true)
+      value = HTTP.percent_decode(v, true)
+      raise BadRequest.new("malformed query or form: not UTF-8 once decoded") if key.nil? || value.nil?
+      out = out.put_path(key, value)
+    end
+    out
+  end
+
+  # The parameters of a JSON object; anything else is under `"_json"`.
+  # Strings are kept, `null` is left out, other scalars are written as
+  # JSON writes them (`12`, `true`).
+  def self.from_json(value: JSON::Value) -> Params
+    case value
+    in JSON::Value::Object(members:)
+      out: Hash[String, Param] = {}
+      members.each do |k, v|
+        p = Params.json_param(v)
+        out = out.put(k, p) if p
+      end
+      Params.new(out)
+    else
+      p = Params.json_param(value)
+      p ? Params.new({"_json" => p}) : Params.empty
+    end
+  end
+
+  # :nodoc:
+  def self.json_param(v: JSON::Value) -> Param?
+    case v
+    in JSON::Value::Null then nil
+    in JSON::Value::String(value:) then Param::Str.new(value)
+    in JSON::Value::Array(items:)
+      Param::List.new(items.filter_map { |i| Params.json_param(i) })
+    in JSON::Value::Object(members:)
+      Param::Map.new(Params.from_json(v).entries)
+    else
+      Param::Str.new(v.to_json)
+    end
+  end
+
+  # Parameters from a hash of strings (the router's path parameters).
+  def self.of(h: Hash[String, String]) -> Params
+    Params.new(h.transform_values { |v| Param::Str.new(v) })
+  end
+
+  # These with `other`'s on top: a name in both takes `other`'s value,
+  # except that two maps are merged, as nested forms build them.
+  def merge(other: Params) -> Params
+    out = entries
+    other.entries.each do |k, v|
+      old = out[k]?
+      if old.is_a?(Param::Map) && v.is_a?(Param::Map)
+        out = out.put(k, Param::Map.new(Params.new(old.entries).merge(Params.new(v.entries)).entries))
+      else
+        out = out.put(k, v)
+      end
+    end
+    Params.new(out)
+  end
+
+  # Whether there is a parameter `key`.
+  def key?(key: String) -> Bool = entries.key?(key)
+
+  # The names, in order.
+  def keys -> Array[String] = entries.keys
+
+  # The number of parameters.
+  def size -> Int = entries.size
+
+  # Whether there are none.
+  def empty? -> Bool = entries.empty?
+
+  # The raw value of `key`, or nil.
+  def param?(key: String) -> Param? = entries[key]?
+
+  # The nested parameters under `key` (`params["user"]` for `user[email]`):
+  # `Bezel::BadRequest` when `key` is missing or not a map.
+  def [](key: String) -> Params
+    self[key]? || raise BadRequest.new("parameter `#{key}` is missing or not a map")
+  end
+
+  # The nested parameters under `key`, or nil when it is missing or not a
+  # map.
+  def []?(key: String) -> Params?
+    case entries[key]?
+    in Param::Map(entries: e) then Params.new(e)
+    else nil
+    end
+  end
+
+  # The string `key`: `Bezel::BadRequest` when it is missing or not a
+  # string.
+  def fetch(key: String) -> String
+    string?(key) || raise BadRequest.new("parameter `#{key}` is missing")
+  end
+
+  # The string `key`, or `default` when it is missing.
+  def fetch(key: String, default: String) -> String = string?(key) || default
+
+  # The string `key`, or nil when it is missing or not a string.
+  def string?(key: String) -> String?
+    case entries[key]?
+    in Param::Str(value:) then value
+    else nil
+    end
+  end
+
+  # The integer `key`: `Bezel::BadRequest` when it is missing or not an
+  # integer.
+  def int(key: String) -> Int
+    int?(key) || raise BadRequest.new("parameter `#{key}` is missing")
+  end
+
+  # The integer `key`, nil when it is missing or empty;
+  # `Bezel::BadRequest` when it is not an integer.
+  def int?(key: String) -> Int?
+    s = string?(key)
+    return nil if s.nil? || s.empty?
+    raise BadRequest.new("parameter `#{key}` is not an integer") unless s.match?(/\A[+-]?[0-9]+\z/)
+    begin
+      s.to_i
+    rescue OverflowError
+      raise BadRequest.new("parameter `#{key}` is out of range")
+    end
+  end
+
+  # The number `key`: `Bezel::BadRequest` when it is missing or not a
+  # number.
+  def float(key: String) -> Float
+    float?(key) || raise BadRequest.new("parameter `#{key}` is missing")
+  end
+
+  # The number `key`, nil when it is missing or empty; `Bezel::BadRequest`
+  # when it is not a number.
+  def float?(key: String) -> Float?
+    s = string?(key)
+    return nil if s.nil? || s.empty?
+    raise BadRequest.new("parameter `#{key}` is not a number") unless s.match?(/\A[+-]?([0-9]+(\.[0-9]+)?|\.[0-9]+)([eE][+-]?[0-9]+)?\z/)
+    s.to_f
+  end
+
+  # The boolean `key`: `true`, `1`, `on` and `yes` are true, `false`, `0`,
+  # `off`, `no` and the empty string false, a missing one false (as an
+  # unchecked checkbox sends nothing); anything else is
+  # `Bezel::BadRequest`.
+  def bool(key: String) -> Bool
+    s = string?(key)
+    return false if s.nil?
+    case s.downcase
+    when "true", "1", "on", "yes" then true
+    when "false", "0", "off", "no", "" then false
+    else raise BadRequest.new("parameter `#{key}` is not a boolean")
+    end
+  end
+
+  # The strings of the list `key` (a single string is a list of one, a
+  # missing key an empty list): `Bezel::BadRequest` when an element is not
+  # a string.
+  def array(key: String) -> Array[String]
+    case entries[key]?
+    in nil then []
+    in Param::Str(value:) then [value]
+    in Param::List(items:)
+      items.map do |i|
+        case i
+        in Param::Str(value:) then value
+        else raise BadRequest.new("parameter `#{key}` is not a list of strings")
+        end
+      end
+    in Param::Map then raise BadRequest.new("parameter `#{key}` is not a list")
+    end
+  end
+
+  # The parameters as plain values (`String`, `Array`, `Hash`), the shape
+  # `Rotor::Changeset.cast` takes.
+  def to_h -> Hash[String, Object?]
+    out: Hash[String, Object?] = {}
+    entries.each { |k, v| out = out.put(k, v.to_plain) }
+    out
+  end
+
+  # :nodoc:
+  # These with `value` stored at the bracketed path `key` (`a[b][]`).
+  def put_path(key: String, value: String) -> Params
+    head, rest = Params.split_key(key)
+    Params.new(Params.store(entries, head, rest, value))
+  end
+
+  # :nodoc:
+  # `"a[b][c]"` as `["a", ["b", "c"]]`; `[]` is an empty part. A name
+  # whose brackets do not close is taken whole.
+  def self.split_key(key: String) -> [String, Array[String]]
+    i = key.index("[")
+    return [key, []] if i.nil? || i == 0
+    head = key[0, i]
+    rest = key[i, key.size - i]
+    parts: Array[String] = []
+    while !rest.empty?
+      return [key, []] unless rest.start_with?("[")
+      j = rest.index("]")
+      return [key, []] if j.nil?
+      parts = parts.push(rest[1, j - 1])
+      rest = rest[j + 1, rest.size - j - 1]
+    end
+    [head, parts]
+  end
+
+  # :nodoc:
+  def self.store(h: Hash[String, Param], head: String, rest: Array[String], value: String) -> Hash[String, Param]
+    h.put(head, Params.store_in(h[head]?, rest, value))
+  end
+
+  # :nodoc:
+  # `old` (nil for none) with `value` stored at `path`.
+  def self.store_in(old: Param?, path: Array[String], value: String) -> Param
+    return Param::Str.new(value) if path.empty?
+    first = path[0]
+    rest = path.drop(1)
+    if first.empty?
+      items = old.is_a?(Param::List) ? old.items : []
+      # `a[][b]=1&a[][c]=2` fills the last map until a name repeats.
+      if !rest.empty? && !rest[0].empty?
+        last = items.last?
+        if last.is_a?(Param::Map) && !last.entries.key?(rest[0])
+          return Param::List.new(items.set(items.size - 1, Params.store_in(last, rest, value)))
+        end
+      end
+      Param::List.new(items.push(Params.store_in(nil, rest, value)))
+    else
+      entries = old.is_a?(Param::Map) ? old.entries : {}
+      Param::Map.new(Params.store(entries, first, rest, value))
+    end
+  end
+end

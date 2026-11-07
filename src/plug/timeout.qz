@@ -1,0 +1,27 @@
+# Gives the rest of the pipeline `limit` to answer a request; past it,
+# the rest is cancelled (at its next wait: a computation that never
+# waits runs to its end first) and the request is answered
+# `503 Service Unavailable` (`Bezel::TimeoutError`).
+class Plug::Timeout
+  include Plug
+
+  @limit: Duration
+
+  # The plug, the limit `limit`.
+  def initialize(@limit: Duration)
+    raise ArgumentError.new("the limit must be positive") if @limit <= 0.seconds
+  end
+
+  # The limit.
+  def limit -> Duration = @limit
+
+  def call(conn: Conn) -> Conn = conn
+
+  def wrap(conn: Conn, rest: (Conn) -> Conn) -> Conn
+    begin
+      Task.timeout(@limit) { rest.call(conn) }
+    rescue Task::Timeout
+      raise TimeoutError.new("request timed out after #{@limit}")
+    end
+  end
+end

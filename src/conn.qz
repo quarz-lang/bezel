@@ -1,0 +1,195 @@
+# What every request of an application shares: its configuration and,
+# with a `DATABASE_URL`, the database's pool. `Bezel.start` makes it;
+# a test makes one with `App.new(config)`.
+data App(config: Config, pool: PG::Pool? = nil)
+  # An application `name` in `test`, without a database: what a test of
+  # an endpoint uses when it gives none.
+  def self.test(name: String = "bezel") -> App
+    App.new(Config.load(name, environ: {"BEZEL_ENV" => "test"}, quiet: true))
+  end
+end
+
+# The session's values, which `Bezel::Plug::Session` (bezel#6) loads from
+# and writes to its store; empty without that plug.
+data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: Bool = false)
+  # The value of `key`, or nil.
+  def [](key: String) -> String? = values[key]?
+
+  # The session with `key` set to `value`.
+  def put(key: String, value: String) -> Session = with(values: values.put(key, value), changed: true)
+
+  # The session without `key`.
+  def delete(key: String) -> Session = with(values: values.delete(key), changed: true)
+
+  # An empty session, whose cookie is to be dropped (logging out).
+  def drop -> Session = Session.new({}, true, true)
+end
+
+# The flash: messages kept for the next request (`put`), and those the
+# previous request left (`[]`). `Bezel::Plug::Flash` (bezel#6) carries
+# them in the session (`kept` is what goes there).
+data Flash(current: Hash[Symbol, String] = {}, kept: Hash[Symbol, String] = {})
+  # The message of `kind` the previous request left, or one `now` put.
+  def [](kind: Symbol) -> String? = current[kind]?
+
+  # The flash with `message` kept for the next request.
+  def put(kind: Symbol, message: String) -> Flash = with(kept: kept.put(kind, message))
+
+  # The flash with `message` shown in this request only.
+  def now(kind: Symbol, message: String) -> Flash = with(current: current.put(kind, message))
+end
+
+# A connection: one request and the response being made for it, flowing
+# through the plugs of an endpoint (`Bezel::Plug`). A `Conn` is a value:
+# every change makes a new one (`with`, or the methods below), which a
+# plug returns. A plug that answers (`send_resp` and friends) and stops
+# the rest of the pipeline also calls `halt`.
+#
+# Not Shareable: the request's body is read from its connection.
+#
+# ```
+# conn = Bezel::Conn.build(HTTP::Server::Request.get("/users?page=2"))
+# conn.params.int("page")                     # => 2
+# conn = conn.put_resp_header("x-frame-options", "DENY").text("hi")
+# conn.status                                 # => 200
+# conn.to_response.headers["x-frame-options"] # => "DENY"
+# ```
+data Conn(
+  # The request, as the plugs left it (`MethodOverride` changes its
+  # method).
+  request: HTTP::Server::Request,
+  # The parameters: query, body (once `Parsers` ran), path (once the
+  # router matched), merged.
+  params: Params,
+  # The body's parameters alone (`Bezel::Plug::Parsers`).
+  body_params: Params,
+  # Values the plugs and the action pass on (the current user, say).
+  assigns: Hash[Symbol, Object],
+  # The session (empty without `Bezel::Plug::Session`).
+  session: Session,
+  # The flash.
+  flash: Flash,
+  # The response's status (200 until set).
+  status: Int,
+  # The response's header fields.
+  resp_headers: HTTP::Headers,
+  # The response's body, or nil while none is set.
+  resp_body: HTTP::Content?,
+  # Whether a plug stopped the pipeline: the plugs after it do not run.
+  halted: Bool,
+  # The request's id (`Bezel::Plug::RequestId`), or nil.
+  request_id: String?,
+  # The application.
+  app: App,
+  # When the endpoint took the request (`Time.monotonic`).
+  started: Duration
+)
+  # A connection for `req` in `app`, its parameters those of the query
+  # (`Bezel::BadRequest` when it does not decode).
+  def self.build(req: HTTP::Server::Request, app: App = App.test) -> Conn
+    Conn.bare(req, app).merge_params(Params.from_query(req.query))
+  end
+
+  # A connection for `req` in `app`, without parameters.
+  def self.bare(req: HTTP::Server::Request, app: App) -> Conn
+    Conn.new(req, Params.empty, Params.empty, {}, Session.new, Flash.new, 200,
+             HTTP::Headers.empty, nil, false, nil, app, Time.monotonic)
+  end
+
+  # The request's method (`"GET"`).
+  def method -> String = request.method
+
+  # The request's path, percent-decoded (`"/users/1"`).
+  def path -> String = request.path
+
+  # The request's header `name`, or nil.
+  def header(name: String) -> String? = request.headers[name]
+
+  # The configuration.
+  def config -> Config = app.config
+
+  # Whether a plug stopped the pipeline.
+  def halted? -> Bool = halted
+
+  # Whether a response's body is set.
+  def sent? -> Bool = !resp_body.nil?
+
+  # The connection with the pipeline stopped after this plug.
+  def halt -> Conn = with(halted: true)
+
+  # The connection with `value` assigned to `key`.
+  def assign(key: Symbol, value: Object) -> Conn = with(assigns: assigns.put(key, value))
+
+  # The value assigned to `key`, or nil (`conn.assign?(:user).as?(User)`).
+  def assign?(key: Symbol) -> Object? = assigns[key]?
+
+  # The value assigned to `key`: `KeyError` when none is.
+  def assign(key: Symbol) -> Object
+    assigns[key]? || raise KeyError.new("nothing is assigned to #{key.inspect}")
+  end
+
+  # The connection with the status `status`.
+  def put_status(status: Int) -> Conn = with(status: status)
+
+  # The connection with the response header `name` set to `value`
+  # (replacing any value it had).
+  def put_resp_header(name: String, value: String) -> Conn = with(resp_headers: resp_headers.put(name, value))
+
+  # The connection with the response header `name` added (`Set-Cookie`).
+  def add_resp_header(name: String, value: String) -> Conn = with(resp_headers: resp_headers.add(name, value))
+
+  # The connection without the response header `name`.
+  def delete_resp_header(name: String) -> Conn = with(resp_headers: resp_headers.delete(name))
+
+  # The connection with the session `session`.
+  def put_session(session: Session) -> Conn = with(session: session)
+
+  # The connection with the session's `key` set to `value`.
+  def put_session(key: String, value: String) -> Conn = with(session: session.put(key, value))
+
+  # The connection with `message` in the flash for the next request.
+  def put_flash(kind: Symbol, message: String) -> Conn = with(flash: flash.put(kind, message))
+
+  # The connection with `params` merged over its parameters.
+  def merge_params(more: Params) -> Conn = with(params: params.merge(more))
+
+  # The connection answered with `status` and `body` (its content type
+  # `content_type` unless one is set), and halted.
+  def send_resp(status: Int, body: HTTP::Content, content_type: String? = nil) -> Conn
+    h = resp_headers
+    h = h.put("content-type", content_type) if content_type && !h.key?("content-type")
+    with(status: status, resp_headers: h, resp_body: body, halted: true)
+  end
+
+  # The connection answered with the text `body` (`text/plain`), and
+  # halted.
+  def text(body: String, status: Int = self.status) -> Conn
+    send_resp(status, HTTP::Content::Text.new(body), "text/plain; charset=utf-8")
+  end
+
+  # The connection answered with the HTML `body` (`text/html`), and
+  # halted.
+  def html(body: String, status: Int = self.status) -> Conn
+    send_resp(status, HTTP::Content::Text.new(body), "text/html; charset=utf-8")
+  end
+
+  # The connection answered with `value` as JSON (`application/json`),
+  # and halted.
+  def json(value: JSON::Value, status: Int = self.status) -> Conn
+    send_resp(status, HTTP::Content::Text.new(value.to_json), "application/json")
+  end
+
+  # The connection answered with a redirect to `to` (`302 Found`, or
+  # `status`), and halted. A `to` that is a full URL must be one the
+  # application chose: redirecting to a URL from the request is an open
+  # redirect.
+  def redirect(to: String, status: Int = 302) -> Conn
+    put_resp_header("location", to).send_resp(status, HTTP::Content::Text.new(""), "text/html; charset=utf-8")
+  end
+
+  # The response: the status, the headers and the body (empty when none
+  # is set).
+  def to_response -> HTTP::Server::Response
+    HTTP::Server::Response.new(status, resp_headers, resp_body || HTTP::Content::Empty)
+  end
+end
