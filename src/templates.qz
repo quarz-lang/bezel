@@ -419,7 +419,8 @@ class Templates::Parser
     code = braced
     if code.start_with?("@args")
       fail(line, "{@args ...} comes before the rest of the template") if @started || !@args.nil?
-      a = code[5, code.size - 5].strip
+      a = Templates::Parser.trim_code(code[5, code.size - 5])
+      check_code(line, a)
       @args = a
       @args_line = line
       return
@@ -435,16 +436,35 @@ class Templates::Parser
   def braced -> String
     line = @line
     close = Templates::Parser.matching(@cs, @i)
-    fail(line, "a # comment cannot be in {...}") if close == -2
-    fail(line, "a / or % after a name, with a space before it and none after, is ambiguous in {...} (write `a / b`, or `f(/x/)`)") if close == -3
-    fail(line, "a heredoc cannot be in {...} (write `<< x` with a space for the operator)") if close == -4
-    fail(line, "{ is not closed (a { in a text is written {\"{\"})") if close < 0
-    code = @cs[(@i + 1)...close].join.strip
+    code_problem(line, close)
+    code = Templates::Parser.trim_code(@cs[(@i + 1)...close].join)
     # (Lines that end a file's code or start a comment block.)
     fail(line, "__END__ or =begin cannot start a line in {...}") if code.match?(/(\A|\n)[ \t]*(__END__|=begin)/)
     advance(close + 1 - @i)
     fail(line, "{} holds no expression") if code.empty?
     code
+  end
+
+  # `code` without the spaces (to the lexer: not a form feed) around it.
+  def self.trim_code(code: String) -> String = code.sub(/\A[ \t\r\n]+/, "").sub(/[ \t\r\n]+\z/, "")
+
+  # Fails at `line` for what `matching` found (a negative result).
+  def code_problem(line: Int, found: Int) -> Void
+    fail(line, "a # comment cannot be in {...}") if found == -2
+    if found == -3
+      fail(line, "the compiler cannot tell how Quarz reads a / or % (or \\) in {...}: write `a / b` or `f(/x/)`, on one line")
+    end
+    fail(line, "a heredoc cannot be in {...} (write `<< x` with a space for the operator)") if found == -4
+    fail(line, "{ is not closed (a { in a text is written {\"{\"})") if found < 0
+  end
+
+  # Fails at `line` unless `code` is whole where it is written: in
+  # parentheses (the generated code's place for it).
+  def check_code(line: Int, code: String) -> Void
+    cs = "(#{code})".chars
+    found = Templates::Parser.matching(cs, 0)
+    code_problem(line, found)
+    fail(line, "the code #{code.inspect} is not one expression") unless found == cs.size - 1
   end
 
   # The argument of `code` when it is a call `raw(...)`, or nil.
@@ -453,7 +473,7 @@ class Templates::Parser
     cs = code.chars
     close = Templates::Parser.matching(cs, 3)
     return nil unless close == cs.size - 1
-    inner = cs[4...close].join.strip
+    inner = Templates::Parser.trim_code(cs[4...close].join)
     inner.empty? ? nil : inner
   end
 
@@ -467,12 +487,14 @@ class Templates::Parser
   def self.matching(cs: Array[String], open: Int) -> Int
     stack = [cs[open]? || ""]
     j = open + 1
-    # (The last character that is not a space: a `/` after a value is a
-    # division, after an operator or an opening one starts a regular
-    # expression.)
-    prev = cs[open]? || ""
+    # (The last character that is not a space, and whether a literal
+    # ended there: what comes before a `/` or `%` decides how the lexer
+    # reads it.)
+    prev = open
+    prev_literal = false
     while j < cs.size
       c = cs[j]
+      ended_literal = false
       case c
       when "{", "(", "[" then stack = stack.push(c)
       when "}", ")", "]"
@@ -481,82 +503,132 @@ class Templates::Parser
         stack = stack[0...(stack.size - 1)]
         return j if stack.empty?
       when "\"", "'"
-        j = Templates::Parser.string_end(cs, j)
+        # (`b"..."` (at a token's start) and `'...'` do not interpolate;
+        # `x:b"` could be a label or a symbol: refused.)
+        b_start = j > open + 1 && cs[j - 1] == "b" && !Templates::Parser.ident_char?(cs[j - 2]) && cs[j - 2] != "@" && cs[j - 2] != "$"
+        return -3 if b_start && cs[j - 2] == ":"
+        j = Templates::Parser.string_end(cs, j, c == "\"" && !b_start)
         return j if j < 0
+        ended_literal = true
       when "/", "%"
-        how = Templates::Parser.slash(cs, j, prev)
+        how = Templates::Parser.slash(cs, j, prev, prev_literal)
         return -3 if how == :ambiguous
         if how == :literal
-          j = c == "/" ? Templates::Parser.string_end(cs, j) : Templates::Parser.percent_end(cs, j)
-          return j if j < 0
+          k = c == "/" ? Templates::Parser.string_end(cs, j, true) : Templates::Parser.percent_end(cs, j)
+          return k if k < 0
+          ended_literal = k != j
+          j = k
         end
       when "<"
-        return -4 if cs[j + 1]? == "<" && (cs[j + 2]? || "").match?(/\A[~\-"'`A-Za-z_]\z/)
+        return -4 if cs[j + 1]? == "<" && (cs[j + 2]? || "").match?(/\A[~\-"'`]\z/)
+        return -4 if cs[j + 1]? == "<" && Templates::Parser.ident_char?(cs[j + 2]? || " ")
       when "#" then return -2
+      # (A line continuation, or a backslash outside a literal.)
+      when "\\" then return -3
       end
-      prev = cs[j] unless cs[j].match?(/\A\s\z/)
+      unless Templates::Parser.space?(cs[j])
+        prev = j
+        prev_literal = ended_literal
+      end
       j += 1
     end
     -1
   end
 
-  # Keywords after which a `/` or `%` starts a literal.
-  KEYWORDS = ["if", "unless", "and", "or", "not", "when", "in", "return", "while", "until", "then", "else",
-              "elsif", "do", "case", "yield", "break", "next"]
+  # Whether `c` is a character of a name, as the lexer has it (non-ASCII
+  # included).
+  def self.ident_char?(c: String) -> Bool = c.match?(/\A[A-Za-z0-9_]\z/) || (c.size == 1 && c.ord >= 0x80)
 
-  # How the Quarz lexer reads the `/` (or `%`) at `j`: `:literal` (a
-  # regular expression or percent literal: after an operator, an opening
-  # bracket, a comma, a label or a keyword), `:operator` (after a value,
-  # or in a symbol `:/`), or `:ambiguous` (after a name, with a space
-  # before and none after: a call's argument unless the name is a local,
-  # which only the checker knows).
-  def self.slash(cs: Array[String], j: Int, prev: String) -> Symbol
-    if cs[j - 1]? == ":"
-      before = j >= 2 ? cs[j - 2] : ""
-      # (`a:/x/` is a label then a literal; `:/` a symbol.)
-      return before.match?(/\A[A-Za-z0-9_]\z/) ? :literal : :operator
+  # Whether `c` is a space to the lexer.
+  def self.space?(c: String) -> Bool = c == " " || c == "\t" || c == "\r" || c == "\n"
+
+  # Quarz's keywords, and those that are values (a `/` after them is a
+  # division; after the others it starts a literal).
+  KEYWORDS = ["alias", "and", "begin", "break", "case", "class", "cog", "def", "do", "else", "elsif", "end",
+              "ensure", "false", "if", "in", "module", "next", "nil", "not", "or", "rescue", "retry", "return",
+              "self", "super", "then", "true", "unless", "until", "when", "while", "yield", "__FILE__",
+              "__LINE__", "__method__"]
+  VALUE_KEYWORDS = ["end", "self", "cog", "nil", "true", "false", "__FILE__", "__LINE__", "__method__"]
+
+  # How the Quarz lexer reads the `/` (or `%`) at `j`, the last
+  # character before it at `p` (`literal` when a literal ended there):
+  # `:literal` (it starts a regular expression or a percent literal:
+  # not after a value), `:operator` (after a value, or in the symbol
+  # `:/`), or `:ambiguous` when the compiler cannot tell: after a name,
+  # with a space before and none after (a call's argument unless the name
+  # is a local, which only the checker knows), after a line break, and
+  # the rare forms below.
+  def self.slash(cs: Array[String], j: Int, p: Int, literal: Bool) -> Symbol
+    # (A `%` without a literal's shape after it is an operator anywhere.)
+    return :operator if cs[j] == "%" && !Templates::Parser.percent_shape?(cs, j)
+    k = p + 1
+    while k < j
+      return :ambiguous if cs[k] == "\n"
+      k += 1
     end
-    name_end = prev.match?(/\A[A-Za-z0-9_]\z/)
-    if (prev == "?" || prev == "!")
-      # (A method name's `?` or `!` (`a.empty? / 2`), or an operator.)
-      k = j - 1
-      k -= 1 while k >= 0 && cs[k].match?(/\A\s\z/)
-      name_end = k >= 1 && cs[k - 1].match?(/\A[A-Za-z0-9_]\z/)
-      return :literal unless name_end
+    return :operator if literal
+    q = cs[p]
+    if q == ":" && p == j - 1
+      b = p > 0 ? cs[p - 1] : ""
+      return :ambiguous if b == "?" || b == "!" || b == ":"
+      # (A label's colon, after a name or a string; else the symbol.)
+      return Templates::Parser.ident_char?(b) || b == "\"" || b == "'" ? :literal : :operator
     end
-    return :literal if prev.match?(/\A[(\[{,=!&|?:;+\-*%<>~^]\z/) && !name_end
-    return :operator unless name_end
-    k = j - 1
-    k -= 1 while k >= 0 && cs[k].match?(/\A\s\z/)
-    k -= 1 if k >= 0 && (cs[k] == "?" || cs[k] == "!")
-    e = k
-    k -= 1 while k >= 0 && cs[k].match?(/\A[A-Za-z0-9_]\z/)
+    return :operator if q == ")" || q == "]" || q == "}"
+    suffix = (q == "?" || q == "!") && p > 0 && Templates::Parser.ident_char?(cs[p - 1])
+    return :literal unless Templates::Parser.ident_char?(q) || suffix
+    e = suffix ? p - 1 : p
+    k = e
+    k -= 1 while k >= 0 && Templates::Parser.ident_char?(cs[k])
     word = cs[(k + 1)..e].join
-    return :literal if KEYWORDS.include?(word)
-    return :operator if word.match?(/\A[0-9A-Z]/) || (k >= 0 && cs[k] == "@")
-    spaced_before = cs[j - 1]?.to_s.match?(/\A\s\z/)
-    spaced_after = (cs[j + 1]? || " ").match?(/\A\s\z/)
+    sigil = k >= 0 ? cs[k] : ""
+    # (A number, an instance variable or a constant takes no `?`/`!`.)
+    if word.match?(/\A[0-9]/) || sigil == "@" || word.match?(/\A[A-Z]/)
+      return suffix ? :ambiguous : :operator
+    end
+    return :ambiguous if sigil == "$"
+    name = suffix ? word + q : word
+    return VALUE_KEYWORDS.include?(name) ? :operator : :literal if KEYWORDS.include?(name)
+    spaced_before = p < j - 1
+    after = cs[j + 1]?
+    spaced_after = after.nil? || Templates::Parser.space?(after || "")
     spaced_before && !spaced_after ? :ambiguous : :operator
+  end
+
+  # Whether `c` may delimit a percent literal, as the lexer has it.
+  def self.percent_delim?(c: String) -> Bool = !Templates::Parser.ident_char?(c) && !Templates::Parser.space?(c)
+
+  # Whether a percent literal could start at `open` (`%q(`, `%[`, ...;
+  # not `%=` nor `% `).
+  def self.percent_shape?(cs: Array[String], open: Int) -> Bool
+    l = cs[open + 1]? || ""
+    d2 = cs[open + 2]? || ""
+    (l.match?(/\A[qQwir]\z/) && !d2.empty? && Templates::Parser.percent_delim?(d2)) ||
+      (!l.empty? && Templates::Parser.percent_delim?(l) && l != "=")
   end
 
   # The index of the delimiter closing the percent literal (`%q(...)`,
   # `%w[...]`, `%r{...}`, `%(...)`, `%q|...|`) at `open`, or -1; `open`
-  # itself when it is not one (a `%` operator).
+  # itself when the lexer reads no literal there (a `%` operator).
   def self.percent_end(cs: Array[String], open: Int) -> Int
-    j = open + 1
-    letter = cs[j]? || ""
-    if letter.match?(/\A[qQwir]\z/)
-      j += 1
+    l = cs[open + 1]? || ""
+    d2 = cs[open + 2]? || ""
+    letter = ""
+    d = ""
+    if l.match?(/\A[qQwir]\z/) && !d2.empty? && Templates::Parser.percent_delim?(d2)
+      letter = l
+      d = d2
+    elsif !l.empty? && Templates::Parser.percent_delim?(l) && l != "="
+      d = l
     else
-      letter = ""
+      return open
     end
     # (`%Q`, `%r` and `%(...)` interpolate.)
     interpolates = letter == "Q" || letter == "r" || letter == ""
-    d = cs[j]? || ""
-    return open unless d.match?(/\A[^A-Za-z0-9\s]\z/)
     closer = {"(" => ")", "[" => "]", "{" => "}", "<" => ">"}[d]? || d
+    paired = closer != d
     depth = 1
-    j += 1
+    j = open + (letter.empty? ? 2 : 3)
     while j < cs.size
       c = cs[j]
       if c == "\\"
@@ -569,7 +641,7 @@ class Templates::Parser
       elsif c == closer
         depth -= 1
         return j if depth == 0
-      elsif c == d
+      elsif paired && c == d
         depth += 1
       end
       j += 1
@@ -579,7 +651,7 @@ class Templates::Parser
 
   # The index of the quote (or `/`) closing the string (or regular
   # expression) opened at `open`, or -1.
-  def self.string_end(cs: Array[String], open: Int) -> Int
+  def self.string_end(cs: Array[String], open: Int, interpolates: Bool) -> Int
     q = cs[open]
     j = open + 1
     while j < cs.size
@@ -589,7 +661,7 @@ class Templates::Parser
         next
       end
       return j if c == q
-      if (q == "\"" || q == "/") && c == "#" && cs[j + 1]? == "{"
+      if interpolates && c == "#" && cs[j + 1]? == "{"
         j = Templates::Parser.matching(cs, j + 1)
         return j if j < 0
       end
@@ -645,8 +717,10 @@ class Templates::Parser
         when ":for"
           f = a.value || ""
           parts = f.partition(" <- ")
-          fail(a.line, ":for is written {pattern <- expr}") if parts[1].empty? || parts[0].strip.empty? || parts[2].strip.empty?
+          fail(a.line, ":for is written {pattern <- expr}") if parts[1].empty? || Templates::Parser.trim_code(parts[0]).empty? || Templates::Parser.trim_code(parts[2]).empty?
           fail(a.line, ":for cannot name a variable `h` (the builder's name)") if parts[0].match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
+          fail(a.line, ":for's pattern is names, commas, parentheses and braces") unless Templates::Parser.trim_code(parts[0]).match?(/\A[A-Za-z0-9_,(){}*\s]+\z/)
+          check_code(a.line, Templates::Parser.trim_code(parts[2]))
           for_code = f
         when ":if" then if_code = a.value
         else fail(a.line, "#{key} is not a special attribute (:for, :if)")
@@ -831,9 +905,9 @@ class Templates::Generator
       if f
         # (Checked by the parser.)
         parts = f.partition(" <- ")
-        pattern = parts[0].strip
+        pattern = Templates::Parser.trim_code(parts[0])
         pattern = pattern[1, pattern.size - 2] if pattern.start_with?("{") && pattern.end_with?("}")
-        list = parts[2].strip
+        list = Templates::Parser.trim_code(parts[2])
         emit(d, "#{Templates::Generator.paren(list)}.each do |#{pattern}|#{at(n.line)}")
         d += 1
       end

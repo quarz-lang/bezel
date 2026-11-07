@@ -210,7 +210,7 @@ class TemplatesTest < Test::Case
   end
 
   def test_third_review
-    amb = "a / or % after a name, with a space before it and none after, is ambiguous in {...} (write `a / b`, or `f(/x/)`)"
+    amb = "the compiler cannot tell how Quarz reads a / or % (or \\) in {...}: write `a / b` or `f(/x/)`, on one line"
     assert_equal("v/t.html.bz:1: #{amb}", error_of("<p>{items.size /2}</p><p>a/b</p>"))
     assert_equal("v/t.html.bz:1: #{amb}", error_of("<p>Total: {puts %|}|, 0)); puts(:INJECTED); z = '{'</p>"))
     assert_equal("v/t.html.bz:1: #{amb}", error_of("<p>{a.empty? /2}</p>"))
@@ -229,6 +229,33 @@ class TemplatesTest < Test::Case
     assert_equal("v/t.html.bz:4: a <script> cannot hold <!--: it hides its end tag", error_of("<script>\nvar a = 1;\n\n<!-- x\n</script>"))
     assert_equal("v/t.html.bz:3: a <style> cannot hold </style", error_of("<style>\n\na{x:\"</styles>\"}</style>"))
     assert_equal("v/t.html.bz:2: :for is written {pattern <- expr}", error_of("<li\n  :for={x in xs}>x</li>"))
+  end
+
+  def test_fourth_review
+    amb = "v/t.html.bz:1: the compiler cannot tell how Quarz reads a / or % (or \\) in {...}: write `a / b` or `f(/x/)`, on one line"
+    # (`b"..."` does not interpolate: the `}` inside it is its own.)
+    assert(code_of("<p>{b\"\#{\".size}</p>").include?("h.put((b\"\#{\".size))"))
+    # (After a keyword that is no value, a `/` starts a literal.)
+    assert(code_of("<p>{begin / \"[\"}]/ end}</p>").include?("h.put((begin / \"[\"}]/ end))"))
+    assert(code_of("<p>{x.class /}/}</p>").include?("h.put((x.class /}/))"))
+    assert(code_of("<p>{self / 2}</p>").include?("h.put((self / 2))"))
+    assert_equal(amb, error_of("<p>{total\n  / count}</p>"))
+    assert_equal(amb, error_of("<p>{a \\\n/}/}</p>"))
+    assert(code_of("<p>{1../}/}</p>").include?("h.put((1../}/))"))
+    assert(code_of("<p>{x / /}/}</p>").include?("h.put((x / /}/))"))
+    assert(code_of("<p>{f(\"a\":/}/)}</p>").include?("h.put((f(\"a\":/}/)))"))
+    assert_equal(amb, error_of("<p>{f(a?:/)}/}</p>"))
+    assert_equal(amb, error_of("<p>{1?/}/}</p>"))
+    assert_equal(amb, error_of("<p>{x + @a?/}/}</p>"))
+    assert_equal(amb, error_of("<p>{café /}/}</p>"))
+    assert(code_of("<p>{f(fé:/}/)}</p>").include?("h.put((f(fé:/}/)))"))
+    assert(code_of("<p>{éif / 2}</p>").include?("h.put((éif / 2))"))
+    assert(code_of("<p>{x = %\f}\f}</p>").include?("h.put((x = %\f}\f))"))
+    assert(code_of("<p>{a %= 2}</p>").include?("h.put((a %= 2))"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, commas, parentheses and braces", error_of("<p :for={f(\" <- '\") <- list}>x</p>it's"))
+    assert_equal("v/t.html.bz:1: { is not closed (a { in a text is written {\"{\"})", error_of("{@args / }/"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, commas, parentheses and braces", error_of("<p :for={\"a\" <- list}>x</p>"))
+    assert(code_of("<p :for={x <- f(\" <- \")}>x</p>").include?("(f(\" <- \")).each do |x|"))
   end
 
   def test_module_sources_are_checked
