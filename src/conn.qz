@@ -114,6 +114,10 @@ data Conn(
   # The configuration.
   def config -> Config = app.config
 
+  # The CSRF token forms of this request carry, or nil: what the CSRF
+  # plug (bezel#6) assigns to `:csrf_token`.
+  def csrf_token -> String? = assigns[:csrf_token]?.as?(String)
+
   # `path` (a route helper's) as a URL of this request's scheme and host:
   # `Conn#url(Router.user_path(id: 1))`. The host is the request's Host header
   # (`localhost` without one), which the proxy in front sets: behind
@@ -210,6 +214,10 @@ data Conn(
   def text(body: String, status: Int = self.status) -> Conn
     send_resp(status, HTTP::Content::Text.new(body), "text/plain; charset=utf-8")
   end
+
+  # The connection answered with the page `page` (`text/html`), and
+  # halted.
+  def html(page: Html, status: Int = self.status) -> Conn = html(page.source, status: status)
 
   # The connection answered with the HTML `body` (`text/html`), and
   # halted.

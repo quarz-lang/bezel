@@ -1,0 +1,132 @@
+# Generates src/html/elements.qz, the element methods of `Bezel::HtmlBuilder`:
+#
+#   quarz run tools/gen_elements.qz > src/html/elements.qz
+#
+# Each element has its own attributes (below: name, then kind: s a string,
+# u a URL, d a URL that may be `data:image/...`, i an integer, b a boolean)
+# and the global ones. A void element takes no content; a normal one takes
+# a text (escaped) or an optional block; `script` and `style` take raw text.
+
+VOID = %w[area base br col embed hr img input link meta source track wbr]
+RAW = %w[script style]
+NORMAL = %w[a abbr address article aside audio b bdi bdo blockquote body button canvas caption cite code
+            colgroup data datalist dd del details dfn dialog div dl dt em fieldset figcaption figure footer
+            form h1 h2 h3 h4 h5 h6 head header hgroup html i iframe ins kbd label legend li main mark menu
+            meter nav noscript object ol optgroup option output p picture pre progress q rp rt ruby s samp
+            search section select slot small span strong sub summary sup table tbody td template textarea
+            tfoot th thead time title tr u ul var video]
+
+SPECIFIC = {
+  "a" => "href:u target:s rel:s download:s hreflang:s type:s",
+  "area" => "alt:s coords:s shape:s href:u target:s rel:s",
+  "audio" => "src:u controls:b autoplay:b loop:b muted:b preload:s",
+  "video" => "src:u controls:b autoplay:b loop:b muted:b preload:s poster:u width:i height:i playsinline:b",
+  "base" => "href:u target:s",
+  "blockquote" => "cite:u", "q" => "cite:u", "del" => "cite:u datetime:s", "ins" => "cite:u datetime:s",
+  "button" => "type:s name:s value:s disabled:b form:s formaction:u formmethod:s",
+  "canvas" => "width:i height:i",
+  "col" => "span:i", "colgroup" => "span:i",
+  "data" => "value:s",
+  "details" => "open:b", "dialog" => "open:b",
+  "embed" => "src:u type:s width:i height:i",
+  "fieldset" => "disabled:b name:s form:s",
+  "form" => "action:u method:s enctype:s target:s novalidate:b autocomplete:s accept_charset:s",
+  "iframe" => "src:u srcdoc:s name:s width:i height:i allow:s loading:s sandbox:s referrerpolicy:s",
+  "img" => "src:d alt:s width:i height:i srcset:s sizes:s loading:s decoding:s",
+  "input" => "type:s name:s value:s placeholder:s required:b disabled:b readonly:b checked:b multiple:b autofocus:b min:s max:s step:s minlength:i maxlength:i pattern:s autocomplete:s form:s list:s size:i accept:s",
+  "label" => "for:s form:s",
+  "li" => "value:i",
+  "link" => "rel:s href:u type:s media:s sizes:s crossorigin:s integrity:s as:s",
+  "meta" => "name:s content:s charset:s http_equiv:s property:s",
+  "meter" => "value:s min:s max:s low:s high:s optimum:s",
+  "object" => "type:s width:i height:i",
+  "ol" => "start:i reversed:b type:s",
+  "optgroup" => "label:s disabled:b",
+  "option" => "value:s selected:b disabled:b label:s",
+  "output" => "for:s name:s form:s",
+  "progress" => "value:s max:s",
+  "script" => "src:u type:s async:b defer:b nomodule:b crossorigin:s integrity:s nonce:s",
+  "select" => "name:s multiple:b required:b disabled:b size:i form:s autocomplete:s",
+  "source" => "src:u type:s srcset:s sizes:s media:s",
+  "style" => "media:s nonce:s",
+  "td" => "colspan:i rowspan:i headers:s",
+  "th" => "colspan:i rowspan:i headers:s scope:s abbr:s",
+  "textarea" => "name:s rows:i cols:i placeholder:s required:b disabled:b readonly:b maxlength:i form:s wrap:s",
+  "time" => "datetime:s",
+  "track" => "src:u kind:s srclang:s label:s default:b"
+}
+
+GLOBAL_PARAMS = "id: String? = nil, css: (String | Array[String?])? = nil, style: String? = nil, title: String? = nil, " +
+  "lang: String? = nil, dir: String? = nil, hidden: Bool = false, tabindex: Int? = nil, role: String? = nil, " +
+  "data: Hash[String, String] = {}, aria: Hash[String, String] = {}, attrs: Hash[String, String] = {}"
+GLOBAL_ARGS = "id, css, style, title, lang, dir, hidden, tabindex, role, data, aria, attrs"
+
+def attrs_of(tag: String) -> Array[[String, String]]
+  (SPECIFIC[tag]? || "").split(" ").reject(&:empty?).map do |spec|
+    name, _, kind = spec.partition(":")
+    [name, kind]
+  end
+end
+
+def params_of(tag: String) -> String
+  ps = attrs_of(tag).map do |pair|
+    name, kind = pair
+    case kind
+    when "b" then "#{name}: Bool = false"
+    when "i" then "#{name}: Int? = nil"
+    else "#{name}: String? = nil"
+    end
+  end
+  # (`title`'s own attribute is the global one; an element named like a
+  # global keyword keeps it once.)
+  (ps + [GLOBAL_PARAMS]).join(", ")
+end
+
+def body_of(tag: String) -> String
+  calls = attrs_of(tag).map do |pair|
+    name, kind = pair
+    html_name = name.gsub("_", "-")
+    case kind
+    when "b" then ".bool(\"#{html_name}\", #{name})"
+    when "i" then ".int(\"#{html_name}\", #{name})"
+    when "u" then ".url(\"#{html_name}\", #{name})"
+    when "d" then ".url(\"#{html_name}\", #{name}, true)"
+    else ".str(\"#{html_name}\", #{name})"
+    end
+  end
+  "AttrList.new#{calls.join}.global(#{GLOBAL_ARGS})"
+end
+
+puts "# Generated by tools/gen_elements.qz: do not edit; change the generator"
+puts "# and run `quarz run tools/gen_elements.qz > src/html/elements.qz`."
+puts ""
+puts "# The HTML elements, as `HtmlBuilder`'s methods: each writes its element"
+puts "# with the attributes given (see `HtmlBuilder`)."
+puts "module Elements"
+puts "  # :nodoc:"
+puts "  abstract def tag_text(tag: String, attrs: AttrList, content: String) -> Void"
+puts "  # :nodoc:"
+puts "  abstract def tag_block(tag: String, attrs: AttrList, block: (() -> Void)?) -> Void"
+puts "  # :nodoc:"
+puts "  abstract def tag_raw_text(tag: String, attrs: AttrList, content: String) -> Void"
+puts "  # :nodoc:"
+puts "  abstract def open_tag(tag: String, attrs: AttrList) -> Void"
+(VOID + RAW + NORMAL).sort.each do |tag|
+  ps = params_of(tag)
+  body = body_of(tag)
+  puts ""
+  if VOID.include?(tag)
+    puts "  # Writes a `<#{tag}>` element (void: no content)."
+    puts "  def #{tag}(*, #{ps}) -> Void = open_tag(\"#{tag}\", #{body})"
+  elsif RAW.include?(tag)
+    puts "  # Writes a `<#{tag}>` element whose content is `content`, as it is (not"
+    puts "  # escaped; `ArgumentError` when it would close the element early)."
+    puts "  def #{tag}(content: String = \"\", *, #{ps}) -> Void = tag_raw_text(\"#{tag}\", #{body}, content)"
+  else
+    puts "  # Writes a `<#{tag}>` element with the text `content`, escaped."
+    puts "  def #{tag}(content: String, *, #{ps}) -> Void = tag_text(\"#{tag}\", #{body}, content)"
+    puts "  # Writes a `<#{tag}>` element with what the block writes (empty without one)."
+    puts "  def #{tag}(*, #{ps}, &block: (() -> Void)?) -> Void = tag_block(\"#{tag}\", #{body}, block)"
+  end
+end
+puts "end"

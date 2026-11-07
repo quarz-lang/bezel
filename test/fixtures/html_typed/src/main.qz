@@ -1,0 +1,6 @@
+page = Bezel.html do |h|
+  h.div(clas: "x") { h.text("a") }
+  h.td("c", colspan: "2")
+  h.a("x", hreff: "/")
+end
+puts page

@@ -1,0 +1,210 @@
+require "test"
+
+class HtUser < Rotor::Model
+  table "ht_users" do
+    column :id, Int, primary: true
+    column :name, String
+    column :email, String, null: true
+    column :age, Int, default: 0
+    column :admin, Bool, default: false
+    column :role, String, default: "member"
+    column :bio, String, null: true
+  end
+
+  def self.registration(params: Hash[String, Object?]) -> Rotor::Changeset[HtUser]
+    Rotor::Changeset.cast(HtUser, params, [:name, :email, :age, :admin, :role, :bio])
+      .validate_required([:name])
+      .validate_format(:email, /@/)
+  end
+end
+
+class HtCard
+  include Bezel::Component
+  @title: String
+  def initialize(@title: String); end
+  def render(h: Bezel::HtmlBuilder, content: Bezel::Html) -> Void
+    h.section(css: "card") do
+      h.h2(@title)
+      h.append(content)
+    end
+  end
+end
+
+# A layout: a function of the connection, the title and the inner HTML.
+module HtLayouts
+  def self.app(conn: Bezel::Conn, title: String, inner: Bezel::Html) -> Bezel::Html
+    Bezel.html(conn) do |h|
+      h.doctype
+      h.html(lang: "en") do
+        h.head do
+          h.meta(charset: "utf-8")
+          h.title(title)
+        end
+        h.body do
+          h.main { h.append(inner) }
+        end
+      end
+    end
+  end
+end
+
+class HtmlTest < Test::Case
+  def page(&block: (Bezel::HtmlBuilder) -> Void) -> String = Bezel.html(&block).to_s
+
+  def test_text_is_escaped
+    assert_equal("<p>&lt;script&gt;alert(&quot;x&quot;) &amp; &#39;y&#39;&lt;/script&gt;</p>",
+                 page { |h| h.p("<script>alert(\"x\") & 'y'</script>") })
+    assert_equal("<div>a<b>b</b></div>", page { |h| h.div { h.text("a"); h.raw("<b>b</b>") } })
+    assert_equal("<div></div>", page { |h| h.div })
+  end
+
+  def test_attributes
+    assert_equal("<input type=\"checkbox\" name=\"a&quot;b\" checked id=\"x\" class=\"a c\" hidden tabindex=\"2\" data-user-id=\"7\" aria-label=\"L\" form=\"f\">",
+                 page { |h| h.input(type: "checkbox", name: "a\"b", checked: true, disabled: false, id: "x",
+                                    css: ["a", nil, "", "c"], hidden: true, tabindex: 2, data: {"user-id" => "7"},
+                                    aria: {"label" => "L"}, attrs: {"form" => "f"}) })
+    assert_equal("<p class=\"one\">x</p>", page { |h| h.p("x", css: "one") })
+    assert_equal("<p>x</p>", page { |h| h.p("x", css: [nil]) })
+    assert_equal("<td colspan=\"2\">c</td>", page { |h| h.td("c", colspan: 2) })
+    assert_equal("<meta content=\"5\" http-equiv=\"refresh\">", page { |h| h.meta(http_equiv: "refresh", content: "5") })
+  end
+
+  def test_attribute_names_are_checked
+    assert_raise(ArgumentError) { page { |h| h.div(attrs: {"onclick" => "x()"}) } }
+    assert_raise(ArgumentError) { page { |h| h.div(attrs: {"a b" => "x"}) } }
+    assert_raise(ArgumentError) { page { |h| h.div(data: {"x\"y" => "1"}) } }
+  end
+
+  def test_urls_are_checked
+    assert_equal("<a href=\"/users?a=1&amp;b=2\">u</a>", page { |h| h.a("u", href: "/users?a=1&b=2") })
+    assert_equal("<a href=\"https://x.example/\">x</a>", page { |h| h.a("x", href: "https://x.example/") })
+    assert_equal("<a href=\"mailto:a@b.c\">m</a>", page { |h| h.a("m", href: "mailto:a@b.c") })
+    ["javascript:alert(1)", " JaVaScRiPt:alert(1)", "java\tscript:x", "vbscript:x", "data:text/html,<b>"].each do |bad|
+      assert_raise(ArgumentError) { page { |h| h.a("x", href: bad) } }
+    end
+    assert_raise(ArgumentError) { page { |h| h.form(action: "javascript:x") } }
+    assert_equal("<img src=\"data:image/png;base64,AA==\" alt=\"\">", page { |h| h.img(src: "data:image/png;base64,AA==", alt: "") })
+    assert_raise(ArgumentError) { page { |h| h.iframe(src: "data:image/png;base64,AA==") } }
+  end
+
+  def test_void_and_raw_text_elements
+    assert_equal("<br><hr class=\"x\">", page { |h| h.br; h.hr(css: "x") })
+    assert_equal("<script>if (a < b) { go() }</script>", page { |h| h.script("if (a < b) { go() }") })
+    assert_equal("<script src=\"/app.js\" defer></script>", page { |h| h.script(src: "/app.js", defer: true) })
+    assert_raise(ArgumentError) { page { |h| h.script("x = '</SCRIPT><b>'") } }
+    assert_raise(ArgumentError) { page { |h| h.style("</style>") } }
+  end
+
+  def test_html_values
+    a = Bezel.html { |h| h.p("a") }
+    b = Bezel.html { |h| h.p("b") }
+    assert_equal("<p>a</p><p>b</p>", (a + b).to_s)
+    assert_true(Bezel::Html.empty.empty?)
+    assert_equal("<div><p>a</p></div>", page { |h| h.div { h.append(a) } })
+    assert_equal("&lt;", Bezel::Html.escape("<"))
+  end
+
+  def test_component_and_capture
+    assert_equal("<section class=\"card\"><h2>T&amp;C</h2><p>body</p></section>",
+                 page { |h| h.component(HtCard.new("T&C")) { h.p("body") } })
+    assert_equal("<section class=\"card\"><h2>Empty</h2></section>", page { |h| h.component(HtCard.new("Empty")) })
+    out = Bezel.html do |h|
+      h.p("before")
+      inner = h.capture { h.span("in") }
+      h.div { h.append(inner) }
+    end
+    assert_equal("<p>before</p><div><span>in</span></div>", out.to_s)
+  end
+
+  def test_links
+    assert_equal("<a href=\"/users/1\">Show</a>", page { |h| h.link("Show", to: "/users/1") })
+    conn = Bezel::Conn.build(HTTP::Server::Request.get("/")).assign(:csrf_token, "tok\"en")
+    del = Bezel.html(conn) { |h| h.link("Delete", to: "/users/1", method: :delete, confirm: "Sure?") }.to_s
+    assert_equal("<form action=\"/users/1\" method=\"post\" class=\"bezel-link\" data-confirm=\"Sure?\"><input type=\"hidden\" name=\"_method\" value=\"delete\"><input type=\"hidden\" name=\"_csrf_token\" value=\"tok&quot;en\"><button type=\"submit\">Delete</button></form>", del)
+    post = page { |h| h.link("Go", to: "/go", method: :post) }
+    assert_equal("<form action=\"/go\" method=\"post\" class=\"bezel-link\"><button type=\"submit\">Go</button></form>", post)
+    assert_raise(ArgumentError) { page { |h| h.link("x", to: "/x", method: :trace) } }
+    assert_raise(ArgumentError) { page { |h| h.link("x", to: "javascript:x") } }
+  end
+
+  def test_layout
+    conn = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    inner = Bezel.html { |h| h.h1("Users") }
+    out = HtLayouts.app(conn, "Users <all>", inner).to_s
+    assert_equal("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Users &lt;all&gt;</title></head><body><main><h1>Users</h1></main></body></html>", out)
+    ctl = Bezel::Controller.new
+    sent = ctl.render(conn, HtLayouts.app(conn, "T", inner))
+    assert_equal("text/html; charset=utf-8", sent.resp_headers["content-type"])
+    assert_true(sent.halted?)
+  end
+
+  def form_of(cs: Rotor::Changeset[HtUser], method: Symbol = :post, token: String? = "t") -> String
+    conn = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    conn = conn.assign(:csrf_token, token) if token
+    Bezel.html(conn) do |h|
+      h.form_for(cs, action: "/users", method: method) do |f|
+        f.label(:name)
+        f.text_field(:name, required: true)
+        f.errors(:name)
+        f.email_field(:email)
+        f.errors(:email)
+        f.number_field(:age)
+        f.password_field(:bio)
+        f.checkbox(:admin)
+        f.select(:role, [["Member", "member"], ["Admin", "admin"]], prompt: "Choose")
+        f.textarea(:bio, rows: 3)
+        f.hidden(:id)
+        f.submit("Save")
+      end
+    end.to_s
+  end
+
+  def test_form_with_errors
+    cs = HtUser.registration({"name" => "", "email" => "ann<at>example", "age" => "x", "admin" => "true", "role" => "admin", "bio" => "<hi>"})
+    out = form_of(cs)
+    assert_true(out.start_with?("<form action=\"/users\" method=\"post\"><input type=\"hidden\" name=\"_csrf_token\" value=\"t\">"))
+    assert_true(out.include?("<label for=\"ht_user_name\">Name</label>"))
+    assert_true(out.include?("<input type=\"text\" name=\"ht_user[name]\" value=\"\" required id=\"ht_user_name\" class=\"invalid\" aria-invalid=\"true\">"))
+    assert_true(out.include?("<span id=\"ht_user_name_error\" class=\"error\">can&#39;t be blank</span>"))
+    assert_true(out.include?("<input type=\"email\" name=\"ht_user[email]\" value=\"ann&lt;at&gt;example\" id=\"ht_user_email\" class=\"invalid\" aria-invalid=\"true\">"))
+    assert_true(out.include?("<span id=\"ht_user_email_error\" class=\"error\">has invalid format</span>"))
+    # The age that did not cast shows as typed, with its error class.
+    assert_true(out.include?("<input type=\"number\" name=\"ht_user[age]\" value=\"x\" id=\"ht_user_age\" class=\"invalid\" aria-invalid=\"true\">"))
+    assert_true(out.include?("<input type=\"password\" name=\"ht_user[bio]\" id=\"ht_user_bio\">"))
+    assert_true(out.include?("<input type=\"hidden\" name=\"ht_user[admin]\" value=\"false\"><input type=\"checkbox\" name=\"ht_user[admin]\" value=\"true\" checked id=\"ht_user_admin\">"))
+    assert_true(out.include?("<select name=\"ht_user[role]\" id=\"ht_user_role\"><option value=\"\">Choose</option><option value=\"member\">Member</option><option value=\"admin\" selected>Admin</option></select>"))
+    assert_true(out.include?("<textarea name=\"ht_user[bio]\" rows=\"3\" id=\"ht_user_bio\">&lt;hi&gt;</textarea>"))
+    assert_true(out.end_with?("<button type=\"submit\">Save</button></form>"))
+  end
+
+  def test_form_from_a_model
+    u = HtUser.load({id: 3, name: "Ann", email: "a@b.c", age: 41, admin: false, role: "member", bio: nil})
+    out = form_of(Rotor::Changeset.change(u), :patch, nil)
+    assert_true(out.start_with?("<form action=\"/users\" method=\"post\"><input type=\"hidden\" name=\"_method\" value=\"patch\"><label"))
+    assert_false(out.include?("_csrf_token"))
+    assert_true(out.include?("value=\"Ann\""))
+    assert_true(out.include?("<input type=\"number\" name=\"ht_user[age]\" value=\"41\" id=\"ht_user_age\">"))
+    assert_true(out.include?("<input type=\"checkbox\" name=\"ht_user[admin]\" value=\"true\" id=\"ht_user_admin\">"))
+    assert_true(out.include?("<input type=\"hidden\" name=\"ht_user[id]\" value=\"3\" id=\"ht_user_id\">"))
+    assert_false(out.include?("class=\"invalid\""))
+    get = Bezel.html { |h| h.form_for(Rotor::Changeset.change(u), action: "/search", method: :get, as: "q") { |f| f.text_field(:name) } }.to_s
+    assert_equal("<form action=\"/search\" method=\"get\"><input type=\"text\" name=\"q[name]\" value=\"Ann\" id=\"q_name\"></form>", get)
+  end
+
+  def test_attributes_are_typed
+    out = Process.sh("cd test/fixtures/html_typed && exec \"${QUARZ:-quarz}\" check")
+    assert(!out.success?)
+    assert_match(/main\.qz:2:3: error: no overload of `div`/, out.stderr)
+    assert_match(/has no parameter `clas`/, out.stderr)
+    assert_match(/main\.qz:3:3: error: no overload of `td`/, out.stderr)
+    assert_match(/argument `colspan` of td\(.*\) -> Void expects Int\? but found String/, out.stderr)
+    assert_match(/main\.qz:4:3: error: no overload of `a`/, out.stderr)
+    assert_match(/has no parameter `hreff`/, out.stderr)
+  end
+
+  def test_the_elements_are_generated
+    out = Process.sh("exec \"${QUARZ:-quarz}\" run tools/gen_elements.qz")
+    assert(out.success?)
+    assert_equal(File.read("src/html/elements.qz"), out.stdout, "src/html/elements.qz is stale: run `quarz run tools/gen_elements.qz > src/html/elements.qz`")
+  end
+end
