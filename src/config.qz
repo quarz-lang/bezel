@@ -150,10 +150,11 @@ data Config(
 
   # The configuration of a task that serves no request (a migration, a
   # job worker): as `.load` makes it of the same environment and
-  # settings, but SECRET_KEY_BASE is not required, in `prod` either, nor
-  # announced in `dev`. Without one (or with one too short), its
-  # `secret_key_base` is a placeholder that signs nothing: such a task
-  # must not make sessions or tokens.
+  # settings, but SECRET_KEY_BASE is not required in `prod`, and the
+  # derived secret of `dev` and `test` is not announced (it is the
+  # server's, so a task's tokens verify there). In `prod` without one (or
+  # with one too short), its `secret_key_base` is a placeholder that signs
+  # nothing: such a task must not make sessions or tokens.
   #
   # ```
   # c = Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod"})
@@ -161,9 +162,10 @@ data Config(
   # c.secret_key_base == "-" * 64    # => true
   # ```
   def self.for_task(app: String, settings: Hash[Symbol, Settings] = {}, environ: Hash[String, String] = ENV) -> Config
+    prod = (Config.var(environ, "BEZEL_ENV") || "prod") == "prod"
     given = Config.var(environ, "SECRET_KEY_BASE")
-    env = given && given.bytesize >= 64 ? environ : environ.put("SECRET_KEY_BASE", "-" * 64)
-    Config.load(app, settings, environ: env)
+    env = !prod || (given && given.bytesize >= 64) ? environ : environ.put("SECRET_KEY_BASE", "-" * 64)
+    Config.load(app, settings, environ: env, quiet: true)
   end
 
   # The secret `dev` and `test` use without SECRET_KEY_BASE: a digest

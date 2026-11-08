@@ -54,6 +54,12 @@ class ConfigTest < Test::Case
     given = "s" * 64
     assert_equal(given, Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => given}).secret_key_base)
     assert_equal("-" * 64, Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "short"}).secret_key_base)
+    # In dev and test, the server's derived secret; settings are read.
+    dev = Bezel::Config.for_task("shop", {dev: Bezel::Settings.new(port: 5001)}, environ: {"BEZEL_ENV" => "dev"})
+    assert_equal(Bezel::Config.dev_secret("shop"), dev.secret_key_base)
+    assert_equal(5001, dev.port)
+    # (A short one in dev is refused, as `load` refuses it.)
+    assert_raise(Bezel::ConfigError) { Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "dev", "SECRET_KEY_BASE" => "short"}) }
     # The rest is checked as `load` checks it.
     assert_raise(Bezel::ConfigError) { Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "PORT" => "x"}) }
   end
