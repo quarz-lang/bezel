@@ -37,7 +37,8 @@ module Cli::Jobs
         # `bezel jobs` runs): a worker over DATABASE_URL (or the settings'),
         # with a queue of 5 at once for each queue the jobs name. The
         # configuration is a task's (`Bezel::Config.for_task`): SECRET_KEY_BASE
-        # is not needed. The exit status.
+        # is needed only by a job that signs tokens or sessions (without it,
+        # `Bezel::ConfigError`). The exit status.
         def self.serve -> Int
           jobs = all
           if jobs.empty?

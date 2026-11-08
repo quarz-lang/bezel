@@ -86,8 +86,11 @@ data Config(
   # `settings` (`{dev: MyApp::Config.dev, prod: MyApp::Config.prod}`).
   # A secret derived for `dev` or `test` is announced on standard error,
   # once per load, unless `quiet`.
+  #
+  # A SECRET_KEY_BASE equal to `TASK_SECRET`, the placeholder of a task's
+  # configuration, is refused: it is public. (`task:` is `for_task`'s.)
   def self.load(app: String, settings: Hash[Symbol, Settings] = {},
-                environ: Hash[String, String] = ENV, quiet: Bool = false) -> Config
+                environ: Hash[String, String] = ENV, quiet: Bool = false, task: Bool = false) -> Config
     raise ConfigError.new("the application's name is empty") if app.empty?
     env_name = Config.var(environ, "BEZEL_ENV") || "prod"
     env = env_name.to_sym
@@ -138,6 +141,9 @@ data Config(
     secret = Config.var(environ, "SECRET_KEY_BASE")
     if secret
       raise ConfigError.new("SECRET_KEY_BASE must be at least 64 bytes (it has #{secret.bytesize})") if secret.bytesize < 64
+      if secret == TASK_SECRET && !task
+        raise ConfigError.new("SECRET_KEY_BASE is the placeholder of a task's configuration (Config::TASK_SECRET), which is public: set a secret of your own (`openssl rand -hex 32` gives one)")
+      end
     elsif env == :prod
       raise ConfigError.new("SECRET_KEY_BASE is required in prod (64 bytes or more; `openssl rand -hex 32` gives one); BEZEL_ENV is prod unless set to dev or test")
     else
@@ -159,14 +165,20 @@ data Config(
   # ```
   # c = Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod"})
   # c.env                   # => :prod
-  # c.secret_key_base == "-" * 64    # => true
+  # c.secret_key_base == Bezel::Config::TASK_SECRET   # => true
   # ```
   def self.for_task(app: String, settings: Hash[Symbol, Settings] = {}, environ: Hash[String, String] = ENV) -> Config
     prod = (Config.var(environ, "BEZEL_ENV") || "prod") == "prod"
     given = Config.var(environ, "SECRET_KEY_BASE")
-    env = !prod || (given && given.bytesize >= 64) ? environ : environ.put("SECRET_KEY_BASE", "-" * 64)
-    Config.load(app, settings, environ: env, quiet: true)
+    env = !prod || (given && given.bytesize >= 64) ? environ : environ.put("SECRET_KEY_BASE", TASK_SECRET)
+    Config.load(app, settings, environ: env, quiet: true, task: true)
   end
+
+  # The placeholder secret of a task's configuration in `prod` without
+  # SECRET_KEY_BASE (`for_task`): `Bezel::Keys.derive` refuses it, so
+  # that nothing is signed with it, and `load` refuses it as the
+  # application's.
+  TASK_SECRET = "-" * 64
 
   # The secret `dev` and `test` use without SECRET_KEY_BASE: a digest
   # of the application's name, the same on every run so that sessions
