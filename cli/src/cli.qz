@@ -139,6 +139,33 @@ module Cli
     Signal.trap(:INT) { nil }
   end
 
+  # The files under `root`/`dir`, as paths from `root`, in name order:
+  # hidden files and directories are skipped, and links to directories
+  # are not followed (one to a directory above would loop), links to
+  # files are listed. (`Dir.glob` follows such links and lists hidden
+  # files: bezel#42, quarz-lang/quarz#440.)
+  def self.files_under(root: String, dir: String) -> Array[String]
+    found = Array::Builder[String].new
+    names = begin
+      Dir.children(File.join(root, dir)).sort
+    rescue SystemCallError
+      none: Array[String] = []
+      none
+    end
+    names.each do |n|
+      next if n.start_with?(".")
+      rel = File.join(dir, n)
+      full = File.join(root, rel)
+      next if File.symlink?(full) && File.directory?(full)
+      if File.directory?(full)
+        Cli.files_under(root, rel).each { |f| found << f }
+      else
+        found << rel
+      end
+    end
+    found.to_a
+  end
+
   # Writes `content` to `path` under `root`, which must not exist yet.
   def self.create(root: String, path: String, content: String, out: IO) -> Void
     full = File.join(root, path)

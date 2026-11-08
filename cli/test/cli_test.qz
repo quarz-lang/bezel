@@ -227,7 +227,7 @@ class CliTest < Test::Case
                          "ln -s x.qz #{Cli.quote(File.join(root, "src", "linked.qz"))}")
       assert(links.success?, links.stderr)
       # (Links to directories are not followed; one to a file is a file.)
-      assert_equal(["src/a/y.html.bz", "src/linked.qz", "src/x.qz"], Cli::Server.under(root, "src"))
+      assert_equal(["src/a/y.html.bz", "src/linked.qz", "src/x.qz"], Cli.files_under(root, "src"))
       # The files `prepare` writes take their times after it, the others
       # before.
       t0 = Time.utc(2026, 1, 1)
@@ -317,6 +317,25 @@ class CliTest < Test::Case
       omit(e.message)
     ensure
       Dir.rm_rf(File.dirname(root))
+    end
+  end
+
+  def test_gen_scans_an_application_whose_path_holds_glob_characters
+    dir = File.join(CliTest.tmp, "x[1]")
+    Dir.mkdir_p(dir)
+    begin
+      assert_equal(0, bezel(["new", "shop", "--bezel", CliTest.repo], dir)[0])
+      root = File.join(dir, "shop")
+      # (A link to an ancestor in src/: the scan does not loop.)
+      links = Process.sh("ln -s .. #{Cli.quote(File.join(root, "src", "up"))}")
+      assert(links.success?, links.stderr)
+      assert_equal(0, bezel(["gen", "model", "post", "title:string"], root)[0])
+      # Shop::Post is found declared, under the bracketed path (the scan
+      # itself: a second `gen model post` is refused for its file too).
+      e = assert_raise(Cli::Error) { Cli::Gen.undeclared(Cli.app(root), "Shop::Post") }
+      assert_match(/Shop::Post is declared already \(src\/models\/post\.qz\)/, e.message)
+    ensure
+      Dir.rm_rf(File.dirname(dir))
     end
   end
 

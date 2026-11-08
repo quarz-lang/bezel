@@ -77,7 +77,7 @@ module Cli::Gen
     last = name.split("::").last? || name
     nested = Regexp.new("\\A" + decl + Regexp.escape(last) + tail)
     opens = Regexp.new("\\Amodule[ \\t]+" + Regexp.escape(app.module_name) + "[ \\t]*(#.*)?\\z")
-    Dir.glob("src/**/*.qz", app.root).each do |f|
+    Cli.files_under(app.root, "src").select { |f| f.end_with?(".qz") }.each do |f|
       full = File.join(app.root, f)
       # (As the compiler: files only, not a directory or a dangling link.)
       next unless File.file?(full)
