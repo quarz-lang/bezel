@@ -56,7 +56,7 @@ module Cli::Skeleton
     none: Array[String] = []
     Cli::Migrations.command(none, app, out)
     out.puts ""
-    out.puts "Next: cd #{n}, then `BEZEL_ENV=dev quarz run` serves it on http://localhost:4000"
+    out.puts "Next: cd #{n}, then `bezel server` serves it on http://localhost:4000"
     0
   end
 
@@ -90,7 +90,7 @@ module Cli::Skeleton
         A [bezel](#{BEZEL_GIT}) application.
 
         ```sh
-        BEZEL_ENV=dev quarz run       # serves http://localhost:4000
+        bezel server                  # serves http://localhost:4000, restarting on changes
         bezel test                    # the tests
         bezel gen resource post title:string body:text
         bezel migrate                 # with DATABASE_URL set

@@ -240,7 +240,7 @@ put it on the PATH):
 ```sh
 bezel new shop                  # an application: endpoint, router, a page, layout, test, CI
 cd shop
-BEZEL_ENV=dev quarz run         # serves http://localhost:4000
+bezel server                    # serves http://localhost:4000, restarting on changes
 bezel gen controller about index team
 bezel gen model tag name:string
 bezel gen migration add_index_to_tags
@@ -263,9 +263,13 @@ bezel test
   `Shop::Migrations::<Name> < Rotor::Migration`; `gen` writes them with a
   UTC timestamp and rewrites the list `Shop::Migrations.all`.
 - `bezel gen` adds its routes before the router's `# bezel gen: routes`
-  line. `bezel server` (restart on change) waits for quarz-lang/quarz#385,
-  and the output of `routes`, `migrate` and `test` comes when they end
-  until then. divider and `gen job` come with divider (#20).
+  line. divider and `gen job` come with divider (#20).
+- `bezel server` runs the application with `BEZEL_ENV=dev` (unless set)
+  and its output on the terminal. It looks for changes every half
+  second: a changed source (`src/**/*.qz`), template (`*.html.bz`) or
+  `Cog.toml` compiles the templates again and restarts the application
+  (TERM, then KILL after 5 seconds). One that exits on its own (a compile
+  error) is started again at the next change. Ctrl-C stops both.
 
 ## License
 

@@ -159,6 +159,53 @@ class CliTest < Test::Case
     end
   end
 
+  # The body of `http://127.0.0.1:port/`, or nil while nothing answers.
+  def page(port: Int) -> String?
+    res = HTTP.get("http://127.0.0.1:#{port}/")
+    res.status == 200 ? res.body.read : nil
+  rescue StandardError
+    nil
+  end
+
+  def test_server_runs_the_application_and_restarts_it_on_a_change
+    root = new_app
+    log = File.join(File.dirname(root), "server.log")
+    port = 41_000 + Random.rand(10_000)
+    app = Cli.app(root)
+    stop = Channel[Nil].new
+    begin
+      t = Task.spawn do
+        File.open(log, "w") { |io| Cli::Server.serve(app, io, stop, {"PORT" => port.to_s}) }
+      end
+      body: String? = nil
+      begin
+        600.times do
+          body = page(port)
+          break if body
+          Task.sleep(200.ms)
+        end
+        assert_match(/Welcome to Shop/, body || "")
+        path = File.join(root, "src", "views", "page", "home.html.bz")
+        File.write(path, File.read(path).sub("<h1>", "<h1>Changed "))
+        600.times do
+          body = page(port)
+          break if body && body.include?("Changed ")
+          Task.sleep(200.ms)
+        end
+        assert_match(/Changed Welcome to Shop/, body || "")
+      ensure
+        stop.close
+        assert_equal(0, t.await)
+      end
+      text = File.read(log)
+      assert_equal(2, text.lines.count { |l| l.start_with?("bezel: starting shop") }, text)
+      assert_match(/bezel: a file changed; restarting\n  update  src\/views\/generated\/page\.qz/, text)
+      assert_nil(page(port))
+    ensure
+      Dir.rm_rf(File.dirname(root))
+    end
+  end
+
   def test_review_cases
     dir = CliTest.tmp
     begin
