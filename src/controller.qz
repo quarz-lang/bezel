@@ -55,8 +55,10 @@ class Controller
   # Declares the controller and its plugs, which the block lists as plug
   # lines (`plug`, `skip`, below): the form before plug lines could stand
   # in the body, still accepted, and the same as writing the lines in the
-  # body. An empty block declares the controller as a bare `controller`
-  # does.
+  # body, in their order among the body's other lines (a body may have
+  # several blocks). An empty block declares the controller as a bare
+  # `controller` does. An error of a line in the block is reported at the
+  # `controller` statement.
   #
   # A subclass of a controller declares its own plug lines or
   # `controller` statement for actions of its own: the superclass's
@@ -77,8 +79,9 @@ class Controller
   # the plugs the superclass declared. The class's `dispatch` is generated
   # once its body ends. A plug method that does not exist or has another
   # signature, or an action named in `only:` or `except:` that does not
-  # exist, is a compile error at the line. A controller without plugs of
-  # its own writes `controller`.
+  # exist, is a compile error when the body ends (the methods are usually
+  # written below the lines); `only:` with `except:` is one at the line. A
+  # controller without plugs of its own writes `controller`.
   #
   # ```
   # class Posts < Bezel::Controller
@@ -105,7 +108,8 @@ class Controller
   # before) from running before the actions `only` names (all when it and
   # `except` are empty), but those `except` names: a statement of the
   # class body, as `plug` is (Rails' `skip_before_action`). A `skip`
-  # naming no plug is a compile error at the line.
+  # naming no plug is a compile error at the line (at the `controller`
+  # statement, for a line in its block).
   static def self.skip(method: Symbol, *, only: Array[Symbol] = [], except: Array[Symbol] = []) -> Void
     Controller.plug_line(self, PlugLine.new(true, method, only, except))
   end
@@ -149,10 +153,14 @@ class Controller
   end
 
   # :nodoc:
-  # Refuses a `controller` statement in a body with plug lines (or a
-  # second one), and marks the body as having one.
+  # Refuses a bare `controller` statement in a body with plug lines or a
+  # `controller` block (or a second bare one), and marks the body as
+  # having one.
   static def self.controller_form![T <: Controller](cls: Meta::ClassDef[T]) -> Void
-    if cls.statement_values[PlugLine](:bezel_plugs).size > 0 || cls.statement_values[Bool](:bezel_block).size > 0
+    if cls.statement_values[Bool](:bezel_block).size > 0
+      raise ArgumentError.new("#{cls.name} has a `controller` block already")
+    end
+    if cls.statement_values[PlugLine](:bezel_plugs).size > 0
       raise ArgumentError.new("#{cls.name} has plug lines: write them without a `controller` statement, or in its block")
     end
     marks = cls.statement_values[Bool](:bezel_controller)

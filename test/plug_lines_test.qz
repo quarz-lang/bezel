@@ -34,7 +34,8 @@ class PlOpen < PlBase
   private def stamp(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:stamp, "s")
 end
 
-# A `controller` block below plug lines, and plug lines below a block.
+# A subclass's `controller` block below its superclass's plug lines, and
+# a subclass's plug lines below its superclass's block.
 class PlBlockChild < PlBase
   controller do
     plug :stamp
@@ -49,6 +50,28 @@ class PlLinesChild < PlBlockChild
   skip :stamp
 
   def last(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "last #{conn.assign?(:in) || "-"} #{conn.assign?(:stamp) || "-"}")
+end
+
+# Lines and blocks in one body, folded in order.
+class PlMixed < Bezel::Controller
+  plug :a
+  controller do
+    plug :b
+    skip :a, only: [:two]
+  end
+  controller do
+    plug :c, except: [:one]
+  end
+  plug :d
+  skip :b, except: [:one]
+
+  def one(conn: Bezel::Conn) -> Bezel::Conn = text(conn, conn.assign?(:trail).as?(String) || "")
+  def two(conn: Bezel::Conn) -> Bezel::Conn = text(conn, conn.assign?(:trail).as?(String) || "")
+
+  private def a(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:trail, (conn.assign?(:trail).as?(String) || "") + "a")
+  private def b(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:trail, (conn.assign?(:trail).as?(String) || "") + "b")
+  private def c(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:trail, (conn.assign?(:trail).as?(String) || "") + "c")
+  private def d(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:trail, (conn.assign?(:trail).as?(String) || "") + "d")
 end
 
 # An empty `controller` block: the superclass's plugs only.
@@ -86,6 +109,12 @@ class PlugLinesTest < Test::Case
     assert_equal("other yes -", body(run(PlLinesChild.new, :other)))
     assert_equal("empty yes", body(run(PlEmptyBlock.new, :empty)))
     assert_equal([:login], PlEmptyBlock.controller_plugs.map(&:method))
+  end
+
+  def test_lines_and_blocks_in_one_body
+    assert_equal("abd", body(run(PlMixed.new, :one)))
+    assert_equal("cd", body(run(PlMixed.new, :two)))
+    assert_equal([:a, :b, :c, :d], PlMixed.controller_plugs.map(&:method))
   end
 
   def test_lines_are_checked_at_compile_time
