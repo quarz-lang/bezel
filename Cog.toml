@@ -2,6 +2,8 @@
 name = "bezel"
 version = "0.1.0"
 module = "Bezel"
+documentation = "https://bezel.api.quarz.dev"
+repository = "https://github.com/quarz-lang/bezel"
 
 [dependencies]
 Rotor = { git = "https://github.com/quarz-lang/rotor", branch = "main" }
