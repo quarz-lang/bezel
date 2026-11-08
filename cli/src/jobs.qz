@@ -36,7 +36,7 @@ module Cli::Jobs
         # Runs the jobs until TERM or INT (`quarz run -- jobs`, which
         # `bezel jobs` runs): a worker over DATABASE_URL (or the settings'),
         # with a queue of 5 at once for each queue the jobs name. The
-        # configuration is a task's (`Bezel::Tasks.config`): SECRET_KEY_BASE
+        # configuration is a task's (`Bezel::Config.for_task`): SECRET_KEY_BASE
         # is not needed. The exit status.
         def self.serve -> Int
           jobs = all
@@ -45,7 +45,7 @@ module Cli::Jobs
             return 1
           end
           url = begin
-            Bezel::Tasks.config(#{n.inspect}, #{m}::Config.settings).database_url
+            Bezel::Config.for_task(#{n.inspect}, #{m}::Config.settings).database_url
           rescue Bezel::ConfigError => e
             STDERR.puts "#{n}: \#{e.message}"
             return 1
