@@ -265,7 +265,7 @@ bezel test
   `Shop::Migrations::<Name> < Rotor::Migration`; `gen` writes them with a
   UTC timestamp and rewrites the list `Shop::Migrations.all`.
 - `bezel gen` adds its routes before the router's `# bezel gen: routes`
-  line. divider and `gen job` come with divider (#20).
+  line.
 - Background jobs are [divider](https://github.com/quarz-lang/divider)'s:
   a new application depends on it and runs its migrations with its own.
   `bezel gen job NAME [FIELD:TYPE...]` writes `src/jobs/<name>.qz` (a

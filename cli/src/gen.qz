@@ -40,15 +40,23 @@ module Cli::Gen
     n
   end
 
-  # The fields of `specs` (`title:string`).
-  def self.fields(specs: Array[String]) -> Array[Field]
+  # Words a field cannot be named: Quarz's reserved words.
+  RESERVED_FIELDS = ["alias", "and", "begin", "break", "case", "class", "def", "defined?", "do", "else", "elsif", "end",
+                     "ensure", "false", "for", "if", "in", "module", "next", "nil", "not", "or", "redo", "rescue",
+                     "retry", "return", "self", "super", "then", "true", "undef", "unless", "until", "when", "while",
+                     "yield"]
+
+  # The fields of `specs` (`title:string`); a model's (`model`) cannot be
+  # its own `id`, `created_at` or `updated_at`.
+  def self.fields(specs: Array[String], model: Bool = true) -> Array[Field]
     seen: Set[String] = Set.new
     specs.map do |spec|
       name, _, type = spec.partition(":")
       t = TYPES[type]?
       raise Cli::Error.new("#{spec.inspect}: a field is NAME:TYPE, the type one of #{TYPES.keys.join(", ")}") if t.nil?
       raise Cli::Error.new("#{name.inspect} is not a field name (snake_case)") unless name.match?(/\A[a-z][a-z0-9_]*\z/)
-      raise Cli::Error.new("#{name}: id, created_at and updated_at are the model's own") if ["id", "created_at", "updated_at"].include?(name)
+      raise Cli::Error.new("#{name}: id, created_at and updated_at are the model's own") if model && ["id", "created_at", "updated_at"].include?(name)
+      raise Cli::Error.new("#{name} is a reserved word: it cannot name a field") if RESERVED_FIELDS.include?(name)
       raise Cli::Error.new("#{name} is given twice") if seen.include?(name)
       seen = seen.add(name)
       Field.new(name, t, type == "text")
@@ -265,7 +273,7 @@ module Cli::Gen
   # any) are a `data` type of those fields.
   def self.job(args: Array[String], app: Cli::App, out: IO) -> Int
     n = Cli::Gen.name_of(args.first?, "job")
-    fields = Cli::Gen.fields(args.size > 1 ? args[1...args.size] : Array[String].new)
+    fields = Cli::Gen.fields(args.size > 1 ? args[1...args.size] : Array[String].new, false)
     fields.each do |f|
       if ["repo", "at", "after", "priority"].include?(f.name)
         raise Cli::Error.new("#{f.name}: a job's argument cannot be named repo, at, after or priority (enqueue's keywords)")
@@ -273,6 +281,12 @@ module Cli::Gen
     end
     m = app.module_name
     name = Cli.camel(n)
+    # (Inside `Shop::Jobs`, a job's name would hide the constant of that
+    # name for the other jobs and src/jobs.qz: `Divider`, `Hash`, `String`,
+    # the application's module.)
+    if Cli::Skeleton::TAKEN.include?(name) || name == m || name == "Jobs" || name == "Config" || name == "Args"
+      raise Cli::Error.new("#{n}: a job named #{name} would hide the constant #{name} for the application's jobs; choose another name")
+    end
     cls = "#{m}::Jobs::#{name}"
     Cli::Gen.undeclared(app, cls)
     human = n.gsub("_", " ")

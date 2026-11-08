@@ -19,7 +19,7 @@ module Cli::Skeleton
            "Symbol", "SystemCallError", "SystemExit", "SystemStackError", "Task", "Time", "Type", "TypeError",
            "Unshareable", "ZeroDivisionError", "Class",
            # (Standard modules loaded when named, and the dependencies.)
-           "Test", "Socket", "SocketError", "Crypto", "Digest", "Base64", "Bezel", "Rotor", "Main", "Cli"]
+           "Test", "Socket", "SocketError", "Crypto", "Digest", "Base64", "Bezel", "Rotor", "Divider", "PG", "Main", "Cli"]
 
   # Runs the command.
   def self.command(args: Array[String], cwd: String, out: IO) -> Int
