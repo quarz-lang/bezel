@@ -13,6 +13,8 @@ reflection at run time and no template is interpreted.
 Bezel = { git = "https://github.com/quarz-lang/bezel", branch = "main" }
 ```
 
+The API reference is at <https://bezel.api.quarz.dev>.
+
 Work in progress (the plan is issue #1). What exists: the connection,
 parameters, plugs, endpoints, configuration, error pages, `Bezel.start`,
 the built-in plugs, the router and controllers, and the HTML DSL with
