@@ -259,13 +259,16 @@ class SecurityTest < Test::Case
 
   def test_password_refuses_other_hashes
     # (No PBKDF2 hash is read any more: a stored string of another scheme
-    # or garbage is an error, not a wrong password; needs_rehash? is true
-    # for it.)
+    # or garbage is an error, not a wrong password. needs_rehash? is true
+    # for another scheme, and raises for an argon2id one that does not
+    # parse.)
     pbkdf2 = "$pbkdf2-sha256$600000$AAAAAAAAAAAAAAAAAAAAAA$" + "A" * 43
     ["garbage", "", pbkdf2, "$argon2i$v=19$m=64,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$" + "A" * 43].each do |bad|
       assert_raise(Crypto::Error) { Bezel::Password.verify?("pw", bad) }
     end
     assert_true(Bezel::Password.needs_rehash?(pbkdf2))
+    assert_true(Bezel::Password.needs_rehash?("garbage"))
+    assert_raise(Crypto::Error) { Bezel::Password.needs_rehash?("$argon2id$garbage") }
   end
 
   def test_token_fingerprint
