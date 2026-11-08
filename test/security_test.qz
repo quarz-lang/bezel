@@ -182,16 +182,20 @@ class SecurityTest < Test::Case
   end
 
   def test_password
-    h = Bezel::Password.hash("pw", iterations: 1000)
-    assert_match(/\A\$pbkdf2-sha256\$1000\$[A-Za-z0-9_\-]{22}\$[A-Za-z0-9_\-]{43}\z/, h)
-    assert_true(Bezel::Password.verify("pw", h))
-    assert_false(Bezel::Password.verify("pW", h))
-    assert_false(h == Bezel::Password.hash("pw", iterations: 1000))
-    assert_false(Bezel::Password.verify("pw", "garbage"))
-    assert_false(Bezel::Password.verify("pw", "$pbkdf2-sha256$1000$!!$!!"))
+    cheap = Crypto::Argon2::Params.new(memory_kib: 64, iterations: 1, parallelism: 1)
+    h = Bezel::Password.hash("pw", params: cheap)
+    assert_match(/\A\$argon2id\$v=19\$m=64,t=1,p=1\$[A-Za-z0-9+\/]{22}\$[A-Za-z0-9+\/]{43}\z/, h)
+    assert_true(Bezel::Password.verify?("pw", h))
+    assert_false(Bezel::Password.verify?("pW", h))
+    assert_false(h == Bezel::Password.hash("pw", params: cheap))
     assert_true(Bezel::Password.needs_rehash?(h))
-    assert_false(Bezel::Password.needs_rehash?(h, 1000))
-    assert_raise(ArgumentError) { Bezel::Password.hash("pw", iterations: 10) }
+    assert_false(Bezel::Password.needs_rehash?(h, cheap))
+    assert_true(Bezel::Password.needs_rehash?(h, Crypto::Argon2::Params.new(memory_kib: 64, iterations: 2, parallelism: 1)))
+    # With the default parameters.
+    d = Bezel::Password.hash("correct horse")
+    assert_true(d.start_with?("$argon2id$v=19$m=19456,t=2,p=1$"))
+    assert_true(Bezel::Password.verify?("correct horse", d))
+    assert_false(Bezel::Password.needs_rehash?(d))
   end
 
   def test_token
@@ -253,13 +257,15 @@ class SecurityTest < Test::Case
     assert_equal({"a" => "1"}, plain.load(Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Cookie" => cookie})))).values)
   end
 
-  def test_password_bounds
-    good = Bezel::Password.hash("pw", iterations: 1000)
-    ["$pbkdf2-sha256$0000$AAAAAAAAAAAAAAAAAAAAAA$" + "A" * 43, "$pbkdf2-sha256$0999$AAAAAAAAAAAAAAAAAAAAAA$" + "A" * 43,
-     "$pbkdf2-sha256$999999999$AAAAAAAAAAAAAAAAAAAAAA$" + "A" * 43, good + "A"].each do |bad|
-      assert_false(Bezel::Password.verify("pw", bad))
+  def test_password_refuses_other_hashes
+    # (No PBKDF2 hash is read any more: a stored string of another scheme
+    # or garbage is an error, not a wrong password; needs_rehash? is true
+    # for it.)
+    pbkdf2 = "$pbkdf2-sha256$600000$AAAAAAAAAAAAAAAAAAAAAA$" + "A" * 43
+    ["garbage", "", pbkdf2, "$argon2i$v=19$m=64,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$" + "A" * 43].each do |bad|
+      assert_raise(Crypto::Error) { Bezel::Password.verify?("pw", bad) }
     end
-    assert_raise(ArgumentError) { Bezel::Password.hash("pw", iterations: 10_000_000) }
+    assert_true(Bezel::Password.needs_rehash?(pbkdf2))
   end
 
   def test_token_fingerprint

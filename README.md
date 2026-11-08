@@ -204,7 +204,8 @@ end
 - CSRF: unsafe methods need the session's token (masked per request) in
   `_csrf_token` or `X-CSRF-Token`, and a request from another origin
   (`Origin`, `Sec-Fetch-Site`) is refused.
-- `Bezel::Password.hash/verify` (PBKDF2-SHA256, 600,000 iterations) and
+- `Bezel::Password.hash/verify?/needs_rehash?` (argon2id, `Crypto::Argon2`,
+  with the cost of `Settings`'s `password_params:`) and
   `Bezel::Token.sign/verify` (HMAC, expiring, bound to a purpose, and to
   a `fingerprint` such as the password hash so that a reset link stops
   working once used) for links sent by mail.
