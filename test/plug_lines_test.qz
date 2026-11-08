@@ -1,0 +1,130 @@
+require "test"
+
+# Plug lines written directly in a controller's body (`plug`, `skip`), as
+# the `controller do ... end` block's, and across subclasses.
+class PlUsers < Bezel::Controller
+  plug :load_user, only: [:show]
+  plug :require_admin, except: [:index, :show]
+
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "users")
+  def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "user #{conn.assign(:user)}")
+  def delete(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "deleted")
+
+  private def load_user(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:user, "ann")
+  private def require_admin(conn: Bezel::Conn) -> Bezel::Conn
+    conn.header("x-admin") == "1" ? conn : conn.text("forbidden", status: 403)
+  end
+end
+
+class PlBase < Bezel::Controller
+  plug :login
+
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "base #{conn.assign?(:in) || "-"}")
+
+  private def login(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:in, "yes")
+end
+
+# A subclass: its lines come after the superclass's plugs, and may skip them.
+class PlOpen < PlBase
+  skip :login, only: [:welcome]
+  plug :stamp
+
+  def welcome(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "welcome #{conn.assign?(:in) || "-"} #{conn.assign?(:stamp) || "-"}")
+
+  private def stamp(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:stamp, "s")
+end
+
+# A subclass's `controller` block below its superclass's plug lines, and
+# a subclass's plug lines below its superclass's block.
+class PlBlockChild < PlBase
+  controller do
+    plug :stamp
+  end
+
+  def other(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "other #{conn.assign?(:in) || "-"} #{conn.assign?(:stamp) || "-"}")
+
+  private def stamp(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:stamp, "s")
+end
+
+class PlLinesChild < PlBlockChild
+  skip :stamp
+
+  def last(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "last #{conn.assign?(:in) || "-"} #{conn.assign?(:stamp) || "-"}")
+end
+
+# Lines and blocks in one body, folded in order.
+class PlMixed < Bezel::Controller
+  plug :a
+  controller do
+    plug :b
+    skip :a, only: [:two]
+  end
+  controller do
+    plug :c, except: [:one]
+  end
+  plug :d
+  skip :b, except: [:one]
+
+  def one(conn: Bezel::Conn) -> Bezel::Conn = text(conn, conn.assign?(:trail).as?(String) || "")
+  def two(conn: Bezel::Conn) -> Bezel::Conn = text(conn, conn.assign?(:trail).as?(String) || "")
+
+  private def a(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:trail, (conn.assign?(:trail).as?(String) || "") + "a")
+  private def b(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:trail, (conn.assign?(:trail).as?(String) || "") + "b")
+  private def c(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:trail, (conn.assign?(:trail).as?(String) || "") + "c")
+  private def d(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:trail, (conn.assign?(:trail).as?(String) || "") + "d")
+end
+
+# An empty `controller` block: the superclass's plugs only.
+class PlEmptyBlock < PlBase
+  controller do
+  end
+
+  def empty(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "empty #{conn.assign?(:in) || "-"}")
+end
+
+class PlugLinesTest < Test::Case
+  def run(c: Bezel::Controller, action: Symbol, headers: Hash[String, String] = {}) -> Bezel::Conn
+    c.dispatch(action, Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of(headers))))
+  end
+
+  def body(conn: Bezel::Conn) -> String = conn.resp_body.as(HTTP::Content::Text).text
+
+  def test_plug_lines
+    assert_equal("users", body(run(PlUsers.new, :index)))
+    assert_equal("user ann", body(run(PlUsers.new, :show)))
+    assert_equal(403, run(PlUsers.new, :delete).status)
+    assert_equal("deleted", body(run(PlUsers.new, :delete, {"x-admin" => "1"})))
+    assert_equal([:load_user, :require_admin], PlUsers.controller_plugs.map(&:method))
+  end
+
+  def test_lines_across_subclasses
+    assert_equal("base yes", body(run(PlBase.new, :index)))
+    # The superclass's plug, skipped for `welcome` only.
+    assert_equal("welcome - s", body(run(PlOpen.new, :welcome)))
+    assert_equal("base yes", body(run(PlOpen.new, :index)))
+    assert_equal([:login, :stamp], PlOpen.controller_plugs.map(&:method))
+    # Lines below a `controller` block, and a block below lines.
+    assert_equal("other yes s", body(run(PlBlockChild.new, :other)))
+    assert_equal("last yes -", body(run(PlLinesChild.new, :last)))
+    assert_equal("other yes -", body(run(PlLinesChild.new, :other)))
+    assert_equal("empty yes", body(run(PlEmptyBlock.new, :empty)))
+    assert_equal([:login], PlEmptyBlock.controller_plugs.map(&:method))
+  end
+
+  def test_lines_and_blocks_in_one_body
+    assert_equal("abd", body(run(PlMixed.new, :one)))
+    assert_equal("cd", body(run(PlMixed.new, :two)))
+    assert_equal([:a, :b, :c, :d], PlMixed.controller_plugs.map(&:method))
+  end
+
+  def test_lines_are_checked_at_compile_time
+    # (The fixture is checked by `quarz` on the PATH, or by $QUARZ.)
+    out = Process.sh("cd test/fixtures/plug_lines && exec \"${QUARZ:-quarz}\" check")
+    assert(!out.success?)
+    assert_match(/main\.qz:3:3: error: `controller` raised ArgumentError: LinesThenStatement has plug lines/, out.stderr)
+    assert_match(/main\.qz:10:3: error: `plug` raised ArgumentError: StatementThenLines has a `controller` statement/, out.stderr)
+    assert_match(/main\.qz:17:3: error: `skip` raised ArgumentError: skip :other: no plug of that name \(:mark\)/, out.stderr)
+    assert_match(/main\.qz:23:3: error: the class-end hook `:bezel_plugs` \(registered by `plug`\): .*`NoSuchPlug` has no method `missing`/, out.stderr)
+    assert_match(/main\.qz:28:3: error: `plug` raised ArgumentError: plug :mark: only: and except: together/, out.stderr)
+  end
+end

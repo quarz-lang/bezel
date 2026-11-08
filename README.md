@@ -69,14 +69,13 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
   `SIGTERM` and `SIGINT` (a second signal ends the process at once).
 
 A router declares its routes in one `routes` block, checked where it is
-compiled. A controller has one `controller` statement, which generates
-the dispatch to its actions and runs its plugs:
+compiled. A controller declares its plugs, one `plug` or `skip` line
+each (a controller without plugs of its own writes `controller`); the
+class generates the dispatch to its actions, which runs the plugs:
 
 ```ruby
 class Shop::UsersController < Bezel::Controller
-  controller do
-    plug :require_login, except: [:index, :show]
-  end
+  plug :require_login, except: [:index, :show]
 
   def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "users")
   def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "user #{conn.params.int("id")}")

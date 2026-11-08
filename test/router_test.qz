@@ -291,7 +291,7 @@ class RouterTest < Test::Case
   def test_an_action_the_statement_does_not_cover_is_a_500
     res = get("/admin/more")
     assert_equal(500, res.status)
-    assert_match(/RtPages has no action more \(a subclass&#39;s actions need its own `controller` statement\)/, text_of(res))
+    assert_match(/RtPages has no action more \(a subclass&#39;s actions need its own plug lines or `controller` statement\)/, text_of(res))
   end
 
   def test_a_head_route_beats_get_for_head
