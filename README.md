@@ -244,6 +244,8 @@ bezel server                    # serves http://localhost:4000, restarting on ch
 bezel gen controller about index team
 bezel gen model tag name:string
 bezel gen migration add_index_to_tags
+bezel gen job send_welcome user_id:integer   # a divider job (src/jobs/), in Shop::Jobs.all
+bezel jobs                      # runs the jobs: a divider worker (BEZEL_ENV=dev)
 bezel gen resource post title:string body:text   # model, migration, controller, views, routes
 bezel templates [--check]       # src/views/*/*.html.bz -> src/views/generated/ (Shop::PageView.home)
 bezel migrations [--check]      # src/migrations.qz, the list of src/migrations/
@@ -263,7 +265,16 @@ bezel test
   `Shop::Migrations::<Name> < Rotor::Migration`; `gen` writes them with a
   UTC timestamp and rewrites the list `Shop::Migrations.all`.
 - `bezel gen` adds its routes before the router's `# bezel gen: routes`
-  line. divider and `gen job` come with divider (#20).
+  line.
+- Background jobs are [divider](https://github.com/quarz-lang/divider)'s:
+  a new application depends on it and runs its migrations with its own.
+  `bezel gen job NAME [FIELD:TYPE...]` writes `src/jobs/<name>.qz` (a
+  `Shop::Jobs::<Name> < Divider::Job`, with `data Args` and `job_args Args`
+  when it has fields) and the list `Shop::Jobs.all` (src/jobs.qz).
+  `src/main.qz` runs them on `quarz run -- jobs` (what `bezel jobs` runs;
+  a compiled application: `./shop jobs`): a worker with a queue of 5 at
+  once for each queue the jobs name; enqueue with
+  `Shop::Jobs::SendWelcome.enqueue(repo: conn.repo, user_id: 42)`.
 - `bezel server` runs the application with `BEZEL_ENV=dev` (unless set)
   and its output on the terminal. It looks for changes every half
   second: a changed source (`src/**/*.qz`), template (`*.html.bz`) or

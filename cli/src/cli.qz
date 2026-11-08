@@ -8,6 +8,7 @@ module Cli
       gen controller NAME [ACTION...] a controller with an action and a template per ACTION (index)
       gen model NAME [FIELD:TYPE...]  a rotor model, its changeset and its migration
       gen migration NAME              an empty migration
+      gen job NAME [FIELD:TYPE...]    a divider job, with arguments of those fields
       gen resource NAME [FIELD:TYPE...] a model, its migration, a controller of the seven
                                       actions, its views, and its routes
       templates [--check]            compile src/views/*/*.html.bz into src/views/generated/
@@ -19,6 +20,8 @@ module Cli
       test [ARGS...]                 run the tests (quarz test)
       server                         run the application (BEZEL_ENV=dev unless set),
                                       and again when a source or template changes
+      jobs                           run the application's jobs: a divider worker
+                                      (BEZEL_ENV=dev unless set)
 
     FIELD:TYPE types: string, text, integer, float, boolean, time. Commands but
     `new` run in the application around the current directory (its Cog.toml).
@@ -46,6 +49,11 @@ module Cli
         Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", cmd] + rest, out)
       when "test" then Cli.in_app(Cli.app(cwd), [Cli.quarz, "test"] + rest, out)
       when "server" then Cli::Server.command(rest, Cli.app(cwd), out)
+      when "jobs"
+        raise Cli::Error.new("jobs takes no arguments, not #{rest.join(" ")}") unless rest.empty?
+        # (A development command, as `server`: BEZEL_ENV=dev unless set.)
+        env: Hash[String, String] = (ENV["BEZEL_ENV"]? || "").empty? ? {"BEZEL_ENV" => "dev"} : Hash[String, String].new
+        Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", "jobs"] + rest, out, env)
       when "help", "--help", "-h"
         out.print USAGE
         0
@@ -98,13 +106,37 @@ module Cli
   # Runs `command` in the application's directory, its standard output
   # copied to `out` line by line as it comes and its standard error the
   # terminal's; its status (1 when a signal ended it).
-  def self.in_app(app: Cli::App, command: Array[String], out: IO) -> Int
-    child = Process.spawn(*command, chdir: app.root, stdout: :pipe)
+  def self.in_app(app: Cli::App, command: Array[String], out: IO, env: Hash[String, String] = Hash[String, String].new) -> Int
+    child = Process.spawn(*command, chdir: app.root, stdout: :pipe, env: env)
+    # (TERM reaches bezel alone: passed on, so that the child, a worker
+    # say, ends with it instead of running on. Ctrl-C reaches both: bezel
+    # waits for the child to end of it, copying what it prints meanwhile.
+    # The traps are set once for the process, on the child running now.)
+    CHILD.set(child)
+    Cli.trap_once
     child.stdout.each_line do |line|
       out.print line
       out.flush
     end
     child.wait.code || 1
+  end
+
+  # The child `in_app` runs now, which the traps signal.
+  CHILD = Atom[Process::Child?].new(nil)
+  # Whether the traps are set.
+  TRAPPED = Atom[Bool].new(false)
+
+  # Sets, once for the process, the traps of `in_app`: TERM passed on to
+  # its child, INT left to it (bezel waits for it to end).
+  def self.trap_once -> Void
+    first = false
+    TRAPPED.update do |was|
+      first = !was
+      true
+    end
+    return unless first
+    Signal.trap(:TERM) { CHILD.get&.signal(:TERM) }
+    Signal.trap(:INT) { nil }
   end
 
   # Writes `content` to `path` under `root`, which must not exist yet.

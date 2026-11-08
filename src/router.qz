@@ -90,10 +90,7 @@ abstract class Router
     owner: Type[Router] = type
     doc ":nodoc:"
     def_method(:router_class) { owner }
-    # (Not `flat_map`: the reach of a compile-time run follows other
-    # includers' overrides, rotor's query among them, to IO: quarz#379.)
-    names: Array[Symbol] = []
-    table.each { |r| r.pipelines.each { |p| names = names.push(p) unless names.include?(p) } }
+    names = table.flat_map(&:pipelines).uniq
     Router.generate_pipelines(self, names)
     Router.generate_helpers(self, table)
   end

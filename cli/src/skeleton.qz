@@ -6,6 +6,7 @@ module Cli::Skeleton
   BEZEL_GIT = "https://github.com/quarz-lang/bezel"
   ROTOR_GIT = "https://github.com/quarz-lang/rotor"
   PG_GIT = "https://github.com/quarz-lang/pg"
+  DIVIDER_GIT = "https://github.com/quarz-lang/divider"
 
   # Modules an application's cannot be named like: the standard
   # library's and its dependencies' (a clash fails to compile).
@@ -18,7 +19,7 @@ module Cli::Skeleton
            "Symbol", "SystemCallError", "SystemExit", "SystemStackError", "Task", "Time", "Type", "TypeError",
            "Unshareable", "ZeroDivisionError", "Class",
            # (Standard modules loaded when named, and the dependencies.)
-           "Test", "Socket", "SocketError", "Crypto", "Digest", "Base64", "Bezel", "Rotor", "Main", "Cli"]
+           "Test", "Socket", "SocketError", "Crypto", "Digest", "Base64", "Bezel", "Rotor", "Divider", "PG", "Main", "Cli"]
 
   # Runs the command.
   def self.command(args: Array[String], cwd: String, out: IO) -> Int
@@ -55,6 +56,7 @@ module Cli::Skeleton
     Cli::Views.write(app, out)
     none: Array[String] = []
     Cli::Migrations.command(none, app, out)
+    Cli::Jobs.write(app, out)
     out.puts ""
     out.puts "Next: cd #{n}, then `bezel server` serves it on http://localhost:4000"
     0
@@ -82,6 +84,7 @@ module Cli::Skeleton
         Bezel = { git = #{BEZEL_GIT.inspect}, branch = "main" }
         Rotor = { git = #{ROTOR_GIT.inspect}, branch = "main" }
         PG = { git = #{PG_GIT.inspect}, branch = "main" }
+        Divider = { git = #{DIVIDER_GIT.inspect}, branch = "main" }
       TOML
       ".gitignore" => "/#{n}\nCog.local.toml\n",
       "README.md" => <<~MD,
@@ -128,9 +131,11 @@ module Cli::Skeleton
               - run: quarz test
       YML
       "src/main.qz" => <<~QZ,
-        # Serves the application, or runs a `bezel` task in it (`quarz run -- routes`).
+        # Runs the jobs (`quarz run -- jobs`, which `bezel jobs` runs), serves
+        # the application, or runs a `bezel` task in it (`quarz run -- routes`).
+        exit(#{m}::Jobs.serve) if ARGV.first? == "jobs"
         exit(Bezel.main(ARGV, #{m}::Endpoint, #{m}::Config.settings, router: #{m}::Router,
-                        migrations: #{m}::Migrations.all))
+                        migrations: #{m}::Migrations.all + Divider::Migrations.all))
       QZ
       "src/#{n}.qz" => <<~QZ,
         # The application #{m}.

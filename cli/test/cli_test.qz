@@ -47,10 +47,14 @@ class CliTest < Test::Case
       ["Cog.toml", "Cog.local.toml", ".gitignore", "README.md", ".github/workflows/ci.yml", "src/main.qz", "src/shop.qz",
        "src/config.qz", "src/endpoint.qz", "src/router.qz", "src/controllers/page_controller.qz",
        "src/views/layouts/app.html.bz", "src/views/page/home.html.bz", "src/views/generated/layouts.qz",
-       "src/views/generated/page.qz", "src/migrations.qz", "priv/static/app.css", "test/page_test.qz"].each do |f|
+       "src/views/generated/page.qz", "src/migrations.qz", "src/jobs.qz", "priv/static/app.css", "test/page_test.qz"].each do |f|
         assert(File.file?(File.join(root, f)), f)
       end
       assert(read(root, "Cog.toml").include?("Bezel = { git = \"https://github.com/quarz-lang/bezel\", branch = \"main\" }"))
+      assert(read(root, "Cog.toml").include?("Divider = { git = \"https://github.com/quarz-lang/divider\", branch = \"main\" }"))
+      assert(read(root, "src/main.qz").include?("exit(Shop::Jobs.serve) if ARGV.first? == \"jobs\""))
+      assert(read(root, "src/main.qz").include?("migrations: Shop::Migrations.all + Divider::Migrations.all"))
+      assert(read(root, "src/jobs.qz").include?("def self.all -> Array[Type[Divider::Job]] = []"))
       assert_equal("[patch]\nBezel = { path = #{CliTest.repo.inspect} }\n", read(root, "Cog.local.toml"))
       assert(read(root, "src/views/generated/page.qz").include?("module Shop::PageView"))
       assert_equal(0, bezel(["templates", "--check"], root)[0])
@@ -72,6 +76,8 @@ class CliTest < Test::Case
       assert_equal(1, bezel(["new", "Shop"], dir)[0])
       assert_equal(1, bezel(["new"], dir)[0])
       assert_equal(1, bezel(["new", "a", "b"], dir)[0])
+      # (A dependency's module: divider's, which every application has.)
+      assert_equal(1, bezel(["new", "divider"], dir)[0])
       Dir.mkdir(File.join(dir, "taken"))
       assert_equal(1, bezel(["new", "taken"], dir)[0])
     ensure
@@ -232,6 +238,85 @@ class CliTest < Test::Case
                    Cli::Server.with_generated(before, after))
     ensure
       Dir.rm_rf(root)
+    end
+  end
+
+  def test_gen_job
+    root = new_app
+    begin
+      assert_equal(0, bezel(["gen", "job", "send_welcome", "user_id:integer", "template:string"], root)[0])
+      j = read(root, "src/jobs/send_welcome.qz")
+      assert(j.include?("class Shop::Jobs::SendWelcome < Divider::Job\n"), j)
+      assert(j.include?("  data Args = (user_id: Int, template: String)\n\n  job_args Args\n"), j)
+      assert(j.include?("  def perform(args: Args, job: Divider::Context) -> Void\n"), j)
+      assert_equal(0, bezel(["gen", "job", "cleanup"], root)[0])
+      c = read(root, "src/jobs/cleanup.qz")
+      assert(c.include?("  def perform(job: Divider::Context) -> Void\n") && !c.include?("job_args"), c)
+      assert(read(root, "src/jobs.qz").include?("def self.all -> Array[Type[Divider::Job]] = [Shop::Jobs::Cleanup, Shop::Jobs::SendWelcome]"))
+      # Refused: the same name again, an argument named as enqueue's keywords.
+      assert_equal(1, bezel(["gen", "job", "cleanup"], root)[0])
+      assert_equal(1, bezel(["gen", "job", "remind", "at:time"], root)[0])
+      assert(!File.exist?(File.join(root, "src", "jobs", "remind.qz")))
+      # Names that would hide a constant for the other jobs, a reserved
+      # word as a field; a job's field may be named `id`.
+      ["divider", "hash", "string", "shop", "jobs", "config"].each do |bad|
+        assert_equal(1, bezel(["gen", "job", bad], root)[0], bad)
+      end
+      assert_equal(1, bezel(["gen", "job", "remind", "class:string"], root)[0])
+      assert_equal(0, bezel(["gen", "job", "remind", "id:integer"], root)[0])
+      res = quarz_check(root)
+      assert(res.success?, res.stdout)
+    ensure
+      Dir.rm_rf(File.dirname(root))
+    end
+  end
+
+  def test_jobs_runs_the_application_s_worker
+    root = new_app
+    begin
+      assert_equal(0, bezel(["gen", "job", "cleanup"], root)[0])
+      PG::Testing.with_cluster do |url|
+        c = PG.connect(url)
+        # (A database of its own: PG_TEST_URL's server is shared.)
+        db = "bezel_cli_jobs_#{Process.pid}_#{Random.rand(1_000_000)}"
+        c.exec("CREATE DATABASE #{db}")
+        begin
+          base, q, query = url.partition("?")
+          app_url = base[0, (base.rindex("/") || base.size)] + "/" + db + q + query
+          env = {"DATABASE_URL" => app_url, "BEZEL_ENV" => "dev"}
+          m = Process.spawn(Cli.quarz, "run", "--", "migrate", chdir: root, env: env, stdout: :pipe)
+          migrated = m.stdout.read
+          assert_equal(0, m.wait.code, migrated)
+          app = PG.connect(app_url)
+          state = ""
+          code = -1
+          begin
+            app.exec("INSERT INTO divider_jobs (class, queue) VALUES ('Shop::Jobs::Cleanup', 'default')")
+            w = Process.spawn(Cli.quarz, "run", "--", "jobs", chdir: root, env: env)
+            begin
+              600.times do
+                state = app.query("SELECT state FROM divider_jobs").rows[0].string?(0) || ""
+                break if state == "completed" || !w.running?
+                Task.sleep(200.ms)
+              end
+            ensure
+              w.signal(:TERM)
+              code = w.wait.code || -1
+            end
+          ensure
+            app.close
+          end
+          assert_equal("completed", state)
+          assert_equal(0, code)
+        ensure
+          c.exec("DROP DATABASE IF EXISTS #{db}")
+          c.close
+        end
+      end
+    rescue PG::Testing::Unavailable => e
+      omit(e.message)
+    ensure
+      Dir.rm_rf(File.dirname(root))
     end
   end
 

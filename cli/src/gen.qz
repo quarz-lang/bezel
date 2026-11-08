@@ -22,7 +22,8 @@ module Cli::Gen
     when "model" then Cli::Gen.model(rest, app, out)
     when "migration" then Cli::Gen.migration_command(rest, app, out)
     when "resource" then Cli::Gen.resource(rest, app, out)
-    else raise Cli::Error.new("gen takes controller, model, migration or resource, not #{(kind || "nothing").inspect}")
+    when "job" then Cli::Gen.job(rest, app, out)
+    else raise Cli::Error.new("gen takes controller, model, migration, resource or job, not #{(kind || "nothing").inspect}")
     end
   end
 
@@ -39,15 +40,23 @@ module Cli::Gen
     n
   end
 
-  # The fields of `specs` (`title:string`).
-  def self.fields(specs: Array[String]) -> Array[Field]
+  # Words a field cannot be named: Quarz's reserved words.
+  RESERVED_FIELDS = ["alias", "and", "begin", "break", "case", "class", "def", "defined?", "do", "else", "elsif", "end",
+                     "ensure", "false", "for", "if", "in", "module", "next", "nil", "not", "or", "redo", "rescue",
+                     "retry", "return", "self", "super", "then", "true", "undef", "unless", "until", "when", "while",
+                     "yield"]
+
+  # The fields of `specs` (`title:string`); a model's (`model`) cannot be
+  # its own `id`, `created_at` or `updated_at`.
+  def self.fields(specs: Array[String], model: Bool = true) -> Array[Field]
     seen: Set[String] = Set.new
     specs.map do |spec|
       name, _, type = spec.partition(":")
       t = TYPES[type]?
       raise Cli::Error.new("#{spec.inspect}: a field is NAME:TYPE, the type one of #{TYPES.keys.join(", ")}") if t.nil?
       raise Cli::Error.new("#{name.inspect} is not a field name (snake_case)") unless name.match?(/\A[a-z][a-z0-9_]*\z/)
-      raise Cli::Error.new("#{name}: id, created_at and updated_at are the model's own") if ["id", "created_at", "updated_at"].include?(name)
+      raise Cli::Error.new("#{name}: id, created_at and updated_at are the model's own") if model && ["id", "created_at", "updated_at"].include?(name)
+      raise Cli::Error.new("#{name} is a reserved word: it cannot name a field") if RESERVED_FIELDS.include?(name)
       raise Cli::Error.new("#{name} is given twice") if seen.include?(name)
       seen = seen.add(name)
       Field.new(name, t, type == "text")
@@ -132,6 +141,7 @@ module Cli::Gen
       Cli::Views.write(app, out) if files.any? { |f| f[0].end_with?(".html.bz") }
       none: Array[String] = []
       Cli::Migrations.command(none, app, out) if files.any? { |f| f[0].start_with?("src/migrations/") }
+      Cli::Jobs.write(app, out) if files.any? { |f| f[0].start_with?("src/jobs/") }
     rescue Exception => e
       # (Each undoing step's own error would hide `e`: ignored.)
       created.to_a.each do |p|
@@ -257,6 +267,52 @@ module Cli::Gen
               body +
               "  end\nend\n"
     ["src/migrations/#{v}_#{name}.qz", content]
+  end
+
+  # `gen job NAME [FIELD:TYPE...]`: a divider job, whose arguments (if
+  # any) are a `data` type of those fields.
+  def self.job(args: Array[String], app: Cli::App, out: IO) -> Int
+    n = Cli::Gen.name_of(args.first?, "job")
+    fields = Cli::Gen.fields(args.size > 1 ? args[1...args.size] : Array[String].new, false)
+    fields.each do |f|
+      if ["repo", "at", "after", "priority"].include?(f.name)
+        raise Cli::Error.new("#{f.name}: a job's argument cannot be named repo, at, after or priority (enqueue's keywords)")
+      end
+    end
+    m = app.module_name
+    name = Cli.camel(n)
+    # (Inside `Shop::Jobs`, a job's name would hide the constant of that
+    # name for the other jobs and src/jobs.qz: `Divider`, `Hash`, `String`,
+    # the application's module.)
+    if Cli::Skeleton::TAKEN.include?(name) || name == m || name == "Jobs" || name == "Config" || name == "Args"
+      raise Cli::Error.new("#{n}: a job named #{name} would hide the constant #{name} for the application's jobs; choose another name")
+    end
+    cls = "#{m}::Jobs::#{name}"
+    Cli::Gen.undeclared(app, cls)
+    human = n.gsub("_", " ")
+    content = if fields.empty?
+                "# The job #{human} (`#{cls}.enqueue(repo)`).\n" +
+                  "class #{cls} < Divider::Job\n" +
+                  "  def perform(job: Divider::Context) -> Void\n" +
+                  "    # job.repo: the database\n" +
+                  "  end\n" +
+                  "end\n"
+              else
+                list = fields.map { |f| "#{f.name}: #{f.type}" }.join(", ")
+                keywords = fields.map { |f| "#{f.name}: ..." }.join(", ")
+                "# The job #{human} (`#{cls}.enqueue(repo: repo, #{keywords})`).\n" +
+                  "class #{cls} < Divider::Job\n" +
+                  "  # Its arguments.\n" +
+                  "  data Args = (#{list})\n\n" +
+                  "  job_args Args\n\n" +
+                  "  def perform(args: Args, job: Divider::Context) -> Void\n" +
+                  "    # job.repo: the database\n" +
+                  "  end\n" +
+                  "end\n"
+              end
+    none: Array[String] = []
+    Cli::Gen.apply(app, [["src/jobs/#{n}.qz", content]], none, out)
+    0
   end
 
   # `gen model NAME [FIELD:TYPE...]` (NAME singular).
