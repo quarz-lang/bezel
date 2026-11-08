@@ -12,7 +12,9 @@
 # shutdown ends the process at once (status 1), for a request that
 # never waits. Returns once the server has stopped and the pool is
 # closed, with the default actions of SIGTERM and SIGINT back: traps the
-# application set for them before are dropped, not restored.
+# application set for them before are dropped, not restored. A task's
+# configuration (`Config.for_task` in prod without SECRET_KEY_BASE) is
+# refused at once (`Bezel::ConfigError`): it signs no session.
 #
 # ```quarz no_run
 # # src/main.qz of an application
@@ -25,6 +27,9 @@
 public def start(endpoint: Type[Endpoint], settings: Hash[Symbol, Settings] = {}, *, config: Config? = nil,
                  grace: Duration = 30.seconds) -> Void
   c = config || Config.load(app_name(endpoint), settings)
+  if c.secret_key_base == Config::TASK_SECRET
+    raise ConfigError.new("#{c.app}: a task's configuration (Bezel::Config.for_task) cannot serve: its SECRET_KEY_BASE is the placeholder, which signs no session; set SECRET_KEY_BASE and use Bezel::Config.load")
+  end
   pool = open_pool(c)
   begin
     srv = server(endpoint, App.new(c, pool))

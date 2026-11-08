@@ -34,6 +34,15 @@ class ServerTest < Test::Case
     end
   end
 
+  def test_start_refuses_a_task_s_configuration
+    # (Local and on a free port, should the check ever regress.)
+    task = Bezel::Config.for_task("server_test_app", environ: {"BEZEL_ENV" => "prod", "HOST" => "127.0.0.1", "PORT" => "0"})
+    e = assert_raise(Bezel::ConfigError) { Bezel.start(ServerTestApp, config: task) }
+    assert_match(/task's configuration .* cannot serve/, e.message)
+    # Through `Bezel.main`: a message and status 1, not a trace.
+    assert_equal(1, Bezel.main(["server"], ServerTestApp, config: task))
+  end
+
   def test_start_stops_on_term
     probe = TCPServer.new("127.0.0.1", 0)
     port = probe.local_address.port
