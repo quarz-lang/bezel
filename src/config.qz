@@ -15,7 +15,10 @@ data Settings(
   # `:debug`, `:info`, `:warn` or `:error`.
   log_level: Symbol? = nil,
   # The size of the database's connection pool.
-  pool_size: Int? = nil
+  pool_size: Int? = nil,
+  # The cost of `Bezel::Password`'s hashes (`Crypto::Argon2::Params::DEFAULT`
+  # when nil).
+  password_params: Crypto::Argon2::Params? = nil
 )
 end
 
@@ -32,6 +35,7 @@ end
 # | TRUSTED_PROXIES | proxies, separated by commas | none |
 # | TLS_CERT, TLS_KEY | paths of the certificate chain and its key (PEM): HTTPS | none (behind a proxy) |
 # | LOG_LEVEL | `debug`, `info`, `warn` or `error` | `info` |
+# | (none) | `password_params`: the cost of `Bezel::Password`'s hashes | `Crypto::Argon2::Params::DEFAULT` |
 #
 # A value that does not parse (a port, a level, a proxy, a database
 # URL, a certificate and its key, which are read), or a missing one that
@@ -67,7 +71,9 @@ data Config(
   # The path of the certificate's key, for HTTPS.
   tls_key: String?,
   # `:debug`, `:info`, `:warn` or `:error`.
-  log_level: Symbol
+  log_level: Symbol,
+  # The cost of `Bezel::Password`'s hashes.
+  password_params: Crypto::Argon2::Params = Crypto::Argon2::Params::DEFAULT
 )
   # The levels, least severe first.
   LOG_LEVELS = [:debug, :info, :warn, :error]
@@ -138,7 +144,8 @@ data Config(
       secret = Config.dev_secret(app)
       STDERR.puts "bezel: SECRET_KEY_BASE is not set; #{env} uses one derived from the application's name, not for production" unless quiet || env == :test
     end
-    Config.new(app, env, host, port, db, pool_size, secret, proxies, cert, key, level)
+    Config.new(app, env, host, port, db, pool_size, secret, proxies, cert, key, level,
+               s.password_params || Crypto::Argon2::Params::DEFAULT)
   end
 
   # The secret `dev` and `test` use without SECRET_KEY_BASE: a digest
@@ -192,7 +199,8 @@ data Config(
   def inspect -> String
     "#<Bezel::Config app: #{app.inspect}, env: #{env.inspect}, host: #{host.inspect}, port: #{port}, " +
       "database_url: #{database_url ? "(set)" : "nil"}, pool_size: #{pool_size}, secret_key_base: <hidden>, " +
-      "trusted_proxies: #{trusted_proxies.inspect}, tls: #{tls_cert ? "on" : "off"}, log_level: #{log_level.inspect}>"
+      "trusted_proxies: #{trusted_proxies.inspect}, tls: #{tls_cert ? "on" : "off"}, log_level: #{log_level.inspect}, " +
+      "password_params: #{password_params.inspect}>"
   end
 
   # As `inspect`.

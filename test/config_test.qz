@@ -37,6 +37,12 @@ class ConfigTest < Test::Case
     assert_true(c.log?(:debug))
     t = load({"BEZEL_ENV" => "test"}, {dev: s})
     assert_equal(4000, t.port)
+    # The password hashes' cost: the default, or the settings'.
+    assert_equal(Crypto::Argon2::Params::DEFAULT, c.password_params)
+    cheap = Crypto::Argon2::Params.new(memory_kib: 64, iterations: 1, parallelism: 1)
+    p = load({}, {dev: Bezel::Settings.new(password_params: cheap)})
+    assert_equal(cheap, p.password_params)
+    assert_match(/password_params: #<Crypto::Argon2::Params m=64 t=1 p=1>/, p.inspect)
   end
 
   def test_prod_needs_a_secret
