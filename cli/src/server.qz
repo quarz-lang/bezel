@@ -93,7 +93,7 @@ module Cli::Server
   # modification times.
   def self.snapshot(app: Cli::App) -> Hash[String, Time]
     seen: Hash[String, Time] = {}
-    files = ["Cog.toml", "Cog.local.toml"] + Cli::Server.under(app.root, "src")
+    files = ["Cog.toml", "Cog.local.toml"] + Cli.files_under(app.root, "src")
     files.each do |f|
       next unless f.start_with?("Cog") || f.end_with?(".qz") || f.end_with?(".html.bz")
       begin
@@ -103,32 +103,6 @@ module Cli::Server
       end
     end
     seen
-  end
-
-  # The files under `root`/`dir`, as paths from `root` (walked, not
-  # globbed: the root's own name may hold glob characters).
-  def self.under(root: String, dir: String) -> Array[String]
-    found = Array::Builder[String].new
-    names = begin
-      Dir.children(File.join(root, dir)).sort
-    rescue SystemCallError
-      none: Array[String] = []
-      none
-    end
-    names.each do |n|
-      next if n.start_with?(".")
-      rel = File.join(dir, n)
-      full = File.join(root, rel)
-      # (Links to directories are not followed: one to a directory above
-      # would loop. Links to files are watched.)
-      next if File.symlink?(full) && File.directory?(full)
-      if File.directory?(full)
-        Cli::Server.under(root, rel).each { |f| found << f }
-      else
-        found << rel
-      end
-    end
-    found.to_a
   end
 
   # `before`, with the times `after` gives the files `prepare` writes
