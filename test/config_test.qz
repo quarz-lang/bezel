@@ -60,6 +60,12 @@ class ConfigTest < Test::Case
     assert_equal(5001, dev.port)
     # (A short one in dev is refused, as `load` refuses it.)
     assert_raise(Bezel::ConfigError) { Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "dev", "SECRET_KEY_BASE" => "short"}) }
+    # The placeholder signs nothing, and is no application's secret.
+    task = Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod"})
+    e = assert_raise(Bezel::ConfigError) { Bezel::Keys.derive(task.secret_key_base, "bezel token") }
+    assert_match(/no SECRET_KEY_BASE/, e.message)
+    assert_raise(Bezel::ConfigError) { load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => Bezel::Config::TASK_SECRET}) }
+    assert_equal(32, Bezel::Keys.derive("s" * 64, "bezel token").size)
     # The rest is checked as `load` checks it.
     assert_raise(Bezel::ConfigError) { Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "PORT" => "x"}) }
   end
