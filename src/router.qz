@@ -86,10 +86,10 @@ abstract class Router
       end
     end
     doc "The routes, in order."
-    def_class_method(:route_table) { table }
+    def_class_method(:route_table, override: true) { table }
     owner: Type[Router] = type
     doc ":nodoc:"
-    def_method(:router_class) { owner }
+    def_method(:router_class, override: true) { owner }
     names = table.flat_map(&:pipelines).uniq
     Router.generate_pipelines(self, names)
     Router.generate_helpers(self, table)
@@ -117,7 +117,7 @@ abstract class Router
     end
     first = cls.class_method_ref[() -> Hash[Symbol, Array[Plug]]](:__bezel_pipelines_0)
     cls.doc ":nodoc:"
-    cls.def_class_method(:pipeline_table) { first.bind(self).call }
+    cls.def_class_method(:pipeline_table, override: true) { first.bind(self).call }
   end
 
   # :nodoc:
