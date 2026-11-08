@@ -170,12 +170,12 @@ class Controller
     end
     all = plugs
     cls.doc "The plugs of the `controller` statement, the superclass's first."
-    cls.def_class_method(:controller_plugs) { all }
+    cls.def_class_method(:controller_plugs, override: true) { all }
     first_plug = cls.method_ref[(Symbol, Conn) -> Conn](:__bezel_plug_0)
     first_action = cls.method_ref[(Symbol, Conn) -> Conn](:__bezel_action_0)
     known = actions
     cls.doc "Runs `action` (#{actions.map { |x| "`#{x}`" }.join(", ")}) on `conn`, after the controller's plugs; another action is an `ArgumentError`."
-    cls.def_method(:dispatch, [:action, :conn]) do |a: Symbol, c: Conn| -> Conn
+    cls.def_method(:dispatch, [:action, :conn], override: true) do |a: Symbol, c: Conn| -> Conn
       raise ArgumentError.new("#{owner_name} has no action #{a} (a subclass's actions need its own `controller` statement)") unless known.include?(a)
       out = first_plug.bind(self).call(a, c)
       out.halted? ? out : first_action.bind(self).call(a, out)
