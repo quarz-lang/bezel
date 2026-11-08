@@ -217,9 +217,11 @@ class CliTest < Test::Case
       File.write(File.join(root, "src", "a", "y.html.bz"), "")
       File.write(File.join(root, "src", "a", ".#y.html.bz"), "")
       File.write(File.join(root, "src", "a", ".hidden", "z.qz"), "")
-      links = Process.sh("ln -s .. #{Cli.quote(File.join(root, "src", "a", "up"))} && ln -s . #{Cli.quote(File.join(root, "src", "self"))}")
+      links = Process.sh("ln -s .. #{Cli.quote(File.join(root, "src", "a", "up"))} && ln -s . #{Cli.quote(File.join(root, "src", "self"))} && " +
+                         "ln -s x.qz #{Cli.quote(File.join(root, "src", "linked.qz"))}")
       assert(links.success?, links.stderr)
-      assert_equal(["src/a/y.html.bz", "src/x.qz"], Cli::Server.under(root, "src"))
+      # (Links to directories are not followed; one to a file is a file.)
+      assert_equal(["src/a/y.html.bz", "src/linked.qz", "src/x.qz"], Cli::Server.under(root, "src"))
       # The files `prepare` writes take their times after it, the others
       # before.
       t0 = Time.utc(2026, 1, 1)
