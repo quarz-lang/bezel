@@ -170,7 +170,8 @@ class CliTest < Test::Case
   def test_server_runs_the_application_and_restarts_it_on_a_change
     root = new_app
     log = File.join(File.dirname(root), "server.log")
-    port = 41_000 + Random.rand(10_000)
+    # (Below Linux's ephemeral ports, 32768 and up.)
+    port = 20_000 + Random.rand(10_000)
     app = Cli.app(root)
     stop = Channel[Nil].new
     begin
@@ -178,6 +179,7 @@ class CliTest < Test::Case
         File.open(log, "w") { |io| Cli::Server.serve(app, io, stop, {"PORT" => port.to_s}) }
       end
       body: String? = nil
+      status = -1
       begin
         600.times do
           body = page(port)
@@ -195,11 +197,12 @@ class CliTest < Test::Case
         assert_match(/Changed Welcome to Shop/, body || "")
       ensure
         stop.close
-        assert_equal(0, t.await)
+        status = t.await
       end
+      assert_equal(0, status)
       text = File.read(log)
       assert_equal(2, text.lines.count { |l| l.start_with?("bezel: starting shop") }, text)
-      assert_match(/bezel: a file changed; restarting\n  update  src\/views\/generated\/page\.qz/, text)
+      assert_match(/bezel: a file changed\n  update  src\/views\/generated\/page\.qz/, text)
       assert_nil(page(port))
     ensure
       Dir.rm_rf(File.dirname(root))
