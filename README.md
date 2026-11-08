@@ -20,7 +20,7 @@ forms over rotor's changesets, sessions, the flash, CSRF protection,
 secure headers, host authorization, password hashes and signed tokens,
 test helpers, the template compiler, and the `bezel` command.
 
-```ruby
+```crystal
 class Shop::Endpoint < Bezel::Endpoint
   def self.plugs -> Array[Bezel::Plug]
     [Bezel::Plug::RequestId.new,
@@ -73,7 +73,7 @@ compiled. A controller declares its plugs, one `plug` or `skip` line
 each (a controller without plugs of its own writes `controller`); the
 class generates the dispatch to its actions, which runs the plugs:
 
-```ruby
+```crystal
 class Shop::UsersController < Bezel::Controller
   plug :require_login, except: [:index, :show]
 
@@ -121,7 +121,7 @@ name a parameter; `class:` waits for quarz-lang/quarz#382). A layout is
 a function taking the inner HTML; a component includes
 `Bezel::Component`; a form over a changeset shows its values and errors:
 
-```ruby
+```crystal
 module UserView
   def self.edit(conn: Bezel::Conn, cs: Rotor::Changeset[User]) -> Bezel::Html
     Bezel.html(conn) do |h|
@@ -183,7 +183,7 @@ type-checked and escaped as hand-written DSL code is:
 
 A browser pipeline adds sessions and protection:
 
-```ruby
+```crystal
 def self.browser -> Array[Bezel::Plug]
   [Bezel::Plug::HostAuthorization.new(["shop.example"]),
    Bezel::Plug::SecureHeaders.new,               # first: error pages get them too
@@ -214,7 +214,7 @@ end
 An application is tested through its endpoint, in the test's task,
 without sockets (`Bezel::Testing`):
 
-```ruby
+```crystal
 res = Bezel::Testing.get(Shop::Endpoint, "/users")
 page = Bezel::Testing.html_response(res, 200)          # a parsed page
 page.has_element?("form[action=\"/users\"] input[name=\"user[email]\"]")
