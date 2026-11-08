@@ -14,12 +14,16 @@ module Cli::Server
     # (Ctrl-C reaches the application too, which shuts down by itself:
     # it gets time to before TERM, which it would take as a second
     # signal. TERM reaches bezel alone.)
+    # A second Ctrl-C, or a TERM, cuts that time short.
     by_int = Atom[Bool].new(false)
     Signal.trap(:INT) do
-      by_int.set(true)
+      by_int.set(!stop.closed?)
       stop.close
     end
-    Signal.trap(:TERM) { stop.close }
+    Signal.trap(:TERM) do
+      by_int.set(false)
+      stop.close
+    end
     none: Hash[String, String] = {}
     Cli::Server.serve(app, out, stop, none, by_int)
   end
@@ -45,10 +49,12 @@ module Cli::Server
           out.puts "bezel: starting #{app.name} (#{Cli.quarz} run)"
           out.flush
           child = Process.spawn(Cli.quarz, "run", chdir: app.root, env: child_env)
+          # (An interrupt that came just before: this child never got it.)
+          interrupted.set(false) if stop.closed?
         end
         reason = Cli::Server.wait_for_change(app, seen, stop, child)
         return 0 if reason == :stop
-        Cli::Server.stop_child(child, false)
+        Cli::Server.stop_child(child, Atom[Bool].new(false))
         child = nil
         out.puts(reason == :exited ? "bezel: #{app.name} exited; waiting for a change" : "bezel: a file changed")
         out.flush
@@ -58,7 +64,7 @@ module Cli::Server
         end
       end
     ensure
-      Task.uncancellable { Cli::Server.stop_child(child, interrupted.get) }
+      Task.uncancellable { Cli::Server.stop_child(child, interrupted) }
     end
   end
 
@@ -110,6 +116,8 @@ module Cli::Server
       next if n.start_with?(".")
       rel = File.join(dir, n)
       full = File.join(root, rel)
+      # (Links are not followed: one to a directory above would loop.)
+      next if File.symlink?(full)
       if File.directory?(full)
         Cli::Server.under(root, rel).each { |f| found << f }
       else
@@ -146,18 +154,17 @@ module Cli::Server
     end
   end
 
-  # Stops `child`: TERM, then KILL after `STOP_GRACE`. When the child got
-  # an interrupt itself (`interrupted`), it has `STOP_GRACE` to end first.
-  def self.stop_child(child: Process::Child?, interrupted: Bool) -> Void
+  # Stops `child`: TERM, then KILL after `STOP_GRACE`. While the child
+  # got an interrupt itself (`interrupted` holds), it has `STOP_GRACE` to
+  # end first; `interrupted` turning false (a TERM, a second Ctrl-C) cuts
+  # that short.
+  def self.stop_child(child: Process::Child?, interrupted: Atom[Bool]) -> Void
     return if child.nil? || !child.running?
-    if interrupted
-      begin
-        Task.timeout(STOP_GRACE) { child.wait }
-        return
-      rescue Task::Timeout
-        nil
-      end
+    deadline = Time.now + STOP_GRACE
+    while interrupted.get && child.running? && Time.now < deadline
+      Task.sleep(50.ms)
     end
+    return unless child.running?
     child.signal(:TERM)
     begin
       Task.timeout(STOP_GRACE) { child.wait }

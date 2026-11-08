@@ -209,6 +209,30 @@ class CliTest < Test::Case
     end
   end
 
+  def test_server_watches_files_without_following_links_or_hidden_ones
+    root = CliTest.tmp
+    begin
+      Dir.mkdir_p(File.join(root, "src", "a", ".hidden"))
+      File.write(File.join(root, "src", "x.qz"), "")
+      File.write(File.join(root, "src", "a", "y.html.bz"), "")
+      File.write(File.join(root, "src", "a", ".#y.html.bz"), "")
+      File.write(File.join(root, "src", "a", ".hidden", "z.qz"), "")
+      links = Process.sh("ln -s .. #{Cli.quote(File.join(root, "src", "a", "up"))} && ln -s . #{Cli.quote(File.join(root, "src", "self"))}")
+      assert(links.success?, links.stderr)
+      assert_equal(["src/a/y.html.bz", "src/x.qz"], Cli::Server.under(root, "src"))
+      # The files `prepare` writes take their times after it, the others
+      # before.
+      t0 = Time.utc(2026, 1, 1)
+      t1 = Time.utc(2026, 1, 2)
+      before = {"src/x.qz" => t0, "src/views/generated/page.qz" => t0, "src/migrations.qz" => t0}
+      after = {"src/x.qz" => t1, "src/views/generated/page.qz" => t1, "src/migrations.qz" => t1, "src/views/generated/new.qz" => t1}
+      assert_equal({"src/x.qz" => t0, "src/views/generated/page.qz" => t1, "src/migrations.qz" => t1, "src/views/generated/new.qz" => t1},
+                   Cli::Server.with_generated(before, after))
+    ensure
+      Dir.rm_rf(root)
+    end
+  end
+
   def test_review_cases
     dir = CliTest.tmp
     begin
