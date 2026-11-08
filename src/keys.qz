@@ -22,7 +22,7 @@ module Keys
   # which is public: a task without SECRET_KEY_BASE signs nothing.
   def self.derive(secret: String, purpose: String) -> Bytes
     if secret == Config::TASK_SECRET
-      raise ConfigError.new("no SECRET_KEY_BASE: this is a task's configuration (Bezel::Config.for_task), whose placeholder signs nothing; set SECRET_KEY_BASE to make #{purpose} keys")
+      raise ConfigError.new("no SECRET_KEY_BASE of 64 bytes or more: this is a task's configuration (Bezel::Config.for_task), whose placeholder signs nothing; set SECRET_KEY_BASE to make #{purpose} keys")
     end
     id = Digest::SHA256.hexdigest("#{purpose}\0#{secret}")
     known = CACHE.value[id]?
