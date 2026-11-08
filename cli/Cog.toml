@@ -5,6 +5,8 @@ version = "0.1.0"
 [dependencies]
 Bezel = { git = "https://github.com/quarz-lang/bezel", branch = "main" }
 Rotor = { git = "https://github.com/quarz-lang/rotor", branch = "main" }
+# (PG::Testing, for the tests that run an application's jobs.)
+PG = { git = "https://github.com/quarz-lang/pg", branch = "main" }
 
 # The bezel library of this checkout.
 [patch]
