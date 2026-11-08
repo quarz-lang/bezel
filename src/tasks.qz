@@ -80,15 +80,8 @@ module Tasks
     "status" => {"--table" => true}
   }
 
-  # The configuration of a migration command: as `Config.load` makes it,
-  # but without needing SECRET_KEY_BASE in prod, which migrations do not
-  # use (a placeholder stands for it, used by nothing).
-  def self.config(app: String, settings: Hash[Symbol, Settings]) -> Config
-    env = Process.env
-    given = Config.var(env, "SECRET_KEY_BASE")
-    env = env.put("SECRET_KEY_BASE", "-" * 64) unless given && given.bytesize >= 64
-    Config.load(app, settings, environ: env)
-  end
+  # The configuration of a migration command (`Config.for_task`).
+  def self.config(app: String, settings: Hash[Symbol, Settings]) -> Config = Config.for_task(app, settings, environ: Process.env)
 
   # Refuses arguments to a command that takes none.
   def self.no_options(cmd: String, rest: Array[String]) -> Void
