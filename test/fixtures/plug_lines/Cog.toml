@@ -1,0 +1,13 @@
+# A program `quarz check` refuses (test/plug_lines_test.qz): plug lines
+# mixed with a `controller` statement, a `skip` line naming no plug, a
+# plug of a method that does not exist, and `only:` with `except:`. It is
+# checked against this checkout of bezel.
+[cog]
+name = "plug_lines"
+version = "0.1.0"
+
+[dependencies]
+Bezel = { git = "https://github.com/quarz-lang/bezel", branch = "main" }
+
+[patch]
+Bezel = { path = "../../.." }

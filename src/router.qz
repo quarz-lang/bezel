@@ -44,9 +44,9 @@
 # segment), and percent-encoded. `with_query` adds a query, and
 # `Conn#url` makes the path a URL.
 #
-# A controller whose `controller` statement does not cover the action
-# routed to (none at all, or a subclass's action under its superclass's
-# statement) answers with an `ArgumentError` (a 500, reported to
+# A controller whose dispatch does not cover the action routed to (no
+# plug lines nor `controller` statement at all, or a subclass's action
+# under its superclass's dispatch) answers with an `ArgumentError` (a 500, reported to
 # `on_error`).
 abstract class Router
   include Plug

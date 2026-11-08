@@ -1,0 +1,31 @@
+class LinesThenStatement < Bezel::Controller
+  plug :mark
+  controller
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "x")
+  private def mark(conn: Bezel::Conn) -> Bezel::Conn = conn
+end
+
+class StatementThenLines < Bezel::Controller
+  controller
+  plug :mark
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "x")
+  private def mark(conn: Bezel::Conn) -> Bezel::Conn = conn
+end
+
+class SkipNothing < Bezel::Controller
+  plug :mark
+  skip :other
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "x")
+  private def mark(conn: Bezel::Conn) -> Bezel::Conn = conn
+end
+
+class NoSuchPlug < Bezel::Controller
+  plug :missing
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "x")
+end
+
+class OnlyAndExcept < Bezel::Controller
+  plug :mark, only: [:index], except: [:index]
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "x")
+  private def mark(conn: Bezel::Conn) -> Bezel::Conn = conn
+end
