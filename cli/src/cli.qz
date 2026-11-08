@@ -17,11 +17,11 @@ module Cli
       rollback [--steps N | --to VERSION]
       status                         each migration, up or pending
       test [ARGS...]                 run the tests (quarz test)
+      server                         run the application (BEZEL_ENV=dev unless set),
+                                      and again when a source or template changes
 
     FIELD:TYPE types: string, text, integer, float, boolean, time. Commands but
     `new` run in the application around the current directory (its Cog.toml).
-    `bezel server` waits for quarz-lang/quarz#385; meanwhile run
-    `BEZEL_ENV=dev quarz run`.
   TEXT
 
   # The application a command runs in: its directory, its cog's name and
@@ -45,6 +45,7 @@ module Cli
       when "routes", "migrate", "rollback", "status"
         Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", cmd] + rest, out)
       when "test" then Cli.in_app(Cli.app(cwd), [Cli.quarz, "test"] + rest, out)
+      when "server" then Cli::Server.command(rest, Cli.app(cwd), out)
       when "help", "--help", "-h"
         out.print USAGE
         0
@@ -94,14 +95,16 @@ module Cli
   # `s` quoted for `sh`.
   def self.quote(s: String) -> String = "'" + s.gsub("'", "'\\''") + "'"
 
-  # Runs `command` in the application's directory, then prints what it
-  # printed; its status. (The output comes when it ends: streaming
-  # waits for quarz-lang/quarz#385.)
+  # Runs `command` in the application's directory, its standard output
+  # copied to `out` line by line as it comes and its standard error the
+  # terminal's; its status (1 when a signal ended it).
   def self.in_app(app: Cli::App, command: Array[String], out: IO) -> Int
-    res = Process.sh("cd #{Cli.quote(app.root)} && exec #{command.map { |c| Cli.quote(c) }.join(" ")}")
-    out.print res.stdout
-    STDERR.print res.stderr
-    res.status < 0 ? 1 : res.status
+    child = Process.spawn(*command, chdir: app.root, stdout: :pipe)
+    child.stdout.each_line do |line|
+      out.print line
+      out.flush
+    end
+    child.wait.code || 1
   end
 
   # Writes `content` to `path` under `root`, which must not exist yet.

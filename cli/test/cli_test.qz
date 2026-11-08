@@ -159,6 +159,82 @@ class CliTest < Test::Case
     end
   end
 
+  # The body of `http://127.0.0.1:port/`, or nil while nothing answers.
+  def page(port: Int) -> String?
+    res = HTTP.get("http://127.0.0.1:#{port}/")
+    res.status == 200 ? res.body.read : nil
+  rescue StandardError
+    nil
+  end
+
+  def test_server_runs_the_application_and_restarts_it_on_a_change
+    root = new_app
+    log = File.join(File.dirname(root), "server.log")
+    # (Below Linux's ephemeral ports, 32768 and up.)
+    port = 20_000 + Random.rand(10_000)
+    app = Cli.app(root)
+    stop = Channel[Nil].new
+    begin
+      t = Task.spawn do
+        File.open(log, "w") { |io| Cli::Server.serve(app, io, stop, {"PORT" => port.to_s}) }
+      end
+      body: String? = nil
+      status = -1
+      begin
+        600.times do
+          body = page(port)
+          break if body
+          Task.sleep(200.ms)
+        end
+        assert_match(/Welcome to Shop/, body || "")
+        path = File.join(root, "src", "views", "page", "home.html.bz")
+        File.write(path, File.read(path).sub("<h1>", "<h1>Changed "))
+        600.times do
+          body = page(port)
+          break if body && body.include?("Changed ")
+          Task.sleep(200.ms)
+        end
+        assert_match(/Changed Welcome to Shop/, body || "")
+      ensure
+        stop.close
+        status = t.await
+      end
+      assert_equal(0, status)
+      text = File.read(log)
+      assert_equal(2, text.lines.count { |l| l.start_with?("bezel: starting shop") }, text)
+      assert_match(/bezel: a file changed\n  update  src\/views\/generated\/page\.qz/, text)
+      assert_nil(page(port))
+    ensure
+      Dir.rm_rf(File.dirname(root))
+    end
+  end
+
+  def test_server_watches_files_without_following_links_or_hidden_ones
+    root = CliTest.tmp
+    begin
+      Dir.mkdir_p(File.join(root, "src", "a", ".hidden"))
+      File.write(File.join(root, "src", "x.qz"), "")
+      File.write(File.join(root, "src", "a", "y.html.bz"), "")
+      File.write(File.join(root, "src", "a", ".#y.html.bz"), "")
+      File.write(File.join(root, "src", "a", ".hidden", "z.qz"), "")
+      links = Process.sh("ln -s .. #{Cli.quote(File.join(root, "src", "a", "up"))} && ln -s . #{Cli.quote(File.join(root, "src", "self"))} && " +
+                         "ln -s x.qz #{Cli.quote(File.join(root, "src", "linked.qz"))}")
+      assert(links.success?, links.stderr)
+      # (Links to directories are not followed; one to a file is a file.)
+      assert_equal(["src/a/y.html.bz", "src/linked.qz", "src/x.qz"], Cli::Server.under(root, "src"))
+      # The files `prepare` writes take their times after it, the others
+      # before.
+      t0 = Time.utc(2026, 1, 1)
+      t1 = Time.utc(2026, 1, 2)
+      before = {"src/x.qz" => t0, "src/views/generated/page.qz" => t0, "src/migrations.qz" => t0}
+      after = {"src/x.qz" => t1, "src/views/generated/page.qz" => t1, "src/migrations.qz" => t1, "src/views/generated/new.qz" => t1}
+      assert_equal({"src/x.qz" => t0, "src/views/generated/page.qz" => t1, "src/migrations.qz" => t1, "src/views/generated/new.qz" => t1},
+                   Cli::Server.with_generated(before, after))
+    ensure
+      Dir.rm_rf(root)
+    end
+  end
+
   def test_review_cases
     dir = CliTest.tmp
     begin

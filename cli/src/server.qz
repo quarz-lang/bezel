@@ -1,0 +1,180 @@
+# `bezel server`: the application run with `quarz run` in its directory
+# (`BEZEL_ENV=dev` unless set), its output on the terminal, and run again
+# when a source, a template or the manifest changes.
+module Cli::Server
+  # How often the files are looked at.
+  POLL = 500.ms
+  # How long the application has to stop after TERM before KILL.
+  STOP_GRACE = 5.seconds
+
+  # Runs the command until SIGINT or SIGTERM.
+  def self.command(args: Array[String], app: Cli::App, out: IO) -> Int
+    raise Cli::Error.new("server takes no arguments, not #{args.join(" ")}") unless args.empty?
+    stop = Channel[Nil].new
+    # (Ctrl-C reaches the application too, which shuts down by itself:
+    # it gets time to before TERM, which it would take as a second
+    # signal. TERM reaches bezel alone.)
+    # A second Ctrl-C, or a TERM, cuts that time short. (Both only ever
+    # grow: trap tasks may run in any order.)
+    ints = Atom[Int].new(0)
+    hurry = Atom[Bool].new(false)
+    Signal.trap(:INT) do
+      ints.update { |n| n + 1 }
+      stop.close
+    end
+    Signal.trap(:TERM) do
+      hurry.set(true)
+      stop.close
+    end
+    none: Hash[String, String] = {}
+    Cli::Server.serve(app, out, stop, none, ints, hurry)
+  end
+
+  # Serves until `stop` is closed; `env` adds to the application's
+  # environment. When `ints` counts one interrupt at the end, the
+  # application got it too: it has `STOP_GRACE` to end before TERM,
+  # unless `hurry` holds.
+  def self.serve(app: Cli::App, out: IO, stop: Channel[Nil], env: Hash[String, String],
+                 ints: Atom[Int] = Atom[Int].new(0), hurry: Atom[Bool] = Atom[Bool].new(false)) -> Int
+    child_env = env.key?("BEZEL_ENV") || !(ENV["BEZEL_ENV"]? || "").empty? ? env : env.put("BEZEL_ENV", "dev")
+    child: Process::Child? = nil
+    begin
+      while true
+        # (Before starting: the templates compiled and the migrations
+        # listed, as `bezel templates` and `bezel migrations` would.)
+        # (Taken before compiling, so that a template saved meanwhile
+        # counts as a change; the files `prepare` writes, after.)
+        before = Cli::Server.snapshot(app)
+        ready = Cli::Server.prepare(app, out)
+        seen = Cli::Server.with_generated(before, Cli::Server.snapshot(app))
+        return 0 if stop.closed?
+        if ready
+          out.puts "bezel: starting #{app.name} (#{Cli.quarz} run)"
+          out.flush
+          child = Process.spawn(Cli.quarz, "run", chdir: app.root, env: child_env)
+          # (An interrupt that came just before: this child never got it.)
+          hurry.set(true) if stop.closed?
+        end
+        reason = Cli::Server.wait_for_change(app, seen, stop, child)
+        return 0 if reason == :stop
+        Cli::Server.stop_child(child, Atom[Int].new(0), Atom[Bool].new(false))
+        child = nil
+        out.puts(reason == :exited ? "bezel: #{app.name} exited; waiting for a change" : "bezel: a file changed")
+        out.flush
+        if reason == :exited
+          # (Wait for the change before starting again.)
+          return 0 if Cli::Server.wait_for_change(app, Cli::Server.snapshot(app), stop, nil) == :stop
+        end
+      end
+    ensure
+      Task.uncancellable { Cli::Server.stop_child(child, ints, hurry) }
+    end
+  end
+
+  # Compiles the templates and lists the migrations; false (the error
+  # printed) when that fails, so that the application is not started.
+  def self.prepare(app: Cli::App, out: IO) -> Bool
+    Cli::Views.write(app, out)
+    Cli.update(app.root, "src/migrations.qz", Cli::Migrations.list(app), out)
+    true
+  rescue Cli::Error => e
+    STDERR.puts "bezel: #{e.message}"
+    false
+  rescue Bezel::Templates::Error => e
+    STDERR.puts "bezel: #{e.message}"
+    false
+  rescue SystemCallError => e
+    # (A file moved while it was read: the next change starts again.)
+    STDERR.puts "bezel: #{e.message}"
+    false
+  end
+
+  # The files whose change restarts the application, with their
+  # modification times.
+  def self.snapshot(app: Cli::App) -> Hash[String, Time]
+    seen: Hash[String, Time] = {}
+    files = ["Cog.toml", "Cog.local.toml"] + Cli::Server.under(app.root, "src")
+    files.each do |f|
+      next unless f.start_with?("Cog") || f.end_with?(".qz") || f.end_with?(".html.bz")
+      begin
+        seen = seen.put(f, File.mtime(File.join(app.root, f)))
+      rescue SystemCallError
+        # (Missing, or removed meanwhile.)
+      end
+    end
+    seen
+  end
+
+  # The files under `root`/`dir`, as paths from `root` (walked, not
+  # globbed: the root's own name may hold glob characters).
+  def self.under(root: String, dir: String) -> Array[String]
+    found = Array::Builder[String].new
+    names = begin
+      Dir.children(File.join(root, dir)).sort
+    rescue SystemCallError
+      none: Array[String] = []
+      none
+    end
+    names.each do |n|
+      next if n.start_with?(".")
+      rel = File.join(dir, n)
+      full = File.join(root, rel)
+      # (Links to directories are not followed: one to a directory above
+      # would loop. Links to files are watched.)
+      next if File.symlink?(full) && File.directory?(full)
+      if File.directory?(full)
+        Cli::Server.under(root, rel).each { |f| found << f }
+      else
+        found << rel
+      end
+    end
+    found.to_a
+  end
+
+  # `before`, with the times `after` gives the files `prepare` writes
+  # (src/views/generated/ and src/migrations.qz).
+  def self.with_generated(before: Hash[String, Time], after: Hash[String, Time]) -> Hash[String, Time]
+    seen = before.reject { |f, _| Cli::Server.generated?(f) }
+    after.each_pair { |f, t| seen = seen.put(f, t) if Cli::Server.generated?(f) }
+    seen
+  end
+
+  def self.generated?(f: String) -> Bool = f.start_with?("src/views/generated/") || f == "src/migrations.qz"
+
+  # Waits until a watched file changes (`:changed`), the child exits
+  # (`:exited`), or `stop` is closed (`:stop`).
+  def self.wait_for_change(app: Cli::App, seen: Hash[String, Time], stop: Channel[Nil], child: Process::Child?) -> Symbol
+    while true
+      begin
+        Channel.select do |s|
+          s.receive(stop) { |_| nil }
+          s.after(POLL) { nil }
+        end
+      rescue Channel::Closed
+        return :stop
+      end
+      return :changed if Cli::Server.snapshot(app) != seen
+      return :exited if child && !child.running?
+    end
+  end
+
+  # Stops `child`: TERM, then KILL after `STOP_GRACE`. When the child got
+  # an interrupt itself (`ints` counts one), it has `STOP_GRACE` to end
+  # first; a second interrupt or `hurry` cuts that short.
+  def self.stop_child(child: Process::Child?, ints: Atom[Int], hurry: Atom[Bool]) -> Void
+    return if child.nil? || !child.running?
+    deadline = Time.monotonic + STOP_GRACE
+    while ints.get == 1 && !hurry.get && child.running? && Time.monotonic < deadline
+      Task.sleep(50.ms)
+    end
+    return unless child.running?
+    child.signal(:TERM)
+    begin
+      Task.timeout(STOP_GRACE) { child.wait }
+    rescue Task::Timeout
+      child.kill
+      child.wait
+    end
+    nil
+  end
+end
