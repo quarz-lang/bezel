@@ -38,14 +38,11 @@ abstract class Endpoint
 
   # The endpoint as an `HTTP::Handler` for `app`: what `Bezel.start`
   # gives the server.
-  def self.handler(app: App = App.test) -> Runner = Runner.new(self.type, plugs, app)
+  def self.handler(app: App = App.test) -> Runner = Runner.new(self, plugs, app)
 
   # The response to `req`, through a handler made for this call (`app`
   # by default a `test` application without a database).
   def self.call(req: HTTP::Server::Request, app: App = App.test) -> HTTP::Server::Response = handler(app).call(req)
-
-  # :nodoc:
-  def self.type -> Type[Endpoint] = self
 end
 
 # An endpoint's handler: its plugs and the application, made once and
