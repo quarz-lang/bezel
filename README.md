@@ -121,7 +121,8 @@ HTML element, every text and attribute escaped, attributes as typed
 keywords (`class_name:` is the `class` attribute, since `class` cannot
 name a parameter; `class:` waits for quarz-lang/quarz#382). A layout is
 a function taking the inner HTML; a component includes
-`Bezel::Component`; a form over a changeset shows its values and errors:
+`Bezel::Component`; a form over a changeset shows its values and, once
+a save was tried (the changeset's `action` is set), its errors:
 
 ```crystal
 module UserView

@@ -18,6 +18,13 @@ class HtUser < Rotor::Model
   end
 end
 
+# An adapter for the tests that never reach the database: a save of an
+# invalid changeset returns before running any statement.
+class HtNoDatabase < Rotor::Adapter
+  def query(sql: String, params: Array[Object?]) -> Rotor::Rows = raise "no database"
+  def transaction(&: (Rotor::Adapter) -> Object?) -> Object? = raise "no database"
+end
+
 class HtCard
   include Bezel::Component
   @title: String
@@ -159,8 +166,17 @@ class HtmlTest < Test::Case
     end.to_s
   end
 
+  # The changeset a failed insert of `params` gives back.
+  def failed_insert(params: Hash[String, Object?]) -> Rotor::Changeset[HtUser]
+    case Rotor::Repo.new(HtNoDatabase.new).insert(HtUser.registration(params))
+    in Rotor::Outcome::Invalid(cs) then cs
+    in Rotor::Outcome::Ok(_) then raise "saved"
+    end
+  end
+
   def test_form_with_errors
-    cs = HtUser.registration({"name" => "", "email" => "ann<at>example", "age" => "x", "admin" => "true", "role" => "admin", "bio" => "<hi>"})
+    cs = failed_insert({"name" => "", "email" => "ann<at>example", "age" => "x", "admin" => "true", "role" => "admin", "bio" => "<hi>"})
+    assert_equal(:insert, cs.action)
     out = form_of(cs)
     assert_true(out.start_with?("<form action=\"/users\" method=\"post\"><input type=\"hidden\" name=\"_csrf_token\" value=\"t\">"))
     assert_true(out.include?("<label for=\"ht_user_name\">Name</label>"))
@@ -175,6 +191,22 @@ class HtmlTest < Test::Case
     assert_true(out.include?("<select name=\"ht_user[role]\" id=\"ht_user_role\"><option value=\"\">Choose</option><option value=\"member\">Member</option><option value=\"admin\" selected>Admin</option></select>"))
     assert_true(out.include?("<textarea name=\"ht_user[bio]\" rows=\"3\" id=\"ht_user_bio\">&lt;hi&gt;</textarea>"))
     assert_true(out.end_with?("<button type=\"submit\">Save</button></form>"))
+  end
+
+  def test_no_errors_before_a_save
+    # A new record's form: the changeset has errors, no save was tried.
+    cs = HtUser.registration(Hash[String, Object?].new)
+    assert_false(cs.valid?)
+    out = form_of(cs)
+    assert_false(out.include?("class=\"error\""))
+    assert_false(out.include?("invalid"))
+    assert_true(out.include?("<input type=\"text\" name=\"ht_user[name]\" required id=\"ht_user_name\">"))
+    # A failed save of the same form shows them.
+    failed = form_of(failed_insert(Hash[String, Object?].new))
+    assert_true(failed.include?("<span id=\"ht_user_name_error\" class=\"error\">can&#39;t be blank</span>"))
+    # A form that validates without saving sets the action itself.
+    shown = form_of(cs.with_action(:validate))
+    assert_true(shown.include?("<span id=\"ht_user_name_error\" class=\"error\">can&#39;t be blank</span>"))
   end
 
   def test_form_from_a_model

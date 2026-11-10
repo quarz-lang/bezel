@@ -197,6 +197,9 @@ class HtmlBuilder
   # given a `FormBuilder` whose fields read the changeset (see
   # `FormBuilder`). The fields' names are `<as>[<field>]`, `as` by
   # default the model's class name in snake_case (`user[email]`).
+  # The changeset's errors show only once its `action` is set, as
+  # `Rotor::Repo`'s `insert`, `update` and `delete` set it: a form that
+  # validates without saving sets it itself (`cs.with_action(:validate)`).
   def form_for[M <: Rotor::Model](cs: Rotor::Changeset[M], *, action: String, method: Symbol = :post,
                                   as: String? = nil, class_name: (String | Array[String?])? = nil,
                                   &block: (FormBuilder) -> Void) -> Void

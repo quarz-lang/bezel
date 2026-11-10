@@ -4,7 +4,9 @@
 # change, else the model's; for a permitted field with errors and no
 # change (a value that did not cast, or a blank required one), the input
 # as given, so that it shows as typed. `errors` writes the changeset's errors on a
-# field.
+# field once a save was tried: while the changeset's `action` is nil
+# (a form shown before any save), its errors are not shown, so that a
+# new record's blank required fields are not reported before Save.
 #
 # ```
 # class FormUser < Rotor::Model
@@ -15,6 +17,7 @@
 # end
 #
 # cs = Rotor::Changeset.cast(FormUser, {"email" => "ann"}, [:email]).validate_format(:email, /@/)
+#   .with_action(:insert)   # as a failed `repo.insert(cs)` returns it
 # page = Bezel.html do |h|
 #   h.form_for(cs, action: "/users") do |f|
 #     f.label(:email, "Email")
@@ -26,7 +29,8 @@
 # # => "<form action=\"/users\" method=\"post\"><label for=\"form_user_email\">Email</label><input type=\"text\" name=\"form_user[email]\" value=\"ann\" id=\"form_user_email\" class=\"invalid\" aria-invalid=\"true\"><span id=\"form_user_email_error\" class=\"error\">has invalid format</span></form>"
 # ```
 #
-# A field with errors gets the class `invalid` and `aria-invalid`.
+# A field whose errors are shown gets the class `invalid` and
+# `aria-invalid`.
 class FormBuilder
   include Unshareable
   include DslScope
@@ -51,7 +55,7 @@ class FormBuilder
   # The value the form shows for `field`, or nil.
   def value(field: Symbol) -> String? = @values[field]?
 
-  # The errors on `field`.
+  # The errors the form shows on `field` (none before a save was tried).
   def errors_on(field: Symbol) -> Array[String] = @errors[field]? || []
 
   # Writes `<label for="...">text</label>` (the field's name, humanized,
@@ -188,8 +192,10 @@ class FormBuilder
   end
 
   # :nodoc:
+  # The errors a form shows: none before a save was tried (`action` nil).
   def self.errors_of[M <: Rotor::Model](cs: Rotor::Changeset[M]) -> Hash[Symbol, Array[String]]
     out: Hash[Symbol, Array[String]] = {}
+    return out if cs.action.nil?
     cs.errors.each do |e|
       out = out.put(e.field, (out[e.field]? || []).push(e.text))
     end
