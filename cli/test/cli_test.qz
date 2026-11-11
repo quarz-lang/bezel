@@ -249,6 +249,18 @@ class CliTest < Test::Case
       assert_equal(["src/.extra.qz", "src/.g[x]/sub/g.qz", "src/.gen/sub/.deep/z.qz", "src/.gen/sub/y.qz", "src/.gen/x.qz", "src/a/.#y.html.bz",
                     "src/a/.hidden/z.qz", "src/a/y.html.bz", "src/linked.qz", "src/o/x.qz", "src/o-a/y.qz", "src/o.qz", "src/p[b]/.hid/f.qz", "src/x.qz"],
                    Cli.files_under(root, "src", true))
+      # The watch lists hidden `.qz` files, nested ones too, not an editor's.
+      File.write(File.join(root, "src", ".#x.qz"), "")
+      File.write(File.join(root, "src", ".y.qz.swx"), "")
+      File.write(File.join(root, "src", "y.qz.swp"), "")
+      File.write(File.join(root, "src", "z.qz~"), "")
+      File.write(File.join(root, "Cog.toml"), "")
+      watched = Cli::Server.snapshot(Cli::App.new(root, "shop", "Shop")).keys
+      assert_equal(["Cog.toml", "src/.extra.qz", "src/.g[x]/sub/g.qz", "src/.gen/sub/.deep/z.qz", "src/.gen/sub/y.qz", "src/.gen/x.qz",
+                    "src/a/.hidden/z.qz", "src/a/y.html.bz", "src/linked.qz", "src/o/x.qz", "src/o-a/y.qz", "src/o.qz", "src/p[b]/.hid/f.qz", "src/x.qz"],
+                   watched.sort_by { |f| f.split("/") })
+      [".#x.qz", ".y.qz.swx", "y.qz.swp", "z.qz~", "src/a/.#y.html.bz"].each { |n| assert_true(Cli::Server.editor_file?(n), n) }
+      [".extra.qz", "x.qz", "a.swpx", ".swx.qz", "tilde.qz"].each { |n| assert_false(Cli::Server.editor_file?(n), n) }
       assert_true(Cli.files_under(root, "nope", true).empty?)
       assert_true(Cli.files_under(root, "nope").empty?)
       # The files `prepare` writes take their times after it, the others
