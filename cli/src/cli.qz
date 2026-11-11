@@ -139,24 +139,27 @@ module Cli
     Signal.trap(:INT) { nil }
   end
 
-  # The files under `root`/`dir`, as paths from `root`, in name order
-  # (`Dir.glob` with `root` as its base): `**/` does not enter links to
+  # The files under `root`/`dir`, as paths from `root`, in name order (a
+  # directory's entries by name, a directory's own in its place): `Dir.glob`
+  # with a directory as its base. `**/` does not enter links to
   # directories (one to a directory above would loop), links to files are
   # listed, as the compiler collects src/. A hidden file or directory (its
   # name starting with a dot) is listed with `hidden: true` (the compiler
   # builds them), skipped otherwise: a wildcard does not match a leading
   # dot, so each hidden directory found (a link to one is not entered) is
-  # globbed in turn.
+  # globbed in turn, as a base, never as part of a pattern (its name may
+  # hold `[`, `*` or `{`).
   def self.files_under(root: String, dir: String, hidden: Bool = false) -> Array[String]
     found = Array::Builder[String].new
     pending = [dir]
+    patterns = hidden ? ["**/*", "**/.*"] : ["**/*"]
     until pending.empty?
       d = pending[0]
       pending = pending[1...pending.size]
-      patterns = hidden ? ["#{d}/**/*", "#{d}/**/.*"] : ["#{d}/**/*"]
-      Dir.glob(patterns, base: root).each do |rel|
+      Dir.glob(patterns, base: File.join(root, d)).each do |inside|
         # (`.*` also names `.` itself.)
-        next if rel.end_with?("/.")
+        next if inside == "." || inside.end_with?("/.")
+        rel = File.join(d, inside)
         full = File.join(root, rel)
         if File.directory?(full)
           pending = pending.push(rel) if hidden && !File.symlink?(full) && File.basename(rel).start_with?(".")
@@ -165,7 +168,7 @@ module Cli
         end
       end
     end
-    found.to_a.sort
+    found.to_a.sort_by { |f| f.split("/") }
   end
 
   # Writes `content` to `path` under `root`, which must not exist yet.
