@@ -90,12 +90,14 @@ module Cli::Server
   end
 
   # The files whose change restarts the application, with their
-  # modification times.
+  # modification times: those the compiler builds, hidden ones included
+  # (`src/.extra.qz`, `src/.gen/x.qz`), but not an editor's files.
   def self.snapshot(app: Cli::App) -> Hash[String, Time]
     seen: Hash[String, Time] = {}
-    files = ["Cog.toml", "Cog.local.toml"] + Cli.files_under(app.root, "src")
+    files = ["Cog.toml", "Cog.local.toml"] + Cli.files_under(app.root, "src", true)
     files.each do |f|
       next unless f.start_with?("Cog") || f.end_with?(".qz") || f.end_with?(".html.bz")
+      next if Cli::Server.editor_file?(f)
       begin
         seen = seen.put(f, File.mtime(File.join(app.root, f)))
       rescue SystemCallError
@@ -104,6 +106,12 @@ module Cli::Server
     end
     seen
   end
+
+  # Whether `f` is an editor's lock file (`.#a.qz`, Emacs'), which the
+  # watch skips. The editors' swap (`a.qz.swp`, `.a.qz.swx`) and backup
+  # (`a.qz~`) files do not end in `.qz` or `.html.bz`, so `snapshot` leaves
+  # them out already.
+  def self.editor_file?(f: String) -> Bool = File.basename(f).start_with?(".#")
 
   # `before`, with the times `after` gives the files `prepare` writes
   # (src/views/generated/ and src/migrations.qz).
