@@ -10,6 +10,10 @@ class PlugTestTag
   end
 end
 
+class PlugTestController < Bezel::Controller
+  controller
+end
+
 class PlugTest < Test::Case
   def req(target: String = "/") -> HTTP::Server::Request = HTTP::Server::Request.get(target)
 
@@ -221,7 +225,7 @@ class PlugTest < Test::Case
 
   def test_controller_helpers
     c = Bezel::Conn.build(req)
-    ctl = Bezel::Controller.new
+    ctl = PlugTestController.new
     sent = ctl.send_file(c, File.join(static_dir, "robots.txt"))
     assert_equal("text/plain; charset=utf-8", sent.resp_headers["content-type"])
     assert_true(sent.halted?)
