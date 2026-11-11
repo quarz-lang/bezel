@@ -461,7 +461,7 @@ class Templates::Parser
   def brace(out: Array::Builder[Templates::Node]) -> Void
     line = @line
     code = braced
-    if code.match?(/\Aargs\s/)
+    if code.match?(/\Aargs\s+(\*\*?|&)?\s*[A-Za-z_][A-Za-z0-9_]*\s*:/)
       fail(line, "{args ...} comes before the rest of the template") if @started || !@args.nil?
       a = Templates::Parser.trim_code(code[4, code.size - 4])
       check_code(line, a)
@@ -845,6 +845,8 @@ class Templates::Parser
         fail(line, "<#{written}> is written <#{old.split(".").map { |part| part.split("_").map(&:capitalize).join }.join("::")}>: a component is a capitalised tag")
       end
       fail(line, "<#{written}> is not a component name (<Card>, <Admin::Card>)")
+    elsif written.match?(/\A[A-Z]+\z/) && Elements::ELEMENT_ATTRS.key?(written.downcase)
+      fail(line, "<#{written}> is written <#{written.downcase}>: an element's tag is lower-case (a capitalised one is a component)")
     elsif written.match?(/\A[A-Z]/)
       kind = :component
       name = written
@@ -950,7 +952,7 @@ class Templates::Parser
       end
       fail(line, shape) if pattern.empty? || source.empty?
       fail(line, ":for cannot name a variable `h` (the builder's name)") if pattern.match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
-      fail(line, ":for's pattern is names, commas and parentheses") unless pattern.match?(/\A[A-Za-z0-9_,()*\s]+\z/)
+      fail(line, ":for's pattern is names, commas and parentheses") unless pattern.match?(/\A[A-Za-z0-9_,()*\s]+\z/) && !pattern.match?(/\A\s*,|,\s*\z|,\s*,/)
       check_code(line, source)
       iters << Templates::Iter.new(pattern, source, guard)
       break unless n < ms.size
