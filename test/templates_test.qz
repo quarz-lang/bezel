@@ -392,6 +392,10 @@ class TemplatesTest < Test::Case
     ].each do |head|
       assert_equal(2, code_of("<li :for={#{head}}>x</li>").scan(/\.each do \|/).size, head)
     end
+    ["x in xs.map do |a| return if b end, y in ys", "x in xs.map do |a| b or return unless c end, y in ys",
+     "x in xs.map do |a|\n a\n if b then 1 end\n puts a, 2\nend, y in ys"].each do |head|
+      assert_equal(2, code_of("<li :for={#{head}}>x</li>").scan(/\.each do \|/).size, head)
+    end
     # (`<-` after the first `in` is an expression; a `/` after a keyword at any depth starts a regexp.)
     assert(code_of("<li :for={x in xs when a<-1}>x</li>").include?("if (a<-1)"))
     assert(code_of("<li :for={x in xs when a <-1, y in ys}>x</li>").include?("ys.each do |y|"))
