@@ -411,6 +411,9 @@ class Templates::Parser
         close = find(">", 2)
         fail(line, "the end tag is not closed (>)") if close < 0
         name = @cs[(@i + 2)...close].join.strip
+        if name.match?(/\A[A-Z][A-Z0-9]+\z/) && Elements::ELEMENT_ATTRS.key?(name.downcase)
+          fail(line, "</#{name}> is not a component's end tag: HTML elements are lower-case: `</#{name.downcase}>`")
+        end
         name = name.downcase unless name.match?(/\A[A-Z.:]/)
         advance(close + 1 - @i)
         if tag.nil?
@@ -570,18 +573,29 @@ class Templates::Parser
     prev_literal = false
     # (Where the last literal ended, its flags included.)
     lit_end = open
+    # (For a `:for` head, `marks`: how many `case`, `if`, ... `end`
+    # constructs are open at the top level, and where the last word was
+    # that a `/` or `%` after it starts a literal.)
+    nest = 0
+    kw_end = -1
     while j < cs.size
       c = cs[j]
       ended_literal = false
-      # (A `:for` head's `in` and `when` at the top level: marked, and
-      # what follows reads as after the opening bracket, where a `/` or `%`
-      # starts a literal.)
+      # (A `:for` head's `in`, `when`, `<-` and commas at the top level, not
+      # inside a construct that ends with `end`, are marked.)
       word = marks && stack.size == 1 ? Templates::Parser.keyword_at(cs, j) : ""
       unless word.empty?
-        marks << j if marks
+        if word == "in" || word == "when"
+          marks << j if marks && nest == 0
+        elsif word == "end"
+          nest -= 1 if nest > 0
+        else
+          nest += 1
+        end
         j += word.size
-        prev = open
+        prev = j - 1
         prev_literal = false
+        kw_end = prev unless word == "end"
         next
       end
       case c
@@ -604,7 +618,7 @@ class Templates::Parser
         # (A `%` without a literal's shape after it is an operator
         # anywhere: `%=`, `% b`.)
         unless c == "%" && !Templates::Parser.percent_shape?(cs, j)
-          how = Templates::Parser.slash(cs, j, prev, prev_literal, open, lit_end)
+          how = Templates::Parser.slash(cs, j, prev, prev_literal, open, lit_end, prev == kw_end)
           return -3 if how == :ambiguous
           if how == :literal
             regexp = c == "/" || cs[j + 1]? == "r"
@@ -619,13 +633,15 @@ class Templates::Parser
           end
         end
       when "<"
+        mk = marks
+        mk << j if mk && stack.size == 1 && nest == 0 && cs[j + 1]? == "-"
         return -4 if cs[j + 1]? == "<" && (cs[j + 2]? || "").match?(/\A[~\-"'`]\z/)
         return -4 if cs[j + 1]? == "<" && Templates::Parser.ident_char?(cs[j + 2]? || " ") && !(cs[j + 2]? || "").match?(/\A[0-9]\z/)
       when ","
         cm = commas
         cm << j if cm && stack.size == 1
         mk = marks
-        mk << j if mk && stack.size == 1
+        mk << j if mk && stack.size == 1 && nest == 0
       when "#" then return -2
       # (A line continuation, or a backslash outside a literal.)
       when "\\" then return -3
@@ -639,15 +655,16 @@ class Templates::Parser
     -1
   end
 
-  # `in` or `when` when one starts at `j` (a word of its own: not a
-  # method's name after `.` or `::`, nor a symbol, a variable, or
-  # longer), else "".
+  # `in`, `when` or a word that opens or closes a construct (`case`, `if`,
+  # `unless`, `while`, `until`, `begin`, `do`, `def`, `end`) when one starts
+  # at `j` (a word of its own: not a method's name after `.` or `::`, nor
+  # a symbol, a variable, or longer), else "".
   def self.keyword_at(cs: Array[String], j: Int) -> String
     c = cs[j]
-    return "" unless c == "i" || c == "w"
+    return "" unless "iwcubdeW".include?(c)
     before = cs[j - 1]? || " "
     return "" if Templates::Parser.ident_char?(before) || [".", ":", "@", "$"].include?(before)
-    ["in", "when"].each do |w|
+    ["in", "when", "case", "if", "unless", "while", "until", "begin", "do", "def", "end"].each do |w|
       k = 0
       k += 1 while k < w.size && cs[j + k]? == w[k]
       next unless k == w.size
@@ -685,7 +702,9 @@ class Templates::Parser
   # - `:ambiguous` (refused) for anything else: after a symbol, a
   #   keyword that is no value, an operator, `.`, `:`, `@`, a line
   #   break, or without the spaces.
-  def self.slash(cs: Array[String], j: Int, p: Int, literal: Bool, open: Int, lit_end: Int) -> Symbol
+  def self.slash(cs: Array[String], j: Int, p: Int, literal: Bool, open: Int, lit_end: Int, after_word: Bool = false) -> Symbol
+    # (After `in`, `when` or a construct's opening word, a line break may come first.)
+    return :literal if after_word && !literal
     k = p + 1
     while k < j
       return :ambiguous if cs[k] == "\n"
@@ -845,8 +864,8 @@ class Templates::Parser
         fail(line, "<#{written}> is written <#{old.split(".").map { |part| part.split("_").map(&:capitalize).join }.join("::")}>: a component is a capitalised tag")
       end
       fail(line, "<#{written}> is not a component name (<Card>, <Admin::Card>)")
-    elsif written.match?(/\A[A-Z]+\z/) && Elements::ELEMENT_ATTRS.key?(written.downcase)
-      fail(line, "<#{written}> is written <#{written.downcase}>: an element's tag is lower-case (a capitalised one is a component)")
+    elsif written.match?(/\A[A-Z][A-Z0-9]+\z/) && Elements::ELEMENT_ATTRS.key?(written.downcase)
+      fail(line, "<#{written}> is not a component: HTML elements are lower-case: `<#{written.downcase}>`")
     elsif written.match?(/\A[A-Z]/)
       kind = :component
       name = written
@@ -923,17 +942,23 @@ class Templates::Parser
     code_problem(line, found)
     fail(line, "the code #{code.inspect} is not one expression") unless found == cs.size - 1
     ms = marks.to_a
+    # (The old `pattern <- expr`, wherever its arrow comes before the first `in`.)
+    ms.each_with_index do |at, n|
+      break if cs[at] == "i"
+      next unless cs[at] == "<"
+      pat = Templates::Parser.trim_code(cs[1...at].join)
+      pat = Templates::Parser.trim_code(pat[1, pat.size - 2]) if pat.start_with?("{") && pat.end_with?("}")
+      stop = n + 1 < ms.size ? ms[n + 1] : cs.size - 1
+      src = Templates::Parser.trim_code(cs[(at + 2)...stop].join)
+      fail(line, ":for={#{Templates::Parser.trim_code(cs[1...at].join)} <- #{src}} is written :for={#{pat} in #{src}}")
+    end
     iters = Array::Builder[Templates::Iter].new
     k = 0
     start = 1
     while true
       m = k
       m += 1 while m < ms.size && cs[ms[m]] == ","
-      unless m < ms.size && cs[ms[m]] == "i"
-        old = code.partition(" <- ")
-        fail(line, ":for={#{old[0]} <- #{old[2]}} is written :for={#{old[0]} in #{old[2]}}") unless old[1].empty?
-        fail(line, shape)
-      end
+      fail(line, shape) unless m < ms.size && cs[ms[m]] == "i"
       pattern = Templates::Parser.trim_code(cs[start...ms[m]].join)
       src_start = ms[m] + 2
       n = m + 1
@@ -952,7 +977,7 @@ class Templates::Parser
       end
       fail(line, shape) if pattern.empty? || source.empty?
       fail(line, ":for cannot name a variable `h` (the builder's name)") if pattern.match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
-      fail(line, ":for's pattern is names, commas and parentheses") unless pattern.match?(/\A[A-Za-z0-9_,()*\s]+\z/) && !pattern.match?(/\A\s*,|,\s*\z|,\s*,/)
+      fail(line, ":for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)") unless Templates::Parser.pattern?(pattern)
       check_code(line, source)
       iters << Templates::Iter.new(pattern, source, guard)
       break unless n < ms.size
@@ -960,6 +985,16 @@ class Templates::Parser
       k = n + 1
     end
     iters.to_a
+  end
+
+  # Whether `text` is a pattern of names, as block parameters are: names
+  # separated by commas, each possibly `*rest` or a parenthesised list
+  # of them (two levels deep).
+  def self.pattern?(text: String) -> Bool
+    name = "\\*?[A-Za-z_][A-Za-z0-9_]*"
+    inner = "(?:#{name}|\\(\\s*#{name}(?:\\s*,\\s*#{name})*\\s*\\))"
+    outer = "(?:#{name}|\\(\\s*#{inner}(?:\\s*,\\s*#{inner})*\\s*\\))"
+    text.match?(Regexp.new("\\A\\s*#{outer}(?:\\s*,\\s*#{outer})*\\s*\\z"))
   end
 
   def skip_space -> Void

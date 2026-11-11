@@ -177,6 +177,8 @@ type-checked and escaped as hand-written DSL code is:
   the head of a Quarz `for` comprehension: `:for={u in users}`,
   `:for={u in users when u.active?}`, `:for={k, v in totals}`, several
   iterators separated by commas (`:for={row in rows, cell in row}`).
+  The source of an iterator is one expression: a command call with
+  arguments is written in parentheses.
   `:if={expr}` writes the element when `expr` holds, `:unless={expr}`
   when it does not (not both on one element).
 - A capitalised tag is a component (`<Card title="Help">` is
