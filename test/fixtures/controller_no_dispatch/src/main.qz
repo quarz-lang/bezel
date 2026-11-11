@@ -1,0 +1,9 @@
+class Declared < Bezel::Controller
+  controller
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+end
+
+# Neither plug lines nor a `controller` statement: no `dispatch`.
+class Undeclared < Bezel::Controller
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+end

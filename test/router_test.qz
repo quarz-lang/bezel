@@ -277,7 +277,6 @@ class RouterTest < Test::Case
     c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
     assert_raise(ArgumentError) { RtPages.new.dispatch(:nope, c) }
     assert_raise(ArgumentError) { RtPages.new.dispatch(:text, c) }
-    assert_raise(ArgumentError) { Bezel::Controller.new.dispatch(:home, c) }
   end
 
   def test_inherited_plugs
@@ -374,6 +373,13 @@ class RouterTest < Test::Case
     assert(!out.success?)
     assert_match(/`controller` raised ArgumentError: skip :requre_login: no plug of that name \(:require_login\)/, out.stderr)
     assert_match(/Sessions: skip :require_login names :nwe, which is not an action/, out.stderr)
+  end
+
+  def test_a_controller_without_dispatch_is_a_compile_error
+    out = check("controller_no_dispatch")
+    assert(!out.success?)
+    assert_match(/`Undeclared` must implement `dispatch` \(abstract in `Bezel::Controller`\)/, out.stderr)
+    assert(!out.stderr.include?("`Declared` must"), out.stderr)
   end
 
   def test_route_helper_keywords_are_checked
