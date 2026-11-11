@@ -107,13 +107,11 @@ module Cli::Server
     seen
   end
 
-  # Whether `f`'s file is an editor's: a lock (`.#a.qz`), a swap file
-  # (`a.qz.swp`, `.a.qz.swx`) or a backup (`a.qz~`). The compiler builds
-  # hidden `.qz` files, so the watch lists them, but not these.
-  def self.editor_file?(f: String) -> Bool
-    name = File.basename(f)
-    name.start_with?(".#") || name.end_with?("~") || name.end_with?(".swp") || name.match?(/\A\..*\.swx\z/)
-  end
+  # Whether `f` is an editor's lock file (`.#a.qz`, Emacs'), which the
+  # watch skips. The editors' swap (`a.qz.swp`, `.a.qz.swx`) and backup
+  # (`a.qz~`) files do not end in `.qz` or `.html.bz`, so `snapshot` leaves
+  # them out already.
+  def self.editor_file?(f: String) -> Bool = File.basename(f).start_with?(".#")
 
   # `before`, with the times `after` gives the files `prepare` writes
   # (src/views/generated/ and src/migrations.qz).
