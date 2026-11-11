@@ -384,6 +384,21 @@ class TemplatesTest < Test::Case
       out = code_of("<li :for={#{head}}>x</li>")
       assert(out.include?(wanted), "#{head}: #{out}")
     end
+    # (A modifier `if` opens nothing; `while ... do` is one construct; later iterators still count.)
+    [
+      "u in us when u.a if b, v in u", "x in xs when a unless b, y in ys",
+      "x in xs.map do |a| a if a end, y in ys", "x in xs when while a do b end, y in ys",
+      "x in xs when (a if b), y in ys"
+    ].each do |head|
+      assert_equal(2, code_of("<li :for={#{head}}>x</li>").scan(/\.each do \|/).size, head)
+    end
+    # (`<-` after the first `in` is an expression; a `/` after a keyword at any depth starts a regexp.)
+    assert(code_of("<li :for={x in xs when a<-1}>x</li>").include?("if (a<-1)"))
+    assert(code_of("<li :for={x in xs when a <-1, y in ys}>x</li>").include?("ys.each do |y|"))
+    ["x in case s\nwhen /a/ then xs\nelse ys end", "x in (case s when /a/ then xs else ys end)",
+     "x in xs when if /a/ =~ x then true else false end, y in ys", "x in xs when x if /a/ =~ x"].each do |head|
+      assert(code_of("<li :for={#{head}}>x</li>").include?(".each do |x|"), head)
+    end
     shape = "#{old}:for is written {pattern in expr [when cond], ...} (`{u in users}`)"
     assert_equal("#{old}:for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<li :for={a b in xs}>x</li>"))
     assert_equal("#{old}:for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<li :for={a.b in xs}>x</li>"))
