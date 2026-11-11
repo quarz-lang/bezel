@@ -6,7 +6,7 @@
 #
 # ```
 # src = Bezel::Templates::Source.new("src/views/user/show.html.bz", "show",
-#   "{@args name: String}\n<h1 class=\"title\">Hello, {name}!</h1>\n")
+#   "{args name: String}\n<h1 class=\"title\">Hello, {name}!</h1>\n")
 # Bezel::Templates.compile(src).lines[1].strip   # => "def self.show(name: String) -> Bezel::Html"
 # ```
 #
@@ -20,18 +20,23 @@
 #   `Html.raw`: nothing else is unescaped, and the caller vouches for
 #   what these write.
 #   A `{` in a text is written `{"{"}`.
-# - `{@args name: Type, ...}` first: the parameters of the method the
+# - `{args name: Type, ...}` first: the parameters of the method the
 #   template becomes (as a `def`'s, defaults and a block included). With
 #   one named `conn`, the page is `Bezel.html(conn)`, whose forms carry
 #   the CSRF token. `h` is the builder's name in the generated code, so
 #   no parameter or variable is named `h`.
-# - `:for={pattern <- expr}` and `:if={expr}` on an element or a
-#   component: the element written for each element of `expr` (`each`,
-#   the pattern its block's parameters), or only when `expr` holds; with
-#   both, the condition is tested for each element.
-# - `<.card title="x">...</.card>`: the component class Card (including
-#   `Bezel::Component`; `.admin.user_card` is Admin::UserCard, names in
-#   lowercase), made
+# - `:for={pattern in expr}`, `:if={expr}` and `:unless={expr}` on an
+#   element or a component: the element written for each element of
+#   `expr` (`each`, the pattern its block's parameters), or only when
+#   `expr` holds (`:if`) or does not (`:unless`; not both on one
+#   element). `:for` takes the head of a Quarz `for` comprehension:
+#   `u in users`, `u in users when u.active?`, `k, v in totals`, and
+#   several iterators separated by commas (`row in rows, cell in row`),
+#   written as nested `each`, a `when` an `if` inside its iterator; with
+#   `:if` or `:unless` too, the condition is tested for each element.
+# - `<Card title="x">...</Card>`: the component class Card (including
+#   `Bezel::Component`; `<Admin::UserCard>` is Admin::UserCard: a
+#   capitalised tag is a component, a lower-case one an element), made
 #   with the attributes as keyword arguments
 #   (`Card.new(title: "x")`, `class` as `class_name`, a `-` as `_`, a
 #   bare one `true`) and given the content as its `content`. A slot
@@ -82,6 +87,11 @@ module Templates
   # An attribute as written: its value nil when bare, the code of an
   # expression when `code`.
   data Attr = (name: String, value: String?, code: Bool, line: Int)
+
+  # :nodoc:
+  # One iterator of a `:for` head: `pattern in source [when guard]`, as
+  # written.
+  data Iter = (pattern: String, source: String, guard: String?)
 
   # The generated file of module `module_name`, a method per template
   # (in the order given): a header naming each template with the SHA-256
@@ -289,7 +299,7 @@ end
 # A piece of a template: `kind` is `:text` (`name` the text as written,
 # its references not decoded; a raw-text element's text as it is),
 # `:expr` and `:raw` (`name` the code), `:doctype`, `:element` (`name` the
-# tag, in lowercase), `:component` (`name` as written, without the dot)
+# tag, in lowercase), `:component` (`name` as written: `Admin::Card`)
 # or `:slot` (`name` without the colon).
 class Templates::Node
   @kind: Symbol
@@ -297,19 +307,22 @@ class Templates::Node
   @line: Int
   @attrs: Array[Templates::Attr]
   @children: Array[Templates::Node]
-  @for_code: String?
+  @fors: Array[Templates::Iter]
   @if_code: String?
+  @unless_code: String?
 
   def initialize(@kind: Symbol, @name: String, @line: Int, @attrs: Array[Templates::Attr] = [],
-                 @children: Array[Templates::Node] = [], @for_code: String? = nil, @if_code: String? = nil); end
+                 @children: Array[Templates::Node] = [], @fors: Array[Templates::Iter] = [],
+                 @if_code: String? = nil, @unless_code: String? = nil); end
 
   def kind -> Symbol = @kind
   def name -> String = @name
   def line -> Int = @line
   def attrs -> Array[Templates::Attr] = @attrs
   def children -> Array[Templates::Node] = @children
-  def for_code -> String? = @for_code
+  def fors -> Array[Templates::Iter] = @fors
   def if_code -> String? = @if_code
+  def unless_code -> String? = @unless_code
 
   # Whether this is a text of (ASCII) whitespace only.
   def blank? -> Bool = @kind == :text && @name.match?(/\A[ \t\n\r\f]*\z/)
@@ -327,7 +340,7 @@ class Templates::Parser
   var @line: Int = 1
   var @args: String? = nil
   var @args_line: Int = 0
-  # (Whether anything but whitespace and comments came yet: `{@args}`
+  # (Whether anything but whitespace and comments came yet: `{args}`
   # must come before.)
   var @started: Bool = false
 
@@ -335,10 +348,10 @@ class Templates::Parser
     @cs = text.chars
   end
 
-  # The parameters `{@args ...}` declared, or nil.
+  # The parameters `{args ...}` declared, or nil.
   def args -> String? = @args
 
-  # The line of `{@args ...}`.
+  # The line of `{args ...}`.
   def args_line -> Int = @args_line
 
   # The template's nodes.
@@ -398,7 +411,7 @@ class Templates::Parser
         close = find(">", 2)
         fail(line, "the end tag is not closed (>)") if close < 0
         name = @cs[(@i + 2)...close].join.strip
-        name = name.downcase unless name.start_with?(".") || name.start_with?(":")
+        name = name.downcase unless name.match?(/\A[A-Z.:]/)
         advance(close + 1 - @i)
         if tag.nil?
           fail(line, "</#{name}> closes no element")
@@ -444,29 +457,33 @@ class Templates::Parser
     node
   end
 
-  # `{...}` in a text: an expression, `raw(...)` or `{@args ...}`.
+  # `{...}` in a text: an expression, `raw(...)` or `{args ...}`.
   def brace(out: Array::Builder[Templates::Node]) -> Void
     line = @line
     code = braced
-    if code.start_with?("@args")
-      fail(line, "{@args ...} comes before the rest of the template") if @started || !@args.nil?
-      a = Templates::Parser.trim_code(code[5, code.size - 5])
+    if code.match?(/\Aargs\s/)
+      fail(line, "{args ...} comes before the rest of the template") if @started || !@args.nil?
+      a = Templates::Parser.trim_code(code[4, code.size - 4])
       check_code(line, a)
       @args = a
       @args_line = line
       return
     end
-    fail(line, "#{code.split(/\s/).first? || code} is not a directive (only {@args ...})") if code.start_with?("@")
+    if code.start_with?("@args")
+      fail(line, "{@args ...} is written {args ...}")
+    end
+    fail(line, "#{code.split(/\s/).first? || code} is not allowed: a template has no instance variables (its parameters are declared by {args ...})") if code.start_with?("@")
     @started = true
     inner = Templates::Parser.raw_call(code)
     out << (inner ? Templates::Node.new(:raw, inner, line) : Templates::Node.new(:expr, code, line))
   end
 
   # The code in the braces at the position (moving past them), stripped;
-  # an error when empty or not closed.
-  def braced -> String
+  # an error when empty or not closed. A `:for`'s is a `head`.
+  def braced(head: Bool = false) -> String
     line = @line
-    close = Templates::Parser.matching(@cs, @i)
+    # (A `:for` head's `in` and `when` start no regexp's operand either.)
+    close = Templates::Parser.matching(@cs, @i, nil, head ? Array::Builder[Int].new : nil)
     code_problem(line, close)
     code = Templates::Parser.trim_code(@cs[(@i + 1)...close].join)
     # (Lines that end a file's code or start a comment block.)
@@ -542,7 +559,8 @@ class Templates::Parser
   # read either way, -4 at a heredoc. (What the scanner cannot read as
   # Quarz's lexer does is refused: else code could run on past the
   # braces, into the generated code of the template's text.)
-  def self.matching(cs: Array[String], open: Int, commas: Array::Builder[Int]? = nil) -> Int
+  def self.matching(cs: Array[String], open: Int, commas: Array::Builder[Int]? = nil,
+                    marks: Array::Builder[Int]? = nil) -> Int
     stack = [cs[open]? || ""]
     j = open + 1
     # (The last character that is not a space, and whether a literal
@@ -555,6 +573,17 @@ class Templates::Parser
     while j < cs.size
       c = cs[j]
       ended_literal = false
+      # (A `:for` head's `in` and `when` at the top level: marked, and
+      # what follows reads as after the opening bracket, where a `/` or `%`
+      # starts a literal.)
+      word = marks && stack.size == 1 ? Templates::Parser.keyword_at(cs, j) : ""
+      unless word.empty?
+        marks << j if marks
+        j += word.size
+        prev = open
+        prev_literal = false
+        next
+      end
       case c
       when "{", "(", "[" then stack = stack.push(c)
       when "}", ")", "]"
@@ -595,6 +624,8 @@ class Templates::Parser
       when ","
         cm = commas
         cm << j if cm && stack.size == 1
+        mk = marks
+        mk << j if mk && stack.size == 1
       when "#" then return -2
       # (A line continuation, or a backslash outside a literal.)
       when "\\" then return -3
@@ -606,6 +637,24 @@ class Templates::Parser
       j += 1
     end
     -1
+  end
+
+  # `in` or `when` when one starts at `j` (a word of its own: not a
+  # method's name after `.` or `::`, nor a symbol, a variable, or
+  # longer), else "".
+  def self.keyword_at(cs: Array[String], j: Int) -> String
+    c = cs[j]
+    return "" unless c == "i" || c == "w"
+    before = cs[j - 1]? || " "
+    return "" if Templates::Parser.ident_char?(before) || [".", ":", "@", "$"].include?(before)
+    ["in", "when"].each do |w|
+      k = 0
+      k += 1 while k < w.size && cs[j + k]? == w[k]
+      next unless k == w.size
+      after = cs[j + w.size]? || " "
+      return w unless Templates::Parser.ident_char?(after) || after == "?" || after == "!"
+    end
+    ""
   end
 
   # Whether `c` is a character of a name, as the lexer has it (non-ASCII
@@ -791,9 +840,15 @@ class Templates::Parser
     kind = :element
     name = written.downcase
     if written.start_with?(".")
+      old = written[1, written.size - 1]
+      if old.match?(/\A[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*\z/)
+        fail(line, "<#{written}> is written <#{old.split(".").map { |part| part.split("_").map(&:capitalize).join }.join("::")}>: a component is a capitalised tag")
+      end
+      fail(line, "<#{written}> is not a component name (<Card>, <Admin::Card>)")
+    elsif written.match?(/\A[A-Z]/)
       kind = :component
-      name = written[1, written.size - 1]
-      fail(line, "<#{written}> is not a component name (<.card>, <.admin.user_card>)") unless name.match?(/\A[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*\z/)
+      name = written
+      fail(line, "<#{written}> is not a component name (<Card>, <Admin::Card>)") unless name.match?(/\A[A-Z][A-Za-z0-9_]*(::[A-Z][A-Za-z0-9_]*)*\z/)
     elsif written.start_with?(":")
       kind = :slot
       name = written[1, written.size - 1]
@@ -803,8 +858,9 @@ class Templates::Parser
     end
     attrs = Array::Builder[Templates::Attr].new
     seen: Set[String] = Set.new
-    for_code: String? = nil
+    fors: Array[Templates::Iter] = []
     if_code: String? = nil
+    unless_code: String? = nil
     closed = false
     while true
       skip_space
@@ -825,21 +881,16 @@ class Templates::Parser
       if key.start_with?(":")
         fail(a.line, "#{key} takes an expression ({...})") unless a.code
         case key
-        when ":for"
-          f = a.value || ""
-          parts = f.partition(" <- ")
-          fail(a.line, ":for is written {pattern <- expr}") if parts[1].empty? || Templates::Parser.trim_code(parts[0]).empty? || Templates::Parser.trim_code(parts[2]).empty?
-          fail(a.line, ":for cannot name a variable `h` (the builder's name)") if parts[0].match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
-          fail(a.line, ":for's pattern is names, commas and parentheses, or those in braces") unless Templates::Parser.trim_code(parts[0]).match?(/\A(\{[A-Za-z0-9_,()*\s]+\}|[A-Za-z0-9_,()*\s]+)\z/)
-          check_code(a.line, Templates::Parser.trim_code(parts[2]))
-          for_code = f
+        when ":for" then fors = for_head(a.line, a.value || "")
         when ":if" then if_code = a.value
-        else fail(a.line, "#{key} is not a special attribute (:for, :if)")
+        when ":unless" then unless_code = a.value
+        else fail(a.line, "#{key} is not a special attribute (:for, :if, :unless)")
         end
       else
         attrs << Templates::Attr.new(key, a.value, a.code, a.line)
       end
     end
+    fail(line, ":if and :unless cannot be on one element (write one condition)") if if_code && unless_code
     children: Array[Templates::Node] = []
     if kind == :element && Elements::VOID_ELEMENTS.include?(name)
       # (No content, and no end tag.)
@@ -852,7 +903,61 @@ class Templates::Parser
     else
       children = nodes(kind == :element ? name : written, line)
     end
-    Templates::Node.new(kind, name, line, attrs.to_a, children, for_code, if_code)
+    Templates::Node.new(kind, name, line, attrs.to_a, children, fors, if_code, unless_code)
+  end
+
+  # The iterators of a `:for` head `pattern in expr [when guard], ...`
+  # (Quarz's `for` comprehension): the top-level `in`, `when` and commas
+  # are found as `matching` scans the code, so none inside a string,
+  # a bracket or a literal counts. A comma before an `in` belongs to the
+  # pattern (`k, v in h`), one after the expression or guard starts the
+  # next iterator.
+  def for_head(line: Int, head: String) -> Array[Templates::Iter]
+    shape = ":for is written {pattern in expr [when cond], ...} (`{u in users}`)"
+    code = Templates::Parser.trim_code(head)
+    cs = "(#{code})".chars
+    marks = Array::Builder[Int].new
+    found = Templates::Parser.matching(cs, 0, nil, marks)
+    code_problem(line, found)
+    fail(line, "the code #{code.inspect} is not one expression") unless found == cs.size - 1
+    ms = marks.to_a
+    iters = Array::Builder[Templates::Iter].new
+    k = 0
+    start = 1
+    while true
+      m = k
+      m += 1 while m < ms.size && cs[ms[m]] == ","
+      unless m < ms.size && cs[ms[m]] == "i"
+        old = code.partition(" <- ")
+        fail(line, ":for={#{old[0]} <- #{old[2]}} is written :for={#{old[0]} in #{old[2]}}") unless old[1].empty?
+        fail(line, shape)
+      end
+      pattern = Templates::Parser.trim_code(cs[start...ms[m]].join)
+      src_start = ms[m] + 2
+      n = m + 1
+      fail(line, shape) if n < ms.size && cs[ms[n]] != "," && cs[ms[n]] != "w"
+      src_end = n < ms.size ? ms[n] : cs.size - 1
+      source = Templates::Parser.trim_code(cs[src_start...src_end].join)
+      guard: String? = nil
+      if n < ms.size && cs[ms[n]] == "w"
+        g_start = ms[n] + 4
+        n += 1
+        fail(line, shape) if n < ms.size && cs[ms[n]] != ","
+        g_end = n < ms.size ? ms[n] : cs.size - 1
+        guard = Templates::Parser.trim_code(cs[g_start...g_end].join)
+        fail(line, shape) if guard.empty?
+        check_code(line, guard)
+      end
+      fail(line, shape) if pattern.empty? || source.empty?
+      fail(line, ":for cannot name a variable `h` (the builder's name)") if pattern.match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
+      fail(line, ":for's pattern is names, commas and parentheses") unless pattern.match?(/\A[A-Za-z0-9_,()*\s]+\z/)
+      check_code(line, source)
+      iters << Templates::Iter.new(pattern, source, guard)
+      break unless n < ms.size
+      start = ms[n] + 1
+      k = n + 1
+    end
+    iters.to_a
   end
 
   def skip_space -> Void
@@ -874,7 +979,7 @@ class Templates::Parser
     q = peek
     vline = @line
     if q == "{"
-      return Templates::Attr.new(name, braced, true, line)
+      return Templates::Attr.new(name, braced(name == ":for"), true, line)
     elsif q == "\"" || q == "'"
       close = find(q, 1)
       fail(line, "the value of #{name} is not closed (#{q})") if close < 0
@@ -1009,32 +1114,41 @@ class Templates::Generator
     when :slot then fail(n.line, "<:#{n.name}> is a slot: it goes directly inside a component")
     else
       d = depth
-      f = n.for_code
-      if f
-        # (Checked by the parser.)
-        parts = f.partition(" <- ")
-        pattern = Templates::Parser.trim_code(parts[0])
-        # (The parser took `{a, b}` or plain names only.)
-        pattern = pattern[1, pattern.size - 2] if pattern.start_with?("{")
-        list = Templates::Parser.trim_code(parts[2])
-        emit(d, "#{Templates::Generator.paren(list)}.each do |#{pattern}|#{at(n.line)}")
+      opened = 0
+      # (A comprehension's expansion as a statement: nested `each`, the
+      # guard of an iterator an `if` inside it.)
+      n.fors.each do |it|
+        emit(d, "#{Templates::Generator.paren(it.source)}.each do |#{it.pattern}|#{at(n.line)}")
         d += 1
+        opened += 1
+        g = it.guard
+        if g
+          emit(d, "if #{Templates::Generator.paren(g)}#{at(n.line)}")
+          d += 1
+          opened += 1
+        end
       end
       c = n.if_code
       if c
         emit(d, "if #{Templates::Generator.paren(c)}#{at(n.line)}")
         d += 1
+        opened += 1
+      end
+      u = n.unless_code
+      if u
+        emit(d, "unless #{Templates::Generator.paren(u)}#{at(n.line)}")
+        d += 1
+        opened += 1
       end
       if n.kind == :component
         component(n, d, pre)
       else
         element(n, d, pre)
       end
-      if c
+      opened.times do
         d -= 1
         emit(d, "end")
       end
-      emit(depth, "end") if f
     end
   end
 
@@ -1152,12 +1266,6 @@ class Templates::Generator
     end
   end
 
-  # The class a component's name names: `admin.user_card` is
-  # `Admin::UserCard`.
-  def self.class_name(name: String) -> String
-    name.split(".").map { |part| part.split("_").map(&:capitalize).join }.join("::")
-  end
-
   def component(n: Templates::Node, depth: Int, pre: Bool) -> Void
     args = Array::Builder[String].new
     seen: Set[String] = Set.new
@@ -1173,7 +1281,7 @@ class Templates::Generator
     n.children.each do |c|
       if c.kind == :slot
         fail(c.line, "<:#{c.name}> takes no attributes") unless c.attrs.empty?
-        fail(c.line, "<:#{c.name}> cannot have :for or :if") if c.for_code || c.if_code
+        fail(c.line, "<:#{c.name}> cannot have :for, :if or :unless") if !c.fors.empty? || c.if_code || c.unless_code
         fail(c.line, "#{c.name} is given twice") if seen.include?(c.name)
         seen = seen.add(c.name)
         @slots += 1
@@ -1188,7 +1296,7 @@ class Templates::Generator
     end
     all = content.to_a
     kids = Templates::Generator.significant(pre ? all : Templates.trim(all), pre)
-    cls = Templates::Generator.class_name(n.name)
+    cls = n.name
     given = args.to_a
     made = given.empty? ? "#{cls}.new" : "#{cls}.new(#{given.join(", ")})"
     if kids.empty?

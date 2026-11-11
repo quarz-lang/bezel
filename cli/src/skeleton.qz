@@ -198,7 +198,7 @@ module Cli::Skeleton
         end
       QZ
       "src/views/layouts/app.html.bz" => <<~BZ,
-        {@args conn: Bezel::Conn, title: String, content: Bezel::Html}
+        {args conn: Bezel::Conn, title: String, content: Bezel::Html}
         <!DOCTYPE html>
         <html lang="en">
           <head>
@@ -215,7 +215,7 @@ module Cli::Skeleton
         </html>
       BZ
       "src/views/page/home.html.bz" => <<~BZ,
-        {@args conn: Bezel::Conn}
+        {args conn: Bezel::Conn}
         <h1>Welcome to #{m}</h1>
         <p>This page is src/views/page/home.html.bz; run <code>bezel templates</code> after changing it.</p>
       BZ

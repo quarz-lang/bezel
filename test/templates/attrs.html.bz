@@ -1,4 +1,4 @@
-{@args locked: Bool, size: Int, kind: String?, url: String}
+{args locked: Bool, size: Int, kind: String?, url: String}
 <form action={url} method="post" novalidate>
   <input type="text" name="q" required maxlength="40" size={size} disabled={locked} placeholder="Tom &amp; Jerry's">
   <input type="checkbox" checked>

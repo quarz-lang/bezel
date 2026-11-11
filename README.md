@@ -161,20 +161,30 @@ header). Nothing is interpreted at run time and the generated code is
 type-checked and escaped as hand-written DSL code is:
 
 ```html
-{@args conn: Bezel::Conn, users: Array[User], banner: String}
+{args conn: Bezel::Conn, users: Array[User], banner: String}
 <h1 class="title">Users</h1>
 <ul :if={!users.empty?}>
-  <li :for={u <- users}><a href={Shop::Router.user_path(id: u.id)}>{u.name}</a></li>
+  <li :for={u in users}><a href={Shop::Router.user_path(id: u.id)}>{u.name}</a></li>
 </ul>
-<.card title="Help">{users.size} users.<:footer>{raw(banner)}</:footer></.card>
+<Card title="Help">{users.size} users.<:footer>{raw(banner)}</:footer></Card>
 ```
 
 - `{expr}` writes a value escaped (a `Bezel::Html` as it is, nil as
   nothing); `{raw(expr)}`, like `Bezel::Html.raw` in the code, writes a
   string unescaped, and nothing else does.
-- `:for={pattern <- expr}` and `:if={expr}` repeat or guard an element;
-  `<.card>` is a component (`Card.new(title: "Help")`, the content its
-  `content`), `<:footer>` a slot (a `footer:` argument, a `Bezel::Html`).
+- `{args ...}` first declares the template's parameters, as a `def`'s.
+- `:for`, `:if` and `:unless` repeat or guard an element. `:for` takes
+  the head of a Quarz `for` comprehension: `:for={u in users}`,
+  `:for={u in users when u.active?}`, `:for={k, v in totals}`, several
+  iterators separated by commas (`:for={row in rows, cell in row}`).
+  `:if={expr}` writes the element when `expr` holds, `:unless={expr}`
+  when it does not (not both on one element).
+- A capitalised tag is a component (`<Card title="Help">` is
+  `Card.new(title: "Help")`, the content its `content`; `<Admin::Card>`
+  names a namespaced one), a lower-case tag is HTML. `<:footer>` is a
+  slot (a `footer:` argument, a `Bezel::Html`).
+- The earlier spellings `<-`, `{@args ...}` and `<.card>` are errors that
+  name the new one.
 - Code in braces is one expression the compiler can delimit as Quarz
   will: `/` and `%` are operators with a space on each side
   (`a.size / 2`) or start a literal after `(`, `[`, a comma, the

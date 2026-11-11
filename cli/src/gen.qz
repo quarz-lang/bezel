@@ -212,7 +212,7 @@ module Cli::Gen
                                        "# The #{n} pages.\nclass #{cls} < Bezel::Controller\n  controller\n\n#{defs.join("\n")}end\n"]]
     actions.each do |a|
       tpl: [String, String] = ["src/views/#{n}/#{a}.html.bz",
-                               "{@args conn: Bezel::Conn}\n<h1>#{Cli.camel(n)}: #{a}</h1>\n<p>This page is src/views/#{n}/#{a}.html.bz.</p>\n"]
+                               "{args conn: Bezel::Conn}\n<h1>#{Cli.camel(n)}: #{a}</h1>\n<p>This page is src/views/#{n}/#{a}.html.bz.</p>\n"]
       files = files.push(tpl)
     end
     routes = actions.map { |a| "get \"/#{n}#{a == "index" ? "" : "/#{a}"}\", #{cls}, :#{a}" }

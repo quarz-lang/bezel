@@ -1,4 +1,4 @@
-{@args conn: Bezel::Conn, title: String, content: Bezel::Html}
+{args conn: Bezel::Conn, title: String, content: Bezel::Html}
 <!DOCTYPE html>
 <html lang="en">
   <head>
