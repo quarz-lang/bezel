@@ -223,12 +223,34 @@ class CliTest < Test::Case
       File.write(File.join(root, "src", "a", "y.html.bz"), "")
       File.write(File.join(root, "src", "a", ".#y.html.bz"), "")
       File.write(File.join(root, "src", "a", ".hidden", "z.qz"), "")
+      # (Names that glob reads as patterns, a hidden directory inside; and an order by
+      # components: a directory's files where the directory sorts.)
+      Dir.mkdir_p(File.join(root, "src", "p[b]", ".hid"))
+      Dir.mkdir_p(File.join(root, "src", ".g[x]", "sub"))
+      Dir.mkdir_p(File.join(root, "src", "o-a"))
+      Dir.mkdir_p(File.join(root, "src", "o"))
+      File.write(File.join(root, "src", "p[b]", ".hid", "f.qz"), "")
+      File.write(File.join(root, "src", ".g[x]", "sub", "g.qz"), "")
+      File.write(File.join(root, "src", "o", "x.qz"), "")
+      File.write(File.join(root, "src", "o-a", "y.qz"), "")
+      File.write(File.join(root, "src", "o.qz"), "")
+      # (Hidden directories, nested and with visible ones inside.)
+      Dir.mkdir_p(File.join(root, "src", ".gen", "sub", ".deep"))
+      File.write(File.join(root, "src", ".extra.qz"), "")
+      File.write(File.join(root, "src", ".gen", "x.qz"), "")
+      File.write(File.join(root, "src", ".gen", "sub", "y.qz"), "")
+      File.write(File.join(root, "src", ".gen", "sub", ".deep", "z.qz"), "")
       links = Process.sh("ln -s .. #{Cli.quote(File.join(root, "src", "a", "up"))} && ln -s . #{Cli.quote(File.join(root, "src", "self"))} && " +
+                         "ln -s .gen #{Cli.quote(File.join(root, "src", ".genlink"))} && " +
                          "ln -s x.qz #{Cli.quote(File.join(root, "src", "linked.qz"))}")
       assert(links.success?, links.stderr)
       # (Links to directories are not followed; one to a file is a file.)
-      assert_equal(["src/a/y.html.bz", "src/linked.qz", "src/x.qz"], Cli.files_under(root, "src"))
-      assert_equal(["src/a/.#y.html.bz", "src/a/.hidden/z.qz", "src/a/y.html.bz", "src/linked.qz", "src/x.qz"], Cli.files_under(root, "src", true))
+      assert_equal(["src/a/y.html.bz", "src/linked.qz", "src/o/x.qz", "src/o-a/y.qz", "src/o.qz", "src/x.qz"], Cli.files_under(root, "src"))
+      assert_equal(["src/.extra.qz", "src/.g[x]/sub/g.qz", "src/.gen/sub/.deep/z.qz", "src/.gen/sub/y.qz", "src/.gen/x.qz", "src/a/.#y.html.bz",
+                    "src/a/.hidden/z.qz", "src/a/y.html.bz", "src/linked.qz", "src/o/x.qz", "src/o-a/y.qz", "src/o.qz", "src/p[b]/.hid/f.qz", "src/x.qz"],
+                   Cli.files_under(root, "src", true))
+      assert_true(Cli.files_under(root, "nope", true).empty?)
+      assert_true(Cli.files_under(root, "nope").empty?)
       # The files `prepare` writes take their times after it, the others
       # before.
       t0 = Time.utc(2026, 1, 1)
