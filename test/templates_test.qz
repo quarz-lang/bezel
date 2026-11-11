@@ -94,16 +94,28 @@ class TemplatesTest < Test::Case
       ["<p id=\"a\" id=\"b\"></p>", "v/t.html.bz:1: id is given twice"],
       ["<p>\n{x + (y", "v/t.html.bz:2: { is not closed (a { in a text is written {\"{\"})"],
       ["<p>{ }</p>", "v/t.html.bz:1: {} holds no expression"],
-      ["<p>x</p>\n{@args x: Int}", "v/t.html.bz:2: {@args ...} comes before the rest of the template"],
-      ["{@args h: Int}", "v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)"],
-      ["{@foo}", "v/t.html.bz:1: @foo is not a directive (only {@args ...})"],
-      ["<li :for={x in xs}>x</li>", "v/t.html.bz:1: :for is written {pattern <- expr}"],
-      ["<li :for={h <- xs}>x</li>", "v/t.html.bz:1: :for cannot name a variable `h` (the builder's name)"],
-      ["<li :each={xs}>x</li>", "v/t.html.bz:1: :each is not a special attribute (:for, :if)"],
+      ["<p>x</p>\n{args x: Int}", "v/t.html.bz:2: {args ...} comes before the rest of the template"],
+      ["{args h: Int}", "v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)"],
+      ["{@foo}", "v/t.html.bz:1: @foo is not allowed: a template has no instance variables (its parameters are declared by {args ...})"],
+      ["<li :for={x <- xs}>x</li>", "v/t.html.bz:1: :for={x <- xs} is written :for={x in xs}"],
+      ["<li :for={x}>x</li>", "v/t.html.bz:1: :for is written {pattern in expr [when cond], ...} (`{u in users}`)"],
+      ["<li :for={x in xs when}>x</li>", "v/t.html.bz:1: :for is written {pattern in expr [when cond], ...} (`{u in users}`)"],
+      ["<li :for={x in xs in ys}>x</li>", "v/t.html.bz:1: :for is written {pattern in expr [when cond], ...} (`{u in users}`)"],
+      ["<li :for={x in xs when a when b}>x</li>", "v/t.html.bz:1: :for is written {pattern in expr [when cond], ...} (`{u in users}`)"],
+      ["<li :for={ in xs}>x</li>", "v/t.html.bz:1: :for is written {pattern in expr [when cond], ...} (`{u in users}`)"],
+      ["<li :for={x in }>x</li>", "v/t.html.bz:1: :for is written {pattern in expr [when cond], ...} (`{u in users}`)"],
+      ["<li :for={x in xs,}>x</li>", "v/t.html.bz:1: :for is written {pattern in expr [when cond], ...} (`{u in users}`)"],
+      ["<p :if={a} :unless={b}>x</p>", "v/t.html.bz:1: :if and :unless cannot be on one element (write one condition)"],
+      ["<p>x</p>\n{@args x: Int}", "v/t.html.bz:2: {@args ...} is written {args ...}"],
+      ["<.card title=\"x\"></.card>", "v/t.html.bz:1: <.card> is written <Card>: a component is a capitalised tag"],
+      ["<.admin.user_card/>", "v/t.html.bz:1: <.admin.user_card> is written <Admin::UserCard>: a component is a capitalised tag"],
+      ["<Admin::card/>", "v/t.html.bz:1: <Admin::card> is not a component name (<Card>, <Admin::Card>)"],
+      ["<li :for={h in xs}>x</li>", "v/t.html.bz:1: :for cannot name a variable `h` (the builder's name)"],
+      ["<li :each={xs}>x</li>", "v/t.html.bz:1: :each is not a special attribute (:for, :if, :unless)"],
       ["<li :if=\"x\">x</li>", "v/t.html.bz:1: :if takes an expression ({...})"],
       ["<p>\n  <:footer>x</:footer></p>", "v/t.html.bz:2: <:footer> is a slot: it goes directly inside a component"],
-      ["<.card><:f>a</:f><:f>b</:f></.card>", "v/t.html.bz:1: f is given twice"],
-      ["<.card>\n<:f x=\"1\">a</:f></.card>", "v/t.html.bz:2: <:f> takes no attributes"],
+      ["<Card><:f>a</:f><:f>b</:f></Card>", "v/t.html.bz:1: f is given twice"],
+      ["<Card>\n<:f x=\"1\">a</:f></Card>", "v/t.html.bz:2: <:f> takes no attributes"],
       ["<script>x", "v/t.html.bz:1: <script> is not closed"],
       ["<!-- x", "v/t.html.bz:1: the comment is not closed (-->)"],
       ["<!DOCTYPE html5>", "v/t.html.bz:1: only <!DOCTYPE html> is written"],
@@ -147,7 +159,7 @@ class TemplatesTest < Test::Case
   def test_code_is_one_expression
     assert(code_of("<div title={a if b}>x</div>").include?("h.div(\"x\", title: (a if b))"))
     assert(code_of("<p :if={a and b}>x</p>").include?("if (a and b)"))
-    assert(code_of("<.panel title={a, b}/>").include?("Panel.new(title: (a, b))"))
+    assert(code_of("<Panel title={a, b}/>").include?("Panel.new(title: (a, b))"))
     assert_equal("v/t.html.bz:1: a # comment cannot be in {...}", error_of("<p>{x # note}</p>"))
   end
 
@@ -170,18 +182,18 @@ class TemplatesTest < Test::Case
   end
 
   def test_h_cannot_be_a_parameter
-    ["{@args *h: Array[Int]}", "{@args **h: Hash[Symbol, Int]}", "{@args &h: () -> Void}", "{@args a: Int, h: Int}"].each do |t|
+    ["{args *h: Array[Int]}", "{args **h: Hash[Symbol, Int]}", "{args &h: () -> Void}", "{args a: Int, h: Int}"].each do |t|
       assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of(t))
     end
-    assert(code_of("{@args hh: Int}").include?("def self.t(hh: Int)"))
+    assert(code_of("{args hh: Int}").include?("def self.t(hh: Int)"))
   end
 
   def test_second_review
     # (`:for`'s list and attribute code are one expression.)
-    assert(code_of("<li :for={i <- 1..3}>x</li>").include?("(1..3).each do |i|"))
-    assert(code_of("<li :for={i <- a||b}>x</li>").include?("(a||b).each do |i|"))
-    assert(code_of("<li :for={i <- -x}>x</li>").include?("(-x).each do |i|"))
-    assert(code_of("<li :for={i <- Shop::User.all}>x</li>").include?("Shop::User.all.each do |i|"))
+    assert(code_of("<li :for={i in 1..3}>x</li>").include?("(1..3).each do |i|"))
+    assert(code_of("<li :for={i in a||b}>x</li>").include?("(a||b).each do |i|"))
+    assert(code_of("<li :for={i in -x}>x</li>").include?("(-x).each do |i|"))
+    assert(code_of("<li :for={i in Shop::User.all}>x</li>").include?("Shop::User.all.each do |i|"))
     assert(code_of("<p>{a?b:c}</p>").include?("h.put((a?b:c))"))
     # (What the DSL would refuse at render time.)
     assert_equal("v/t.html.bz:1: a <script> cannot hold </script", error_of("<script>var a = \"</scripts>\";</script>"))
@@ -192,20 +204,20 @@ class TemplatesTest < Test::Case
     assert_equal("v/t.html.bz:3: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("\n\n&bogus;"))
     assert_equal("v/t.html.bz:4: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<p>a\n\n\n&bogus;</p>"))
     assert_equal("v/t.html.bz:2: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<pre>\n&bogus;</pre>"))
-    assert_equal("v/t.html.bz:5: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<.card>\n\n<:foot>x</:foot>\n\n&bogus;</.card>"))
+    assert_equal("v/t.html.bz:5: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<Card>\n\n<:foot>x</:foot>\n\n&bogus;</Card>"))
     assert_equal("v/t.html.bz:2: &bogus; is not a character reference a template knows (write the character, or &#NNNN;)", error_of("<p title=\n\"&bogus;\"></p>"))
     # (Whitespace inside `pre` is kept in components too.)
-    assert(code_of("<pre><.card>  a\n\n   b  </.card></pre>").include?("h.text(#{lit("  a\n\n   b  ")})"))
+    assert(code_of("<pre><Card>  a\n\n   b  </Card></pre>").include?("h.text(#{lit("  a\n\n   b  ")})"))
     # (The scanner.)
     assert_equal("v/t.html.bz:1: a # comment cannot be in {...}", error_of("<p>{\"\#{x #c}\"}</p>"))
-    # (Component names are in lowercase; long numeric references.)
-    assert_equal("v/t.html.bz:1: <.UserCard> is not a component name (<.card>, <.admin.user_card>)", error_of("<.UserCard/>"))
+    # (Component names are constants; long numeric references.)
+    assert_equal("v/t.html.bz:1: <.UserCard> is not a component name (<Card>, <Admin::Card>)", error_of("<.UserCard/>"))
     assert(code_of("<p>&#00000065;</p>").include?("h.p(\"A\")"))
   end
 
   def test_third_review
     heredoc = "v/t.html.bz:1: a heredoc cannot be in {...} (write `<< x` with a space for the operator)"
-    assert_equal(heredoc, error_of("{@args x: String}<p>{<<~end}<b>{x}</b></p>"))
+    assert_equal(heredoc, error_of("{args x: String}<p>{<<~end}<b>{x}</b></p>"))
     assert_equal(heredoc, error_of("<p>{raw(<<-X)}</p>"))
     assert(code_of("<p>{xs << y}</p>").include?("h.put((xs << y))"))
     assert_equal("v/t.html.bz:1: __END__ or =begin cannot start a line in {...}", error_of("<p>{a +\n__END__\n}</p>"))
@@ -213,17 +225,17 @@ class TemplatesTest < Test::Case
     assert_equal("v/t.html.bz:1: &#13; is a control character (write the character meant)", error_of("<p>&#13;</p>"))
     assert_equal("v/t.html.bz:4: a <script> cannot hold <!--: it hides its end tag", error_of("<script>\nvar a = 1;\n\n<!-- x\n</script>"))
     assert_equal("v/t.html.bz:3: a <style> cannot hold </style", error_of("<style>\n\na{x:\"</styles>\"}</style>"))
-    assert_equal("v/t.html.bz:2: :for is written {pattern <- expr}", error_of("<li\n  :for={x in xs}>x</li>"))
+    assert_equal("v/t.html.bz:2: :for={x <- xs} is written :for={x in xs}", error_of("<li\n  :for={x <- xs}>x</li>"))
   end
 
   def test_fourth_review
     # (`b"..."` does not interpolate: the `}` inside it is its own.)
     assert(code_of("<p>{b\"\#{\".size}</p>").include?("h.put((b\"\#{\".size))"))
     # (After a keyword that is no value, a `/` starts a literal.)
-    assert_equal("v/t.html.bz:1: :for's pattern is names, commas and parentheses, or those in braces", error_of("<p :for={f(\" <- '\") <- list}>x</p>it's"))
-    assert_equal("v/t.html.bz:1: a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal after (, [, a comma, the opening brace or a spaced = == =~ !~ => && || or keyword argument's colon (`f(/x/)`, `s =~ /x/`), on one line; no \\ outside literals or as a % delimiter", error_of("{@args / }/"))
-    assert_equal("v/t.html.bz:1: :for's pattern is names, commas and parentheses, or those in braces", error_of("<p :for={\"a\" <- list}>x</p>"))
-    assert(code_of("<p :for={x <- f(\" <- \")}>x</p>").include?("(f(\" <- \")).each do |x|"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<p :for={f(\" in '\") in list}>x</p>it's"))
+    assert_equal("v/t.html.bz:1: a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal after (, [, a comma, the opening brace or a spaced = == =~ !~ => && || or keyword argument's colon (`f(/x/)`, `s =~ /x/`), on one line; no \\ outside literals or as a % delimiter", error_of("{args / }/"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<p :for={\"a\" in list}>x</p>"))
+    assert(code_of("<p :for={x in f(\" in \")}>x</p>").include?("(f(\" in \")).each do |x|"))
   end
 
   # `/` and `%` in code: the subset the compiler delimits as Quarz's
@@ -270,16 +282,16 @@ class TemplatesTest < Test::Case
     assert_equal(esc, error_of("<p>{f(%Q}\\u{\":})}</p>"))
     assert(code_of("<p>{\"\\u{41 42}\"}</p>").include?("h.put((\"\\u{41 42}\"))"))
     # (Patterns.)
-    assert_equal("v/t.html.bz:1: :for's pattern is names, commas and parentheses, or those in braces", error_of("<li :for={{a}, {b} <- xs}>x</li>"))
-    assert(code_of("<li :for={{a, b} <- xs}>x</li>").include?("xs.each do |a, b|"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<li :for={{a}, {b} in xs}>x</li>"))
+    assert(code_of("<li :for={a, b in xs}>x</li>").include?("xs.each do |a, b|"))
     # (Comments in a textarea are its text; texts around a comment are one.)
     assert(code_of("<textarea><!-- c --></textarea>").include?("h.textarea(\"<!-- c -->\")"))
     assert(code_of("<p>a\n<!-- c -->\n b</p>").include?("h.p(#{lit("a\nb")})"))
     assert(code_of("<!DOCTYPE html>\n<!-- c -->\n<html></html>").include?("h.doctype\n      h.html"))
     # (Parameters are found by name, not by text.)
-    assert(code_of("{@args a: Int = f(1, conn: 2)}").include?("Bezel.html do |h|"))
-    assert(code_of("{@args a: Hash[String, Int] = {\"x\" => 1,\"h\" => 2}}").include?("def self.t(a:"))
-    assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of("{@args a: Int, *h: Int}"))
+    assert(code_of("{args a: Int = f(1, conn: 2)}").include?("Bezel.html do |h|"))
+    assert(code_of("{args a: Hash[String, Int] = {\"x\" => 1,\"h\" => 2}}").include?("def self.t(a:"))
+    assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of("{args a: Int, *h: Int}"))
     # (Literals after operators and labels; `A::B / 2`.)
     ["{s =~ /x/}", "{s !~ /x/}", "{x = /x/}", "{a == /x/}", "{f(pattern: /x/)}", "{{\"a\" => /x/}}", "{a && /x/}",
      "{a || %w[x]}", "{A::B / 2}", "{A::b / 2}"].each do |code|
@@ -300,8 +312,8 @@ class TemplatesTest < Test::Case
     assert(code_of("<p>{%q}\\u{41}}</p>").include?("h.put((%q}\\u{41}))"))
     assert(code_of("<p>{f(/\\u{z}/)}</p>").include?("(f(/\\u{z}/))"))
     # (Parameters past a default holding a bracket in a literal.)
-    assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of("{@args a: String = %q|(|, h: Int}"))
-    assert(code_of("{@args a: Regex = (/\\(/), conn: Bezel::Conn}").include?("Bezel.html(conn) do |h|"))
+    assert_equal("v/t.html.bz:1: a parameter cannot be named `h` (the builder's name)", error_of("{args a: String = %q|(|, h: Int}"))
+    assert(code_of("{args a: Regex = (/\\(/), conn: Bezel::Conn}").include?("Bezel.html(conn) do |h|"))
     # (No character reference across a comment.)
     assert(code_of("<p>Tom &amp<!-- c -->; Jerry</p>").include?("h.text(\"Tom &amp\")"))
   end
@@ -330,5 +342,109 @@ class TemplatesTest < Test::Case
   def test_raw_only_as_a_whole_call
     out = Bezel::Templates.compile(Bezel::Templates::Source.new("t", "t", "<p>{raw(a) + raw(b)}</p>"))
     assert(out.include?("h.put((raw(a) + raw(b)))"))
+  end
+
+  # The `:for` head is a Quarz `for` comprehension's: `in`, `when` and
+  # commas are told apart at the top level of the code only.
+  def test_for_heads
+    {
+      "u in users" => ["users.each do |u|"],
+      "u in users when u.active?" => ["users.each do |u|", "if u.active?"],
+      "k, v in totals" => ["totals.each do |k, v|"],
+      "row in rows, cell in row" => ["rows.each do |row|", "row.each do |cell|"],
+      "a in xs when a > 1, b in ys when a < b && b.odd?" => ["xs.each do |a|", "if (a > 1)", "ys.each do |b|", "if (a < b && b.odd?)"],
+      "x in f(a, [1, 2])" => ["(f(a, [1, 2])).each do |x|"],
+      "x in \"a in b, c\".split(\", \")" => ["(\"a in b, c\".split(\", \")).each do |x|"],
+      "x in {a: 1, b: 2}.keys" => ["({a: 1, b: 2}.keys).each do |x|"],
+      "x in xs.select { |y| y in zs }.map(&:to_s)" => ["xs.select { |y| y in zs }.map(&:to_s)"],
+      "x in (case a when 1 then xs else ys end)" => ["(case a when 1 then xs else ys end)).each do |x|"],
+      "x in xs.map(&:name).sort.reverse" => ["(xs.map(&:name).sort.reverse).each do |x|"],
+      "(a, b) in pairs" => ["pairs.each do |(a, b)|"],
+      "x in %w[a, b] when x =~ /b, in/" => ["(%w[a, b]).each do |x|", "if (x =~ /b, in/)"],
+      "inbox in inboxes when whenever" => ["inboxes.each do |inbox|", "if whenever"]
+    }.each do |head, wanted|
+      out = code_of("<li :for={#{head}}>x</li>")
+      wanted.each { |w| assert(out.include?(w), "#{head}: #{w}\n#{out}") }
+    end
+  end
+
+  def test_for_head_old_forms_and_odd_shapes
+    old = "v/t.html.bz:1: "
+    assert_equal("#{old}:for={{k, v} <- h} is written :for={k, v in h}", error_of("<li :for={{k, v} <- h}>x</li>"))
+    assert_equal("#{old}:for={u <- users} is written :for={u in users}", error_of("<li :for={u<-users}>x</li>"))
+    assert_equal("#{old}:for={u <- users} is written :for={u in users}", error_of("<li :for={u <- users, v in u}>x</li>"))
+    # (A construct that ends with `end` is one expression: its `when` is no guard.)
+    {
+      "x in case y when 1 then a else b end" => "(case y when 1 then a else b end).each do |x|",
+      "x in (if c then a else b end).to_a when x" => "(if c then a else b end).to_a).each do |x|",
+      "x in xs.map do |y| y end" => "(xs.map do |y| y end).each do |x|",
+      "x in xs.select do |y| case y when 1 then true else false end end when x > 1" => "if (x > 1)",
+      "x in begin a, b end" => ".each do |x|"
+    }.each do |head, wanted|
+      out = code_of("<li :for={#{head}}>x</li>")
+      assert(out.include?(wanted), "#{head}: #{out}")
+    end
+    # (A modifier `if` opens nothing; `while ... do` is one construct; later iterators still count.)
+    [
+      "u in us when u.a if b, v in u", "x in xs when a unless b, y in ys",
+      "x in xs.map do |a| a if a end, y in ys", "x in xs when while a do b end, y in ys",
+      "x in xs when (a if b), y in ys"
+    ].each do |head|
+      assert_equal(2, code_of("<li :for={#{head}}>x</li>").scan(/\.each do \|/).size, head)
+    end
+    ["x in xs.map do |a| return if b end, y in ys", "x in xs.map do |a| b or return unless c end, y in ys",
+     "x in xs.map do |a|\n a\n if b then 1 end\n puts a, 2\nend, y in ys"].each do |head|
+      assert_equal(2, code_of("<li :for={#{head}}>x</li>").scan(/\.each do \|/).size, head)
+    end
+    # (`<-` after the first `in` is an expression; a `/` after a keyword at any depth starts a regexp.)
+    assert(code_of("<li :for={x in xs when a<-1}>x</li>").include?("if (a<-1)"))
+    assert(code_of("<li :for={x in xs when a <-1, y in ys}>x</li>").include?("ys.each do |y|"))
+    ["x in case s\nwhen /a/ then xs\nelse ys end", "x in (case s when /a/ then xs else ys end)",
+     "x in xs when if /a/ =~ x then true else false end, y in ys", "x in xs when x if /a/ =~ x"].each do |head|
+      assert(code_of("<li :for={#{head}}>x</li>").include?(".each do |x|"), head)
+    end
+    shape = "#{old}:for is written {pattern in expr [when cond], ...} (`{u in users}`)"
+    assert_equal("#{old}:for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<li :for={a b in xs}>x</li>"))
+    assert_equal("#{old}:for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<li :for={a.b in xs}>x</li>"))
+    assert(code_of("<li :for={(a, b), *c in xs}>x</li>").include?("xs.each do |(a, b), *c|"))
+    # (A line break, then a regexp, after `in` and `when`.)
+    out = code_of("<li :for={u in users\n  when /x/.match?(u)}>x</li>")
+    assert(out.include?("if (/x/.match?(u))"))
+    assert(code_of("<li :for={u in\n /a/.match(s).to_a}>x</li>").include?("/a/.match(s).to_a"))
+  end
+
+  def test_for_with_if_and_unless
+    out = code_of("<li :for={x in xs when x > 1} :if={a}>x</li>")
+    assert(out.include?("xs.each do |x|"))
+    assert(out.include?("if (x > 1)"))
+    assert(out.include?("          if a  # t.html.bz:1\n"))
+    assert(code_of("<p :unless={a.empty? || b}>x</p>").include?("unless (a.empty? || b)"))
+    # (Each `end` closes what its iterator, guard and condition opened.)
+    out = code_of("<p :for={a in xs, b in ys when b} :if={c}>x</p>")
+    assert_equal(4, out.scan(/^ +end$/).size - 2)
+    assert(code_of("<p :for={a in xs} :unless={c}>x</p>").include?("unless c  # t.html.bz:1"))
+  end
+
+  def test_args_and_components
+    out = code_of("{args conn: Bezel::Conn, n: Int}\n<Admin::Card title=\"x\" :if={n > 0}>a<:footer>f</:footer></Admin::Card>\n<Card/>")
+    assert(out.include?("def self.t(conn: Bezel::Conn, n: Int)"))
+    assert(out.include?("h.component(Admin::Card.new(title: \"x\", footer: __bz_slot_1)) do"))
+    assert(out.include?("h.component(Card.new)"))
+    # (`args` alone is a variable.)
+    assert(code_of("<p>{args}</p>").include?("h.put(args)"))
+    {"DIV" => "div", "H1" => "h1", "TD" => "td", "UL" => "ul"}.each do |up, low|
+      assert_equal("v/t.html.bz:1: <#{up}> is not a component: HTML elements are lower-case: `<#{low}>`", error_of("<#{up}></#{up}>"))
+    end
+    assert_equal("v/t.html.bz:1: </DIV> is not a component's end tag: HTML elements are lower-case: `</div>`", error_of("<div>x</DIV>"))
+    # (A single capital is a component; so is an all-capital name that is no element.)
+    assert(code_of("<A href=\"x\">y</A>").include?("h.component(A.new(href: \"x\")) do"))
+    assert(code_of("<I/>").include?("h.component(I.new)"))
+    assert(code_of("<HTTPS/>").include?("h.component(HTTPS.new)"))
+    # (`{args == 1}` is an expression; a bad pattern is an error here.)
+    assert(code_of("<p>{args == 1}</p>").include?("h.put((args == 1))"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<p :for={k, v, in h}>x</p>"))
+    assert_equal("v/t.html.bz:1: </.card> does not close <Card> (line 1)", error_of("<Card></.card>"))
+    assert_equal("v/t.html.bz:1: </card> does not close <Card> (line 1)", error_of("<Card></card>"))
+    assert_equal("v/t.html.bz:1: <:f> cannot have :for, :if or :unless", error_of("<Card><:f :unless={a}>x</:f></Card>"))
   end
 end

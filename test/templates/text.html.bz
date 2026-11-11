@@ -1,4 +1,4 @@
-{@args code: String, html: String, n: Int, missing: String?}
+{args code: String, html: String, n: Int, missing: String?}
 <pre>
   line one
     {code}

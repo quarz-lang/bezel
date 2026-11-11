@@ -418,7 +418,7 @@ class CliTest < Test::Case
   def test_templates_check_and_write
     root = new_app
     begin
-      File.write(File.join(root, "src/views/page/home.html.bz"), "{@args conn: Bezel::Conn}\n<h1>Changed</h1>\n")
+      File.write(File.join(root, "src/views/page/home.html.bz"), "{args conn: Bezel::Conn}\n<h1>Changed</h1>\n")
       assert_equal(1, bezel(["templates", "--check"], root)[0])
       status, out = bezel(["templates"], root)
       assert_equal([0, "  update  src/views/generated/page.qz\n"], [status, out])
