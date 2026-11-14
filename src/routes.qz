@@ -18,10 +18,7 @@ data Route(
   name: String?
 )
   # The names of the pattern's parameters, in order (`[:post_id, :id]`).
-  def params -> Array[Symbol]
-    pattern.split("/").select { |s| s.start_with?("{") && s.end_with?("}") }
-           .map { |s| s.delete_prefix("{").delete_suffix("}").delete_suffix("...").to_sym }
-  end
+  def params -> Array[Symbol] = HTTP::Pattern.parse(pattern).names.map(&:to_sym)
 
   # The route as a line of `bezel routes`: name, method, pattern,
   # controller and action.
@@ -159,12 +156,10 @@ class RouteBuilder
   # :nodoc:
   def add(method: String, path: String, controller: Type[Controller], action: Symbol, as: String?) -> Void
     pattern = RouteBuilder.join(@prefix, path)
-    segs = HTTP.parse_pattern(pattern)
-    shape = HTTP.specificity(segs)
+    pat = HTTP::Pattern.parse(pattern)
     @routes.each do |r|
       next unless r.method == method
-      other = HTTP.parse_pattern(r.pattern)
-      if HTTP.specificity(other) == shape && HTTP.same_literals?(other, segs)
+      if HTTP::Pattern.parse(r.pattern).same_paths?(pat)
         raise ArgumentError.new("#{method} #{pattern} conflicts with #{r.pattern} (#{r.controller.name}##{r.action})")
       end
     end
