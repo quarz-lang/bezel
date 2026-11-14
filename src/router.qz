@@ -50,15 +50,18 @@
 abstract class Router
   include Plug
 
-  @compiled: Array[CompiledRoute]
+  @routes: HTTP::Routes[Route]
   @pipelines: Hash[Symbol, Array[Plug]]
 
   # The router, its pipelines' plugs made now, once.
   def initialize
-    @compiled = []
+    @routes = HTTP::Routes[Route].empty
     @pipelines = {}
     cls = router_class
-    @compiled = cls.route_table.map { |r| CompiledRoute.new(r, HTTP.parse_pattern(r.pattern)) }
+    # (The `routes` statement refused conflicting routes already.)
+    routes = HTTP::Routes[Route].empty
+    cls.route_table.each { |r| routes = routes.add(r.method, r.pattern, r) }
+    @routes = routes
     @pipelines = cls.pipeline_table
   end
 
@@ -184,38 +187,23 @@ abstract class Router
   end
 
   def call(conn: Conn) -> Conn
-    segments = HTTP.path_segments(conn.request)
+    segments = conn.request.path_segments
     return conn if segments.nil?
-    method = conn.method
-    found: CompiledRoute? = nil
-    found_params: Hash[String, String] = {}
-    best: Array[Int] = []
-    allowed: Array[String] = []
-    @compiled.each do |cr|
-      params = HTTP.match_segments(cr.segments, segments)
-      next if params.nil?
-      if cr.route.method == method || (method == "HEAD" && cr.route.method == "GET")
-        score = HTTP.specificity(cr.segments)
-        # (A route of the request's own method beats GET's serving HEAD.)
-        prev = found
-        better_method = !prev.nil? && score == best && cr.route.method == method && prev.route.method != method
-        if prev.nil? || (score <=> best) > 0 || better_method
-          found = cr
-          found_params = params
-          best = score
-        end
-      else
-        allowed = allowed.push(cr.route.method)
-      end
+    # (`HTTP::Routes#find` chooses as `HTTP::Router` does: the most
+    # specific pattern, HEAD by GET with a HEAD route winning, 405.)
+    case @routes.find(conn.method, segments)
+    in HTTP::Routes::Found::Match(value:, params:)
+      run_route(conn, value, params)
+    in HTTP::Routes::Found::NotAllowed(allow:)
+      conn.put_resp_header("allow", allow.join(", ")).text("Method Not Allowed", status: 405)
+    in HTTP::Routes::Found::NotFound
+      conn
     end
-    chosen = found
-    if chosen.nil?
-      return conn if allowed.empty?
-      ms = allowed.uniq
-      ms = ms.push("HEAD") if ms.include?("GET") && !ms.include?("HEAD")
-      return conn.put_resp_header("allow", ms.sort.join(", ")).text("Method Not Allowed", status: 405)
-    end
-    route = chosen.route
+  end
+
+  # `route`'s pipelines, then its controller's action, with the
+  # pattern's parameters in the request.
+  private def run_route(conn: Conn, route: Route, found_params: Hash[String, String]) -> Conn
     routed = conn.with(request: conn.request.with(params: conn.request.params.merge(found_params)))
                  .merge_params(Params.of(found_params))
     plugs: Array[Plug] = []
@@ -225,7 +213,3 @@ abstract class Router
     Plug.run(plugs, routed, ->(c: Conn) { controller.make.dispatch(action, c) })
   end
 end
-
-# :nodoc:
-# A route with its pattern parsed.
-data CompiledRoute = (route: Route, segments: Array[HTTP::Segment])
