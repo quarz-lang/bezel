@@ -104,6 +104,31 @@ class PlugTest < Test::Case
     assert_equal(304, since.status)
   end
 
+  # `If-Modified-Since` is read as an HTTP date in each of its forms,
+  # and answered 304 when the file is not later than it.
+  def test_static_if_modified_since_is_a_date
+    s = Bezel::Plug::Static.new(at: "/", from: static_dir)
+    status = ->(since: String) do
+      s.call(Bezel::Conn.build(HTTP::Server::Request.get("/css/app.css", HTTP::Headers.of({"If-Modified-Since" => since})))).status
+    end
+    lm = s.call(Bezel::Conn.build(req("/css/app.css"))).resp_headers["last-modified"] || ""
+    mtime = Time.httpdate(lm)
+    assert_equal(File.mtime(File.join(static_dir, "css/app.css")).utc.httpdate, lm)
+    # RFC 850 and asctime, the forms a recipient must accept.
+    assert_equal(304, status.call(mtime.strftime("%A, %d-%b-%y %H:%M:%S GMT")))
+    assert_equal(304, status.call(mtime.strftime("%a %b %e %H:%M:%S %Y")))
+    # Later than the file: not modified since; earlier: modified.
+    assert_equal(304, status.call((mtime + 1.second).httpdate))
+    assert_equal(304, status.call((mtime + 365.days).httpdate))
+    assert_equal(200, status.call((mtime - 1.second).httpdate))
+    # Not a date: ignored.
+    assert_equal(200, status.call("yesterday"))
+    assert_equal(200, status.call(lm.downcase))
+    # If-None-Match decides when both are given.
+    both = HTTP::Headers.of({"If-None-Match" => "\"other\"", "If-Modified-Since" => lm})
+    assert_equal(200, s.call(Bezel::Conn.build(HTTP::Server::Request.get("/css/app.css", both))).status)
+  end
+
   def test_static_refuses_and_passes
     s = Bezel::Plug::Static.new(at: "/assets", from: static_dir, only: ["css", "robots.txt"])
     ["/assets/.env", "/assets/.hidden/x.txt", "/assets/css/../robots.txt", "/assets/css", "/assets/",
