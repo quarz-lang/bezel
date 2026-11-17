@@ -214,10 +214,24 @@ class SecurityTest < Test::Case
     assert_nil(Bezel::Token.verify(c, "reset", expired))
   end
 
-  def test_constant_time_compare_and_cookies
-    assert_true(Bezel::Keys.same?("abc", "abc"))
-    assert_false(Bezel::Keys.same?("abc", "abd"))
-    assert_false(Bezel::Keys.same?("abc", "ab"))
+  # The comparisons of secrets (`Crypto.secure_compare`): a token's MAC,
+  # a CSRF token. Equal, one byte different, and a different length.
+  def test_secret_comparisons
+    c = Bezel::Config.load("t", environ: {"BEZEL_ENV" => "test"}, quiet: true)
+    t = Bezel::Token.sign(c, "reset", "42", expires_in: 1.hour)
+    payload, _, mac = t.partition(".")
+    other_mac = mac[0, mac.size - 1] + (mac[-1] == "A" ? "B" : "A")
+    assert_equal("42", Bezel::Token.verify(c, "reset", "#{payload}.#{mac}"))
+    assert_nil(Bezel::Token.verify(c, "reset", "#{payload}.#{other_mac}"))
+    assert_nil(Bezel::Token.verify(c, "reset", "#{payload}.#{mac[0, mac.size - 1]}"))
+    secret = Bytes.from((1..32).to_a)
+    other = Bytes.from((2..33).to_a)
+    assert_true(Bezel::Plug::CSRF.valid?(secret, Bezel::Plug::CSRF.mask(secret)))
+    assert_false(Bezel::Plug::CSRF.valid?(secret, Bezel::Plug::CSRF.mask(other)))
+    assert_false(Bezel::Plug::CSRF.valid?(secret, Bezel::Plug::CSRF.mask(Bytes.from((1..31).to_a))))
+  end
+
+  def test_cookies
     assert_equal({"a" => "1", "b" => "x y"}, Bezel::Cookies.parse("a=1; b=\"x y\"; a=2; junk"))
     assert_raise(ArgumentError) { Bezel::Cookies.set_cookie("a b", "x") }
     assert_raise(ArgumentError) { Bezel::Cookies.set_cookie("a", "x;y") }

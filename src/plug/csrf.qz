@@ -74,7 +74,7 @@ class Plug::CSRF
     return false if raw.nil? || raw.size != secret.size * 2
     n = secret.size
     plain = Bytes.build { |b| n.times { |i| b << (raw[i] ^ raw[n + i]) } }
-    Keys.same?(plain, secret)
+    Crypto.secure_compare(plain, secret)
   end
 
   # :nodoc:
