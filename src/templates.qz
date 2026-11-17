@@ -1122,11 +1122,15 @@ class Templates::Parser
   # Whether `text` is a pattern of names, as block parameters are: names
   # separated by commas, each possibly `*rest` or a parenthesised list
   # of them (two levels deep).
-  def self.pattern?(text: String) -> Bool
+  def self.pattern?(text: String) -> Bool = text.match?(PATTERN)
+
+  # `pattern?`'s regular expression, built once (compiling it is most of
+  # the cost of a `:for`).
+  PATTERN = begin
     name = "\\*?[A-Za-z_][A-Za-z0-9_]*"
     inner = "(?:#{name}|\\(\\s*#{name}(?:\\s*,\\s*#{name})*\\s*\\))"
     outer = "(?:#{name}|\\(\\s*#{inner}(?:\\s*,\\s*#{inner})*\\s*\\))"
-    text.match?(Regexp.new("\\A\\s*#{outer}(?:\\s*,\\s*#{outer})*\\s*\\z"))
+    Regexp.new("\\A\\s*#{outer}(?:\\s*,\\s*#{outer})*\\s*\\z")
   end
 
   # Moves past the spaces (`\s`, Unicode's) at the position.
