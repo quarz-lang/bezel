@@ -44,9 +44,6 @@ class Plug::BearerAuth
     @realm = realm
   end
 
-  # The realm named in `WWW-Authenticate`.
-  def realm -> String = @realm
-
   def call(conn: Conn) -> Conn
     return conn if Plug::BearerAuth.valid?(@token, conn.header("authorization"))
     conn.put_resp_header("www-authenticate", "Bearer realm=#{Plug::BearerAuth.quoted(@realm)}").text("Unauthorized", status: 401)
