@@ -14,6 +14,18 @@ class PlugTestController < Bezel::Controller
   controller
 end
 
+# A bearer token on one action only.
+class PlugTestReports < Bezel::Controller
+  AUTH = Bezel::Plug::BearerAuth.new(token: "t0ken", realm: "reports")
+
+  plug :bearer_auth, only: [:export]
+
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "reports")
+  def export(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "data")
+
+  private def bearer_auth(conn: Bezel::Conn) -> Bezel::Conn = AUTH.call(conn)
+end
+
 class PlugTest < Test::Case
   def req(target: String = "/") -> HTTP::Server::Request = HTTP::Server::Request.get(target)
 
@@ -56,6 +68,54 @@ class PlugTest < Test::Case
     assert_equal(given, kept.request_id)
     bad = Bezel::Plug::RequestId.new.call(Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"X-Request-Id" => "short"}))))
     assert_false(bad.request_id == "short")
+  end
+
+  # The connection's text body, nil for another.
+  def text_of(conn: Bezel::Conn) -> String?
+    case conn.resp_body
+    in HTTP::Content::Text(text:) then text
+    else nil
+    end
+  end
+
+  def bearer(auth: Bezel::Plug::BearerAuth, header: String?) -> Bezel::Conn
+    headers = header ? HTTP::Headers.of({"Authorization" => header}) : HTTP::Headers.empty
+    auth.call(Bezel::Conn.build(HTTP::Server::Request.get("/", headers)))
+  end
+
+  def test_bearer_auth
+    auth = Bezel::Plug::BearerAuth.new(token: "s3cret-token", realm: "api")
+    # The token, the scheme in any case: through, unchanged.
+    ["Bearer s3cret-token", "bearer s3cret-token", "BEARER  s3cret-token "].each do |h|
+      c = bearer(auth, h)
+      assert_false(c.halted?, h)
+      assert_equal(200, c.status)
+      assert_nil(c.resp_headers["www-authenticate"])
+    end
+    # Refused: another token of the same length or another, none, another
+    # scheme, an empty one.
+    ["Bearer s3cret-tokeN", "Bearer s3cret", "Bearer s3cret-token-longer", nil, "Basic s3cret-token", "Bearer", "Bearer ", "s3cret-token"].each do |h|
+      c = bearer(auth, h)
+      assert_true(c.halted?, h.inspect)
+      assert_equal(401, c.status, h.inspect)
+      assert_equal("Bearer realm=\"api\"", c.resp_headers["www-authenticate"])
+      assert_equal("Unauthorized", text_of(c))
+    end
+    # A nil or empty configured token refuses everything, an empty
+    # header's too.
+    [nil, ""].each do |t|
+      none = Bezel::Plug::BearerAuth.new(token: t, realm: "api")
+      ["Bearer ", "Bearer", "Bearer x", nil].each { |h| assert_equal(401, bearer(none, h).status, "#{t.inspect} #{h.inspect}") }
+    end
+    # A controller's plug line, on one action.
+    plain = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    assert_equal("reports", text_of(PlugTestReports.new.dispatch(:index, plain)))
+    assert_equal(401, PlugTestReports.new.dispatch(:export, plain).status)
+    given = Bezel::Conn.build(HTTP::Server::Request.get("/", HTTP::Headers.of({"Authorization" => "Bearer t0ken"})))
+    assert_equal("data", text_of(PlugTestReports.new.dispatch(:export, given)))
+    # The realm is a quoted string.
+    odd = Bezel::Plug::BearerAuth.new(token: "t", realm: "a \"b\" \\ c")
+    assert_equal("Bearer realm=\"a \\\"b\\\" \\\\ c\"", bearer(odd, nil).resp_headers["www-authenticate"])
   end
 
   def test_logger_reports_exceptions_and_escapes

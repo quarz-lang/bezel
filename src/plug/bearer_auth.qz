@@ -1,0 +1,77 @@
+# Lets a request through only with the configured bearer token (RFC
+# 6750): `Authorization: Bearer <token>`. The scheme's case does not
+# matter. The tokens are compared in constant time, through their
+# SHA-256 digests, so that neither the content nor the length of the
+# configured one shows in the time taken. A request that passes goes on
+# unchanged. One that does not is answered `401 Unauthorized`, with
+# `WWW-Authenticate: Bearer realm="<realm>"` and the body
+# `Unauthorized`, saying nothing of why. A nil or empty configured token
+# refuses every request.
+#
+# ```
+# auth = Bezel::Plug::BearerAuth.new(token: "s3cret", realm: "api")
+# ok = HTTP::Server::Request.get("/", HTTP::Headers.of({"Authorization" => "Bearer s3cret"}))
+# auth.call(Bezel::Conn.build(ok)).halted?                                  # => false
+# refused = auth.call(Bezel::Conn.build(HTTP::Server::Request.get("/")))
+# refused.status                                                            # => 401
+# refused.resp_headers["www-authenticate"]                                  # => "Bearer realm=\"api\""
+# ```
+#
+# In an endpoint's pipeline it guards every route. For some actions of a
+# controller only, call it from a plug method:
+#
+# ```quarz no_run
+# class Reports < Bezel::Controller
+#   AUTH = Bezel::Plug::BearerAuth.new(token: ENV["REPORTS_TOKEN"]?, realm: "reports")
+#
+#   plug :bearer_auth, only: [:export]
+#
+#   def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "reports")
+#   def export(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "data")
+#
+#   private def bearer_auth(conn: Bezel::Conn) -> Bezel::Conn = AUTH.call(conn)
+# end
+# ```
+class Plug::BearerAuth
+  include Plug
+
+  @token: String?
+  @realm: String
+
+  # The plug, letting through requests with `token`, its realm `realm`.
+  def initialize(*, token: String?, realm: String)
+    @token = token
+    @realm = realm
+  end
+
+  # The realm named in `WWW-Authenticate`.
+  def realm -> String = @realm
+
+  def call(conn: Conn) -> Conn
+    return conn if Plug::BearerAuth.valid?(@token, conn.header("authorization"))
+    conn.put_resp_header("www-authenticate", "Bearer realm=#{Plug::BearerAuth.quoted(@realm)}").text("Unauthorized", status: 401)
+  end
+
+  # :nodoc:
+  # Whether `header` carries `token` (neither nil nor empty).
+  def self.valid?(token: String?, header: String?) -> Bool
+    return false if token.nil? || token.empty? || header.nil?
+    scheme, _, rest = header.strip.partition(" ")
+    given = rest.strip
+    return false unless scheme.downcase == "bearer" && !given.empty?
+    Crypto.secure_compare(Digest::SHA256.digest(given), Digest::SHA256.digest(token))
+  end
+
+  # :nodoc:
+  # `text` as a quoted string, `"` and `\` escaped.
+  def self.quoted(text: String) -> String
+    out = String::Builder.new
+    out << "\""
+    text.each_char do |c|
+      out << "\\" if c == "\"" || c == "\\"
+      out << c
+    end
+    out << "\""
+    out.to_s
+  end
+end

@@ -223,6 +223,11 @@ end
   `Bezel::Token.sign/verify` (HMAC, expiring, bound to a purpose, and to
   a `fingerprint` such as the password hash so that a reset link stops
   working once used) for links sent by mail.
+- An API pipeline can require a bearer token:
+  `Bezel::Plug::BearerAuth.new(token: ENV["API_TOKEN"]?, realm: "api")`
+  lets through only `Authorization: Bearer <token>` (compared in constant
+  time) and answers anything else `401` with `WWW-Authenticate`; a nil or
+  empty token refuses every request.
 - `conn.session.renew` after a login drops the CSRF secret; `drop` then
   `put` starts a new session.
 
