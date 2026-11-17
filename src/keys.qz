@@ -32,20 +32,6 @@ module Keys
     key
   end
 
-  # Whether `a` and `b` are equal, in a time that depends on their
-  # lengths only (not on where they differ): for comparing secrets.
-  def self.same?(a: Bytes | String, b: Bytes | String) -> Bool
-    x = a.is_a?(String) ? a.to_bytes : a
-    y = b.is_a?(String) ? b.to_bytes : b
-    return false unless x.size == y.size
-    diff = 0
-    i = 0
-    while i < x.size
-      diff = diff | (x[i] ^ y[i])
-      i += 1
-    end
-    diff == 0
-  end
 end
 
 # Request cookies and `Set-Cookie` values.
