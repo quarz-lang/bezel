@@ -149,6 +149,18 @@ class TemplatesTest < Test::Case
     assert(code_of("&nbsp;<p>x</p>").include?("h.text(#{lit("\u00a0")})"))
   end
 
+  # Inside a tag, the spaces between names are `\s`'s, Unicode's (as
+  # before the parser scanned bytes): a no-break or an ideographic space
+  # separates attributes and ends an end tag's name.
+  def test_spaces_in_tags_are_unicode
+    assert(code_of("<div\u00a0class=\"x\">a</div>").include?("h.div(\"a\", class_name: \"x\")"))
+    assert(code_of("<div class=\"a\"\u3000id=\"b\"></div>").include?("h.div(class_name: \"a\", id: \"b\")"))
+    assert(code_of("<p title=a\u00a0lang=\"en\">t</p>").include?("h.p(\"t\", title: \"a\", lang: \"en\")"))
+    assert(code_of("<textarea>x</textarea\u3000>").include?("h.textarea(\"x\")"))
+    assert(code_of("<script>x</script\u00a0>").include?("h.script(\"x\")"))
+    assert(code_of("<div\u00a0\u3000 id=\"c\"></div>").include?("h.div(id: \"c\")"))
+  end
+
   def test_the_template_is_trimmed
     out = code_of("\n  Hello\n  world\n")
     assert(out.include?("h.text(#{lit("Hello\nworld")})"))
