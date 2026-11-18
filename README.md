@@ -177,8 +177,15 @@ type-checked and escaped as hand-written DSL code is:
   the head of a Quarz `for` comprehension: `:for={u in users}`,
   `:for={u in users when u.active?}`, `:for={k, v in totals}`, several
   iterators separated by commas (`:for={row in rows, cell in row}`).
-  The source of an iterator is one expression: a command call with
-  arguments is written in parentheses.
+  The source of an iterator is one expression; parenthesise anything
+  unusual. A command call with arguments, a `;`, a call with a `do`
+  block on a bare name (`(items do |i| i end)`), a line break after a
+  `.` before a keyword, a `while`/`until` closed by `;` and followed by a
+  `do` block, an `if` right after `?`, or a regular expression right
+  after a block's `|a|` is written in parentheses. A condition is
+  `when cond`: an `if`, `unless`, `and`, `or` or `then` after the
+  source is an error that says so. The pattern is names, as block
+  parameters are (`x`, `k, v`, `first, *rest`).
   `:if={expr}` writes the element when `expr` holds, `:unless={expr}`
   when it does not (not both on one element).
 - A capitalised tag is a component (`<Card title="Help">` is

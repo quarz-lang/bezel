@@ -643,8 +643,17 @@ class Templates::Parser
       unless word.empty?
         top = stack.size == 1
         after = prev == kw_end
-        opener = !["if", "unless", "while", "until"].include?(word) || Templates::Parser.opens?(cs, j, prev, prev_literal, open, after)
-        if word == "end"
+        opener = !["if", "unless", "while", "until", "and", "or", "then"].include?(word) || Templates::Parser.opens?(cs, j, prev, prev_literal, open, after)
+        # (After the first `in`, a modifier, `and`, `or`, `then` or a `do`
+        # at the top level is marked negative: `for_head` refuses one in
+        # an iterator's source.)
+        loose = top && nest == 0 && seen_in
+        if loose && (["and", "or", "then"].include?(word) || (!opener && word != "end") || word == "do")
+          marks << -j if marks
+        end
+        if ["and", "or", "then"].include?(word)
+          nil
+        elsif word == "end"
           nest -= 1 if top && nest > 0
         elsif word == "in" || word == "when"
           if top && nest == 0
@@ -763,8 +772,8 @@ class Templates::Parser
   # a symbol, a variable, or longer), else "".
   def self.keyword_at(cs: Array[Int], j: Int) -> String
     c = cs[j]
-    # (The first letters of the words: `i w c u b d e`, and `W`.)
-    return "" unless c == 105 || c == 119 || c == 99 || c == 117 || c == 98 || c == 100 || c == 101 || c == 87
+    # (The first letters of the words: `i w c u b d e a o t`, and `W`.)
+    return "" unless c == 105 || c == 119 || c == 99 || c == 117 || c == 98 || c == 100 || c == 101 || c == 87 || c == 97 || c == 111 || c == 116
     before = cs[j - 1]? || 32
     # (Not after `.`, `:`, `@`, `$`.)
     return "" if Templates::Parser.ident_char?(before) || before == 46 || before == 58 || before == 64 || before == 36
@@ -779,7 +788,7 @@ class Templates::Parser
   end
 
   # The words `keyword_at` finds, and their bytes.
-  CONSTRUCT_WORDS = ["in", "when", "case", "if", "unless", "while", "until", "begin", "do", "def", "end"]
+  CONSTRUCT_WORDS = ["in", "when", "case", "if", "unless", "while", "until", "begin", "do", "def", "end", "and", "or", "then"]
   KEYWORD_BYTES = CONSTRUCT_WORDS.map { |w| w.bytes }
 
   # The text of the bytes `cs[from...to]`.
@@ -1072,7 +1081,9 @@ class Templates::Parser
     found = Templates::Parser.matching(cs, 0, nil, marks)
     code_problem(line, found)
     fail(line, "the code #{code.inspect} is not one expression") unless found == cs.size - 1
-    ms = marks.to_a
+    all = marks.to_a
+    ms = all.reject { |m| m < 0 }
+    loose = all.select { |m| m < 0 }.map { |m| -m }
     # (The old `pattern <- expr`, wherever its arrow comes before the first `in`.)
     ms.each_with_index do |at, n|
       # (A mark is at an `in` (`i`), a `when` (`w`), a `<-` (`<`) or a comma.)
@@ -1097,6 +1108,12 @@ class Templates::Parser
       fail(line, shape) if n < ms.size && cs[ms[n]] != 44 && cs[ms[n]] != 119
       src_end = n < ms.size ? ms[n] : cs.size - 1
       source = Templates::Parser.trim_code(Templates::Parser.text_of(cs, src_start, src_end))
+      loose.each do |at|
+        next unless at > src_start && at < src_end
+        word = Templates::Parser.keyword_at(cs, at)
+        next if word == "do" && Templates::Parser.block_do?(cs, at)
+        fail(line, ":for={... in #{source}}: `#{word}` cannot follow a :for's source (a for comprehension has no modifier): write `when cond` for a condition, or parenthesise the source")
+      end
       guard: String? = nil
       if n < ms.size && cs[ms[n]] == 119
         g_start = ms[n] + 4
@@ -1109,7 +1126,7 @@ class Templates::Parser
       end
       fail(line, shape) if pattern.empty? || source.empty?
       fail(line, ":for cannot name a variable `h` (the builder's name)") if pattern.match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
-      fail(line, ":for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)") unless Templates::Parser.pattern?(pattern)
+      fail(line, ":for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)") unless Templates::Parser.pattern?(pattern)
       check_code(line, source, true)
       iters << Templates::Iter.new(pattern, source, guard)
       break unless n < ms.size
@@ -1117,6 +1134,21 @@ class Templates::Parser
       k = n + 1
     end
     iters.to_a
+  end
+
+  # Whether the `do` at `at` (at a `:for` source's top level) is a block's,
+  # after a call: a `)`, or a name after a `.` (`xs.map do`, `f(x) do`).
+  # One after a bare name (`xs do ... end`) is not (`for_head` refuses
+  # it; parentheses around the source allow a call of the template's own
+  # method).
+  def self.block_do?(cs: Array[Int], at: Int) -> Bool
+    p = at - 1
+    p -= 1 while p > 0 && Templates::Parser.space?(cs[p])
+    return true if cs[p] == 41
+    return false unless Templates::Parser.ident_char?(cs[p]) || cs[p] == 63 || cs[p] == 33
+    p -= 1 while p > 0 && (Templates::Parser.ident_char?(cs[p]) || cs[p] == 63 || cs[p] == 33)
+    p -= 1 while p > 0 && Templates::Parser.space?(cs[p])
+    cs[p] == 46
   end
 
   # Whether `text` is a pattern of names, as block parameters are: names
