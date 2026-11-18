@@ -371,7 +371,6 @@ class TemplatesTest < Test::Case
       "x in xs.select { |y| y in zs }.map(&:to_s)" => ["xs.select { |y| y in zs }.map(&:to_s)"],
       "x in (case a when 1 then xs else ys end)" => ["(case a when 1 then xs else ys end)).each do |x|"],
       "x in xs.map(&:name).sort.reverse" => ["(xs.map(&:name).sort.reverse).each do |x|"],
-      "(a, b) in pairs" => ["pairs.each do |(a, b)|"],
       "x in %w[a, b] when x =~ /b, in/" => ["(%w[a, b]).each do |x|", "if (x =~ /b, in/)"],
       "inbox in inboxes when whenever" => ["inboxes.each do |inbox|", "if whenever"]
     }.each do |head, wanted|
@@ -418,7 +417,6 @@ class TemplatesTest < Test::Case
     shape = "#{old}:for is written {pattern in expr [when cond], ...} (`{u in users}`)"
     assert_equal("#{old}:for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<li :for={a b in xs}>x</li>"))
     assert_equal("#{old}:for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<li :for={a.b in xs}>x</li>"))
-    assert(code_of("<li :for={(a, b), *c in xs}>x</li>").include?("xs.each do |(a, b), *c|"))
     # (A line break, then a regexp, after `in` and `when`.)
     out = code_of("<li :for={u in users\n  when /x/.match?(u)}>x</li>")
     assert(out.include?("if (/x/.match?(u))"))
@@ -463,6 +461,13 @@ class TemplatesTest < Test::Case
     # The hint lists only patterns that compile.
     assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<li :for={1 in xs}>x</li>"))
     assert(code_of("<li :for={first, *rest in rows}>x</li>").include?("rows.each do |first, *rest|"))
+    # A parenthesised pattern is refused, with what to write instead.
+    destructure = "v/t.html.bz:1: :for's pattern cannot take an element apart (`(a, b)`): Quarz has no destructuring block parameters; name the element and use its parts in the content (`:for={pair in pairs}`, then `{pair[0]}`)"
+    ["(a, b), c in xs", "(a, b) in xs", "(a, b), *c in xs", "k, (a, b) in h"].each do |head|
+      assert_equal(destructure, error_of("<li :for={#{head}}>x</li>"), head)
+    end
+    assert(code_of("<li :for={k, v in h}>x</li>").include?("h.each do |k, v|"))
+    assert(code_of("<li :for={pair in pairs}>{pair[0]}</li>").include?("pairs.each do |pair|"))
   end
 
   def test_for_with_if_and_unless

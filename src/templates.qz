@@ -1126,6 +1126,7 @@ class Templates::Parser
       end
       fail(line, shape) if pattern.empty? || source.empty?
       fail(line, ":for cannot name a variable `h` (the builder's name)") if pattern.match?(/(\A|[^A-Za-z0-9_])h([^A-Za-z0-9_?!]|\z)/)
+      fail(line, ":for's pattern cannot take an element apart (`(a, b)`): Quarz has no destructuring block parameters; name the element and use its parts in the content (`:for={pair in pairs}`, then `{pair[0]}`)") if Templates::Parser.destructuring?(pattern)
       fail(line, ":for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)") unless Templates::Parser.pattern?(pattern)
       check_code(line, source, true)
       iters << Templates::Iter.new(pattern, source, guard)
@@ -1152,13 +1153,25 @@ class Templates::Parser
   end
 
   # Whether `text` is a pattern of names, as block parameters are: names
-  # separated by commas, each possibly `*rest` or a parenthesised list
-  # of them (two levels deep).
+  # separated by commas, each possibly `*rest`. (A parenthesised list
+  # is not: Quarz has no destructuring block parameters.)
   def self.pattern?(text: String) -> Bool = text.match?(PATTERN)
+
+  # Whether `text` is names with a parenthesised list among them, as a
+  # destructuring block parameter is written (`(a, b), c`): refused, with
+  # its own message.
+  def self.destructuring?(text: String) -> Bool = text.include?("(") && text.match?(DESTRUCTURING)
 
   # `pattern?`'s regular expression, built once (compiling it is most of
   # the cost of a `:for`).
   PATTERN = begin
+    name = "\\*?[A-Za-z_][A-Za-z0-9_]*"
+    Regexp.new("\\A\\s*#{name}(?:\\s*,\\s*#{name})*\\s*\\z")
+  end
+
+  # `destructuring?`'s: names and parenthesised lists of them, two levels
+  # deep.
+  DESTRUCTURING = begin
     name = "\\*?[A-Za-z_][A-Za-z0-9_]*"
     inner = "(?:#{name}|\\(\\s*#{name}(?:\\s*,\\s*#{name})*\\s*\\))"
     outer = "(?:#{name}|\\(\\s*#{inner}(?:\\s*,\\s*#{inner})*\\s*\\))"

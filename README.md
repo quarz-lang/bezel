@@ -185,7 +185,10 @@ type-checked and escaped as hand-written DSL code is:
   after a block's `|a|` is written in parentheses. A condition is
   `when cond`: an `if`, `unless`, `and`, `or` or `then` after the
   source is an error that says so. The pattern is names, as block
-  parameters are (`x`, `k, v`, `first, *rest`).
+  parameters are (`x`, `k, v`, `first, *rest`): one cannot take an
+  element apart (`(a, b)`), since Quarz has no destructuring block
+  parameters; name the element and use its parts in the content
+  (`:for={pair in pairs}`, then `{pair[0]}`).
   `:if={expr}` writes the element when `expr` holds, `:unless={expr}`
   when it does not (not both on one element).
 - A capitalised tag is a component (`<Card title="Help">` is
