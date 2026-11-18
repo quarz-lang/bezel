@@ -244,9 +244,9 @@ class TemplatesTest < Test::Case
     # (`b"..."` does not interpolate: the `}` inside it is its own.)
     assert(code_of("<p>{b\"\#{\".size}</p>").include?("h.put((b\"\#{\".size))"))
     # (After a keyword that is no value, a `/` starts a literal.)
-    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<p :for={f(\" in '\") in list}>x</p>it's"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<p :for={f(\" in '\") in list}>x</p>it's"))
     assert_equal("v/t.html.bz:1: a / or % in {...} is an operator with a space on each side after a value (`a / b`), or starts a literal after (, [, a comma, the opening brace or a spaced = == =~ !~ => && || or keyword argument's colon (`f(/x/)`, `s =~ /x/`), on one line; no \\ outside literals or as a % delimiter", error_of("{args / }/"))
-    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<p :for={\"a\" in list}>x</p>"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<p :for={\"a\" in list}>x</p>"))
     assert(code_of("<p :for={x in f(\" in \")}>x</p>").include?("(f(\" in \")).each do |x|"))
   end
 
@@ -294,7 +294,7 @@ class TemplatesTest < Test::Case
     assert_equal(esc, error_of("<p>{f(%Q}\\u{\":})}</p>"))
     assert(code_of("<p>{\"\\u{41 42}\"}</p>").include?("h.put((\"\\u{41 42}\"))"))
     # (Patterns.)
-    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<li :for={{a}, {b} in xs}>x</li>"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<li :for={{a}, {b} in xs}>x</li>"))
     assert(code_of("<li :for={a, b in xs}>x</li>").include?("xs.each do |a, b|"))
     # (Comments in a textarea are its text; texts around a comment are one.)
     assert(code_of("<textarea><!-- c --></textarea>").include?("h.textarea(\"<!-- c -->\")"))
@@ -371,7 +371,6 @@ class TemplatesTest < Test::Case
       "x in xs.select { |y| y in zs }.map(&:to_s)" => ["xs.select { |y| y in zs }.map(&:to_s)"],
       "x in (case a when 1 then xs else ys end)" => ["(case a when 1 then xs else ys end)).each do |x|"],
       "x in xs.map(&:name).sort.reverse" => ["(xs.map(&:name).sort.reverse).each do |x|"],
-      "(a, b) in pairs" => ["pairs.each do |(a, b)|"],
       "x in %w[a, b] when x =~ /b, in/" => ["(%w[a, b]).each do |x|", "if (x =~ /b, in/)"],
       "inbox in inboxes when whenever" => ["inboxes.each do |inbox|", "if whenever"]
     }.each do |head, wanted|
@@ -416,13 +415,59 @@ class TemplatesTest < Test::Case
       assert(code_of("<li :for={#{head}}>x</li>").include?(".each do |x|"), head)
     end
     shape = "#{old}:for is written {pattern in expr [when cond], ...} (`{u in users}`)"
-    assert_equal("#{old}:for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<li :for={a b in xs}>x</li>"))
-    assert_equal("#{old}:for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<li :for={a.b in xs}>x</li>"))
-    assert(code_of("<li :for={(a, b), *c in xs}>x</li>").include?("xs.each do |(a, b), *c|"))
+    assert_equal("#{old}:for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<li :for={a b in xs}>x</li>"))
+    assert_equal("#{old}:for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<li :for={a.b in xs}>x</li>"))
     # (A line break, then a regexp, after `in` and `when`.)
     out = code_of("<li :for={u in users\n  when /x/.match?(u)}>x</li>")
     assert(out.include?("if (/x/.match?(u))"))
     assert(code_of("<li :for={u in\n /a/.match(s).to_a}>x</li>").include?("/a/.match(s).to_a"))
+  end
+
+  # A modifier, `and`, `or`, `then` or a bare `do` after a source is an
+  # error with the hint; the same words inside the source's own
+  # constructs, in parentheses, or in a guard are not (#67).
+  def test_for_source_takes_no_modifier
+    [
+      ["x in xs if c", "xs if c", "if"], ["x in xs unless c", "xs unless c", "unless"],
+      ["x in xs while c", "xs while c", "while"], ["x in xs and c", "xs and c", "and"],
+      ["x in xs or c", "xs or c", "or"], ["x in xs then", "xs then", "then"],
+      ["x in xs do |y| y end", "xs do |y| y end", "do"], ["x in xs if c, y in ys", "xs if c", "if"],
+      ["x in xs, y in ys and c", "ys and c", "and"]
+    ].each do |t|
+      head = t[0]
+      source = t[1]
+      word = t[2]
+      want = "v/t.html.bz:1: :for={... in #{source}}: `#{word}` cannot follow a :for's source (a for comprehension has no modifier): write `when cond` for a condition, or parenthesise the source"
+      assert_equal(want, error_of("<li :for={#{head}}>x</li>"), head)
+    end
+    {
+      "x in xs when c" => "xs.each do |x|",
+      "x in (xs if c)" => "((xs if c)).each do |x|",
+      "x in xs.select { |y| y if c }" => "(xs.select { |y| y if c }).each do |x|",
+      "x in xs.map do |y| y end" => "(xs.map do |y| y end).each do |x|",
+      "x in f(a) do |y| y end" => "(f(a) do |y| y end).each do |x|",
+      "x in (items do |y| y end)" => "((items do |y| y end)).each do |x|",
+      "x in xs when x if c" => "if (x if c)",
+      "x in xs when a and b" => "if (a and b)",
+      "x in (a or b)" => "((a or b)).each do |x|",
+      "x in xs.select { |y| y and z }" => "(xs.select { |y| y and z }).each do |x|",
+      "x in (if c then xs else ys end)" => "((if c then xs else ys end)).each do |x|",
+      "x in case a when 1 then xs else ys end" => "(case a when 1 then xs else ys end).each do |x|",
+      "x in xs, y in ys" => "ys.each do |y|"
+    }.each do |head, wanted|
+      out = code_of("<li :for={#{head}}>x</li>")
+      assert(out.include?(wanted), "#{head}: #{out}")
+    end
+    # The hint lists only patterns that compile.
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<li :for={1 in xs}>x</li>"))
+    assert(code_of("<li :for={first, *rest in rows}>x</li>").include?("rows.each do |first, *rest|"))
+    # A parenthesised pattern is refused, with what to write instead.
+    destructure = "v/t.html.bz:1: :for's pattern cannot take an element apart (`(a, b)`): Quarz has no destructuring block parameters; name the element and use its parts in the content (`:for={pair in pairs}`, then `{pair[0]}`)"
+    ["(a, b), c in xs", "(a, b) in xs", "(a, b), *c in xs", "k, (a, b) in h"].each do |head|
+      assert_equal(destructure, error_of("<li :for={#{head}}>x</li>"), head)
+    end
+    assert(code_of("<li :for={k, v in h}>x</li>").include?("h.each do |k, v|"))
+    assert(code_of("<li :for={pair in pairs}>{pair[0]}</li>").include?("pairs.each do |pair|"))
   end
 
   def test_for_with_if_and_unless
@@ -454,7 +499,7 @@ class TemplatesTest < Test::Case
     assert(code_of("<HTTPS/>").include?("h.component(HTTPS.new)"))
     # (`{args == 1}` is an expression; a bad pattern is an error here.)
     assert(code_of("<p>{args == 1}</p>").include?("h.put((args == 1))"))
-    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`k, v`, `(a, b), c`, `*rest`)", error_of("<p :for={k, v, in h}>x</p>"))
+    assert_equal("v/t.html.bz:1: :for's pattern is names, as block parameters are (`x`, `k, v`, `first, *rest`)", error_of("<p :for={k, v, in h}>x</p>"))
     assert_equal("v/t.html.bz:1: </.card> does not close <Card> (line 1)", error_of("<Card></.card>"))
     assert_equal("v/t.html.bz:1: </card> does not close <Card> (line 1)", error_of("<Card></card>"))
     assert_equal("v/t.html.bz:1: <:f> cannot have :for, :if or :unless", error_of("<Card><:f :unless={a}>x</:f></Card>"))
