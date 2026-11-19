@@ -1,9 +1,9 @@
-# Writes the fields of a form over a rotor changeset (`HtmlBuilder#form_for`):
+# Writes the fields of a form over a rotor changeset ([HtmlBuilder#form_for]):
 # each field is named `<prefix>[<field>]` (`user[email]`), with the id
 # `<prefix>_<field>`, and shows the value the changeset holds: its
 # change, else the model's; for a permitted field with errors and no
 # change (a value that did not cast, or a blank required one), the input
-# as given, so that it shows as typed. `errors` writes the changeset's errors on a
+# as given, so that it shows as typed. [errors] writes the changeset's errors on a
 # field once a save was tried: while the changeset's `action` is nil
 # (a form shown before any save), its errors are not shown, so that a
 # new record's blank required fields are not reported before Save.

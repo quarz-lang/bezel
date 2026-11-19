@@ -38,7 +38,7 @@ end
 
 # Refuses a request whose Host header is not one of the application's
 # hosts (a 403), against DNS rebinding and links built from a forged
-# Host (`Conn#url`). A host is a name (`shop.example`), a name with a
+# Host ([Conn#url]). A host is a name (`shop.example`), a name with a
 # leading dot for it and its subdomains (`.shop.example`), or an
 # address; the port is ignored and case does not matter.
 #

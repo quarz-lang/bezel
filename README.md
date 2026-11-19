@@ -1,7 +1,7 @@
 # bezel
 
 A web framework for [Quarz](https://quarz.dev), in the shape of
-Phoenix: an immutable `Conn` flows through plugs, a router and a
+Phoenix: an immutable [Bezel::Conn] flows through plugs, a router and a
 controller action, and comes out with a response. Data goes through
 [rotor](https://github.com/quarz-lang/rotor) on PostgreSQL
 ([pg](https://github.com/quarz-lang/pg)). Nothing is looked up by
@@ -16,7 +16,7 @@ Bezel = { git = "https://github.com/quarz-lang/bezel", branch = "main" }
 The API reference is at <https://bezel.api.quarz.dev>.
 
 Work in progress (the plan is issue #1). What exists: the connection,
-parameters, plugs, endpoints, configuration, error pages, `Bezel.start`,
+parameters, plugs, endpoints, configuration, error pages, [Bezel.start],
 the built-in plugs, the router and controllers, and the HTML DSL with
 forms over rotor's changesets, sessions, the flash, CSRF protection,
 secure headers, host authorization, password hashes and signed tokens,
@@ -43,31 +43,31 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
                              prod: Bezel::Settings.new(port: 8080)})
 ```
 
-- **`Bezel::Conn`** is a `data` value: the request, the merged
-  parameters (`Bezel::Params`: query, body, path; `params.int("id")`,
+- **[Bezel::Conn]** is a `data` value: the request, the merged
+  parameters ([Bezel::Params]: query, body, path; `params.int("id")`,
   `params["user"].fetch("email")`, a missing or malformed one a `400`),
   assigns, session and flash, and the response being made (status,
   headers, body, `halted?`). Every change makes a new one.
-- **A plug** is a `Bezel::Plug` (`call(conn) -> Conn`, and `wrap` for
-  one that acts around the rest, as `Logger` and `Timeout` do) or a
+- **A plug** is a [Bezel::Plug] (`call(conn) -> Conn`, and `wrap` for
+  one that acts around the rest, as [Logger] and `Timeout` do) or a
   block (`Bezel.plug { |conn| ... }`). A plug that answers halts the
   pipeline; an exception a plug raises halts it too, kept in the
   connection (`conn.error`) with what the plugs before it did.
 - **An endpoint** lists its plugs in `def self.plugs`. A request no plug
   answers is a `404`. An exception is answered with the error page:
-  `Bezel::NotFound`, `Bezel::Forbidden` and the other `HTTP::Error`s with
+  [Bezel::NotFound], [Bezel::Forbidden] and the other [HTTP::Error]s with
   their status, anything else with `500`, reported to the endpoint's
   `on_error`. In `dev` and `test` the page shows the exception, its
   backtrace and the request (HTML, or JSON for a JSON `Accept`); in
   `prod` it shows the status only. Headers the plugs set (the request
   id) stay on the error page.
-- **`Bezel::Config`** reads `BEZEL_ENV` (`dev`, `test`, `prod`; `prod` when unset, so that a deploy that forgets it shows no backtraces), `HOST`,
+- **[Bezel::Config]** reads `BEZEL_ENV` (`dev`, `test`, `prod`; `prod` when unset, so that a deploy that forgets it shows no backtraces), `HOST`,
   `PORT`, `DATABASE_URL`, `POOL_SIZE`, `SECRET_KEY_BASE` (required in
   `prod`, 64 bytes or more), `TRUSTED_PROXIES`, `TLS_CERT`/`TLS_KEY` and
-  `LOG_LEVEL` over the application's own `Bezel::Settings` per
+  `LOG_LEVEL` over the application's own [Bezel::Settings] per
   environment.
-- **`Bezel.start`** serves the endpoint with `HTTP::Server`, opens a
-  `PG::Pool` when there is a `DATABASE_URL`, and stops gracefully on
+- **[Bezel.start]** serves the endpoint with [HTTP::Server], opens a
+  [PG::Pool] when there is a `DATABASE_URL`, and stops gracefully on
   `SIGTERM` and `SIGINT` (a second signal ends the process at once).
 
 A router declares its routes in one `routes` block, checked where it is
@@ -113,15 +113,15 @@ Shop::Router.user_post_path(user_id: 5, id: 2)      # => "/users/5/posts/2"
 - `resources` makes the seven routes (`index`, `new`, `create`, `show`,
   `edit`, `update` with `PATCH` and `PUT`, `delete`), `only:`/`except:`
   choose, and a block nests routes under `/{user_id}`.
-- Matching is the standard `HTTP::Router`'s: the most specific pattern,
+- Matching is the standard [HTTP::Router]'s: the most specific pattern,
   `HEAD` by `GET`, `405` with `Allow` for another method's path.
 
-Views are Quarz code: `Bezel.html` gives a builder with a method per
+Views are Quarz code: [Bezel.html] gives a builder with a method per
 HTML element, every text and attribute escaped, attributes as typed
 keywords (`class_name:` is the `class` attribute, since `class` cannot
 name a parameter; `class:` waits for quarz-lang/quarz#382). A layout is
 a function taking the inner HTML; a component includes
-`Bezel::Component`; a form over a changeset shows its values and, once
+[Bezel::Component]; a form over a changeset shows its values and, once
 a save was tried (the changeset's `action` is set), its errors:
 
 ```crystal
@@ -155,7 +155,7 @@ end
   `data-confirm` for the application's script.
 
 Templates are HTML with Quarz expressions (`*.html.bz`), compiled ahead
-of time into DSL code (`Bezel::Templates`; `bezel templates` writes
+of time into DSL code ([Bezel::Templates]; `bezel templates` writes
 `src/views/generated/`, committed, with each template's digest in the
 header). Nothing is interpreted at run time and the generated code is
 type-checked and escaped as hand-written DSL code is:
@@ -169,8 +169,8 @@ type-checked and escaped as hand-written DSL code is:
 <Card title="Help">{users.size} users.<:footer>{raw(banner)}</:footer></Card>
 ```
 
-- `{expr}` writes a value escaped (a `Bezel::Html` as it is, nil as
-  nothing); `{raw(expr)}`, like `Bezel::Html.raw` in the code, writes a
+- `{expr}` writes a value escaped (a [Bezel::Html] as it is, nil as
+  nothing); `{raw(expr)}`, like [Bezel::Html.raw] in the code, writes a
   string unescaped, and nothing else does.
 - `{args ...}` first declares the template's parameters, as a `def`'s.
 - `:for`, `:if` and `:unless` repeat or guard an element. `:for` takes
@@ -194,7 +194,7 @@ type-checked and escaped as hand-written DSL code is:
 - A capitalised tag is a component (`<Card title="Help">` is
   `Card.new(title: "Help")`, the content its `content`; `<Admin::Card>`
   names a namespaced one), a lower-case tag is HTML. `<:footer>` is a
-  slot (a `footer:` argument, a `Bezel::Html`).
+  slot (a `footer:` argument, a [Bezel::Html]).
 - The earlier spellings `<-`, `{@args ...}` and `<.card>` are errors that
   name the new one.
 - Code in braces is one expression the compiler can delimit as Quarz
@@ -228,8 +228,8 @@ end
 - CSRF: unsafe methods need the session's token (masked per request) in
   `_csrf_token` or `X-CSRF-Token`, and a request from another origin
   (`Origin`, `Sec-Fetch-Site`) is refused.
-- `Bezel::Password.hash/verify?/needs_rehash?` (argon2id, `Crypto::Argon2`,
-  with the cost of `Settings`'s `password_params:`) and
+- `Bezel::Password.hash/verify?/needs_rehash?` (argon2id, [Crypto::Argon2],
+  with the cost of [Bezel::Settings]'s `password_params:`) and
   `Bezel::Token.sign/verify` (HMAC, expiring, bound to a purpose, and to
   a `fingerprint` such as the password hash so that a reset link stops
   working once used) for links sent by mail.
@@ -242,7 +242,7 @@ end
   `put` starts a new session.
 
 An application is tested through its endpoint, in the test's task,
-without sockets (`Bezel::Testing`):
+without sockets ([Bezel::Testing]):
 
 ```crystal
 res = Bezel::Testing.get(Shop::Endpoint, "/users")

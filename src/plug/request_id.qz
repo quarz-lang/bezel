@@ -1,7 +1,7 @@
 # Gives each request an id: the request's `X-Request-Id` when it is a
 # sane one (20 to 200 characters of letters, digits, `+`, `/`, `=`, `_`
 # and `-`, as a proxy in front makes), else a new random one. The id is
-# `Conn#request_id` and goes back in the response's `X-Request-Id`, so
+# [Conn#request_id] and goes back in the response's `X-Request-Id`, so
 # that a log line and a client's report can be matched.
 #
 # ```
@@ -14,7 +14,7 @@ class Plug::RequestId
 
   @header: String
 
-  # The plug, reading and writing the header `header`.
+  # The plug, reading and writing the header [header].
   def initialize(@header: String = "x-request-id"); end
 
   # The header read and written.

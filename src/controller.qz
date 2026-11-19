@@ -1,8 +1,8 @@
 # The base of an application's controllers. A controller's actions are
-# its public methods taking and returning a `Conn` (but the helpers
+# its public methods taking and returning a [Conn] (but the helpers
 # below), which the router calls for its routes. Its body declares its
 # plugs, one `plug` (or `skip`) line each, or, without plugs of its own,
-# writes `controller`; either generates `dispatch` over the actions, which
+# writes `controller`; either generates [dispatch] over the actions, which
 # runs the plugs before them:
 #
 # ```
@@ -20,10 +20,10 @@
 # Pages.new.dispatch(:gone, c).status        # => 302
 # ```
 #
-# The helpers answer, as `Conn`'s methods do, and halt. A controller has
+# The helpers answer, as [Conn]'s methods do, and halt. A controller has
 # no state: the router makes one for each request (`make`), so its
-# `initialize` takes no argument. The class is abstract: a controller declares its
-# plug lines or a `controller` statement, which generate `dispatch`, and
+# [initialize] takes no argument. The class is abstract: a controller declares its
+# plug lines or a `controller` statement, which generate [dispatch], and
 # one with neither is a compile error.
 abstract class Controller
   # A controller.
@@ -39,12 +39,12 @@ abstract class Controller
   abstract def dispatch(action: Symbol, conn: Conn) -> Conn
 
   # The plugs the controller declared, its ancestors' first (generated
-  # with `dispatch`; a subclass's runs them too).
+  # with [dispatch]; a subclass's runs them too).
   def self.controller_plugs -> Array[ControllerPlug] = []
 
-  # Declares a controller without plugs of its own: generates `dispatch`
-  # over its actions (its public methods taking and returning a `Conn`,
-  # written or inherited, but those of `Bezel::Controller` and the plugs),
+  # Declares a controller without plugs of its own: generates [dispatch]
+  # over its actions (its public methods taking and returning a [Conn],
+  # written or inherited, but those of [Bezel::Controller] and the plugs),
   # running the superclass's plugs only. A body with plug lines does
   # without it (and refuses it).
   static def self.controller -> Void
@@ -73,10 +73,10 @@ abstract class Controller
   end
 
   # Runs the controller's method `method` (private ones too, taking and
-  # returning a `Conn`) before the actions `only` names (all when empty),
+  # returning a [Conn]) before the actions `only` names (all when empty),
   # but those `except` names: a statement of the class body, one per plug,
   # run in order before the action they apply to, until one halts, after
-  # the plugs the superclass declared. The class's `dispatch` is generated
+  # the plugs the superclass declared. The class's [dispatch] is generated
   # once its body ends. A plug method that does not exist or has another
   # signature, or an action named in `only:` or `except:` that does not
   # exist, is a compile error when the body ends (the methods are usually
@@ -169,8 +169,8 @@ abstract class Controller
   end
 
   # Whether `m` has an action's shape: public (as `methods` lists them),
-  # one parameter, a `Conn`, returning a `Conn`, and not a method of
-  # `Bezel::Controller`.
+  # one parameter, a [Conn], returning a [Conn], and not a method of
+  # [Bezel::Controller].
   static def self.action?(m: Meta::MethodSig) -> Bool
     m.params.size == 1 && m.params[0].type == Conn && m.params[0].kind == Meta::ParamKind::Required &&
       m.result == Conn && !Controller.methods.any? { |c| c.name == m.name }
@@ -186,7 +186,7 @@ abstract class Controller
   # `conn` answered with `value` as JSON, and halted.
   def json(conn: Conn, value: JSON::Value, status: Int = conn.status) -> Conn = conn.json(value, status: status)
 
-  # `conn` answered with the text `text`, and halted.
+  # `conn` answered with the text [text], and halted.
   def text(conn: Conn, text: String, status: Int = conn.status) -> Conn = conn.text(text, status: status)
 
   # `conn` answered with a redirect to `to` (`302 Found`, or `status`; a
@@ -194,8 +194,8 @@ abstract class Controller
   def redirect(conn: Conn, *, to: String, status: Int = 302) -> Conn = conn.redirect(to, status: status)
 
   # `conn` answered with the file at `path` (its content type
-  # `content_type`, else by its extension, as `Plug::Static` gives it), and
-  # halted: `Bezel::NotFound` when there is no such file. The path is the
+  # `content_type`, else by its extension, as [Plug::Static] gives it), and
+  # halted: [Bezel::NotFound] when there is no such file. The path is the
   # application's, never one from the request.
   def send_file(conn: Conn, path: String, content_type: String? = nil) -> Conn
     raise NotFound.new unless File.file?(path)
@@ -212,7 +212,7 @@ abstract class Controller
   # `conn`, halted.
   def halt(conn: Conn) -> Conn = conn.halt
 
-  # The repository of the application's database: `Bezel::ConfigError`
+  # The repository of the application's database: [Bezel::ConfigError]
   # when it has none (no DATABASE_URL).
   def repo(conn: Conn) -> Rotor::Repo = conn.repo
 
@@ -293,8 +293,8 @@ end
 # A `plug` or `skip` line of a controller's body.
 data PlugLine = (skip: Bool, method: Symbol, only: Array[Symbol], except: Array[Symbol])
 
-# A `skip` of a plug: before the actions `only` names (all when it and
-# `except` are empty), but those `except` names.
+# A `skip` of a plug: before the actions [only] names (all when it and
+# [except] are empty), but those [except] names.
 data PlugSkip(only: Array[Symbol], except: Array[Symbol])
   # Whether the skip keeps the plug from running before `action`.
   def covers?(action: Symbol) -> Bool = (only.empty? || only.include?(action)) && !except.include?(action)

@@ -1,17 +1,17 @@
 # The application's program: what `bezel` runs in it (`quarz run --
 # routes`), and serving without arguments. Returns the exit status.
 #
-# - (no arguments) or `server`: serves, as `Bezel.start`.
-# - `routes`: prints the router's routes, a line each (`Route#to_s`).
+# - (no arguments) or `server`: serves, as [Bezel.start].
+# - `routes`: prints the router's routes, a line each ([Route#to_s]).
 # - `migrate [--to VERSION]`, `rollback [--steps N | --to VERSION]`,
-#   `status`: runs `Rotor::Migrator` with `migrations` over the
+#   `status`: runs [Rotor::Migrator] with `migrations` over the
 #   database of DATABASE_URL, logging each migration to the standard
 #   output; options `--allow-out-of-order`, `--lock-timeout MS` and
 #   `--table NAME` pass through.
 #
 # A wrong command or option prints the usage on the standard error and
 # returns 2; a failure (no DATABASE_URL, a migration error) prints it
-# and returns 1. `config` replaces the configuration `Config.load` makes
+# and returns 1. `config` replaces the configuration [Config.load] makes
 # of the environment and `settings`.
 #
 # ```quarz no_run
@@ -63,7 +63,7 @@ end
 # :nodoc:
 # The commands of `Bezel.main`.
 module Tasks
-  # A command or option `Bezel.main` does not take.
+  # A command or option [Bezel.main] does not take.
   class UsageError < StandardError
   end
 

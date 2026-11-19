@@ -1,9 +1,9 @@
 # Serves `endpoint` until the process is told to stop: loads the
-# configuration (`Bezel::Config.load` over the application's `settings`,
+# configuration ([Bezel::Config.load] over the application's `settings`,
 # `{dev: MyApp::Config.dev, ...}`, its name taken from the endpoint's
 # namespace, MyApp::Endpoint giving `my_app`; or `config` when given),
 # opens the database's pool when there is a DATABASE_URL, and runs an
-# `HTTP::Server` with the endpoint's handler on HOST:PORT (HTTPS with
+# [HTTP::Server] with the endpoint's handler on HOST:PORT (HTTPS with
 # TLS_CERT and TLS_KEY).
 #
 # SIGTERM shuts the server down gracefully: no new connections, the
@@ -13,8 +13,8 @@
 # never waits. Returns once the server has stopped and the pool is
 # closed, with the default actions of SIGTERM and SIGINT back: traps the
 # application set for them before are dropped, not restored. A task's
-# configuration (`Config.for_task` in prod without SECRET_KEY_BASE) is
-# refused at once (`Bezel::ConfigError`): it signs no session.
+# configuration ([Config.for_task] in prod without SECRET_KEY_BASE) is
+# refused at once ([Bezel::ConfigError]): it signs no session.
 #
 # ```quarz no_run
 # # src/main.qz of an application
@@ -60,7 +60,7 @@ public def start(endpoint: Type[Endpoint], settings: Hash[Symbol, Settings] = {}
   end
 end
 
-# The server `Bezel.start` runs, for `endpoint` in `app`, bound at once
+# The server [Bezel.start] runs, for `endpoint` in `app`, bound at once
 # (`port` 0 picks a free port: a test reads it from `local_address`),
 # not yet serving.
 public def server(endpoint: Type[Endpoint], app: App, *, port: Int? = nil) -> HTTP::Server

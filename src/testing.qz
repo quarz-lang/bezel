@@ -22,19 +22,19 @@
 # Bezel::Testing.html_response(res, 200).has_text?("Hello")   # => true
 # ```
 #
-# `Testing.get` and friends make one request each; a `Testing::Client`
+# [Testing.get] and friends make one request each; a [Testing::Client]
 # keeps cookies between requests, as a browser does (sessions, the
 # flash, a login), and follows redirects. The applications they run in
-# are `test` ones whose CSRF check is off (`App#skip_csrf`, a flag the
+# are `test` ones whose CSRF check is off ([App#skip_csrf], a flag the
 # program sets and `prod` refuses), so that a test posts without a
 # token; `Testing.app(skip_csrf: false)` tests the check itself.
 #
-# The response helpers check the status and raise `Test::AssertionFailed`
+# The response helpers check the status and raise [Test::AssertionFailed]
 # otherwise, with the body's start, so that a test fails as an
 # assertion does.
 module Testing
   # A `test` application named `name`, without a database (`pool` to
-  # give one: `PG::Testing`'s), the CSRF check off unless `skip_csrf` is
+  # give one: [PG::Testing]'s), the CSRF check off unless `skip_csrf` is
   # false.
   def self.app(name: String = "bezel", *, pool: PG::Pool? = nil, skip_csrf: Bool = true) -> App
     App.new(Config.load(name, environ: {"BEZEL_ENV" => "test"}, quiet: true), pool, skip_csrf)
@@ -72,7 +72,7 @@ module Testing
     Testing::Client.new(endpoint, app).delete(path, params: params, json: json, headers: headers)
   end
 
-  # The page of `res`, parsed (`Testing::Doc`), after checking that its
+  # The page of `res`, parsed ([Testing::Doc]), after checking that its
   # status is `status` and that it is HTML.
   def self.html_response(res: HTTP::Server::Response, status: Int = 200) -> Testing::Doc
     Testing.check_status(res, status)
@@ -162,7 +162,7 @@ class Testing::Client
   @host: String = "www.example.com"
   var @last_target: String = "/"
 
-  # A client of `endpoint` in `app`; `session_key` names the session's
+  # A client of `endpoint` in `app`; [session_key] names the session's
   # cookie (found by itself among the cookies otherwise: the one that
   # decrypts).
   def initialize(@endpoint: Type[Endpoint], @app: App = Testing.app, *, @session_key: String? = nil); end
@@ -190,15 +190,15 @@ class Testing::Client
   def post(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
            headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("POST", path, params, json, headers)
 
-  # A PUT: `post`'s arguments.
+  # A PUT: [post]'s arguments.
   def put(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
           headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("PUT", path, params, json, headers)
 
-  # A PATCH: `post`'s arguments.
+  # A PATCH: [post]'s arguments.
   def patch(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
             headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("PATCH", path, params, json, headers)
 
-  # A DELETE: `post`'s arguments.
+  # A DELETE: [post]'s arguments.
   def delete(path: String, *, params: Hash[String, String | Array[String]] = {}, json: JSON::Value? = nil,
              headers: Hash[String, String] = {}) -> HTTP::Server::Response = send_body("DELETE", path, params, json, headers)
 
@@ -206,7 +206,7 @@ class Testing::Client
   # the last request's target (`?page=2`, `edit`, `../x`,
   # `//www.example.com/x`, `http://www.example.com:80/x`; an empty or
   # fragment-only location is the last target again), dot segments
-  # removed; `Test::AssertionFailed` for another host or a location that
+  # removed; [Test::AssertionFailed] for another host or a location that
   # is no HTTP one (`mailto:`). The fragment is dropped.
   def follow_redirect(res: HTTP::Server::Response = last) -> HTTP::Server::Response
     location = Testing.redirected_to(res, nil).partition("#")[0]

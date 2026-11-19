@@ -1,5 +1,5 @@
 # The template compiler: HEEx-like templates (`*.html.bz`) made into
-# Quarz code over the HTML DSL (`Bezel.html`), which `bezel templates`
+# Quarz code over the HTML DSL ([Bezel.html]), which `bezel templates`
 # writes to `src/views/generated/` and the application compiles as its
 # own code. Nothing is interpreted at run time; the generated code is
 # type-checked as any other, and escapes as the DSL does.
@@ -14,10 +14,10 @@
 #
 # - `{expr}`: the value of a Quarz expression, in a text or as an
 #   attribute's value (`href={Routes.user_path(id: user.id)}`). A
-#   `String` (or any value, by `to_s`) is escaped, a `Bezel::Html` is
+#   [String] (or any value, by `to_s`) is escaped, a [Bezel::Html] is
 #   written as it is, nil writes nothing. `{raw(expr)}` writes a
-#   `String` unescaped, as does a `Bezel::Html` the code made with
-#   `Html.raw`: nothing else is unescaped, and the caller vouches for
+#   [String] unescaped, as does a [Bezel::Html] the code made with
+#   [Html.raw]: nothing else is unescaped, and the caller vouches for
 #   what these write.
 #   A `{` in a text is written `{"{"}`.
 # - `{args name: Type, ...}` first: the parameters of the method the
@@ -35,13 +35,13 @@
 #   written as nested `each`, a `when` an `if` inside its iterator; with
 #   `:if` or `:unless` too, the condition is tested for each element.
 # - `<Card title="x">...</Card>`: the component class Card (including
-#   `Bezel::Component`; `<Admin::UserCard>` is Admin::UserCard: a
+#   [Bezel::Component]; `<Admin::UserCard>` is Admin::UserCard: a
 #   capitalised tag is a component, a lower-case one an element), made
 #   with the attributes as keyword arguments
 #   (`Card.new(title: "x")`, `class` as `class_name`, a `-` as `_`, a
 #   bare one `true`) and given the content as its `content`. A slot
 #   `<:footer>...</:footer>` directly inside one is the keyword argument
-#   `footer:`, a `Bezel::Html`.
+#   `footer:`, a [Bezel::Html].
 # - `<!-- ... -->`: a comment of the template, left out of the page
 #   (but in `textarea` and `title`, whose content is text).
 #
@@ -76,7 +76,7 @@
 # generated code names the builder `h` and the slots' contents
 # `__bz_slot_<n>`, which the template's own names avoid.
 #
-# A template that cannot compile is a `Templates::Error` naming its path
+# A template that cannot compile is a [Templates::Error] naming its path
 # and line.
 module Templates
   # A template: its path (named in errors and in the generated file's
@@ -283,7 +283,7 @@ class Templates::Error < StandardError
   @path: String
   @line: Int
 
-  # The error at `line` of `path`, saying `problem`.
+  # The error at [line] of [path], saying `problem`.
   def initialize(@path: String, @line: Int, problem: String)
     super("#{@path}:#{@line}: #{problem}")
   end

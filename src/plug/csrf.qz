@@ -1,21 +1,21 @@
 # The request did not prove that it came from the application's own
-# pages: `Plug::CSRF` refused it (a 403).
+# pages: [Plug::CSRF] refused it (a 403).
 class InvalidCSRFToken < Forbidden
-  # The error, its message `message`.
+  # The error, its message [message].
   def initialize(message: String = "Invalid CSRF token")
     super(message)
   end
 end
 
 # Protects a browser pipeline against cross-site request forgery (after
-# `Plug::Session`):
+# [Plug::Session]):
 #
 # - Each session gets a secret token (in the session, `_csrf_token`).
 #   Pages carry it masked (a fresh one-time pad per request, so that it
-#   never repeats in a compressed response): `Conn#csrf_token`, which
+#   never repeats in a compressed response): [Conn#csrf_token], which
 #   `Bezel.html(conn)` puts in forms and non-GET links.
 # - A POST, PUT, PATCH or DELETE must send it back, in the form field
-#   `_csrf_token` or the header `X-CSRF-Token`, else `InvalidCSRFToken`
+#   `_csrf_token` or the header `X-CSRF-Token`, else [InvalidCSRFToken]
 #   (403).
 # - As a second check, such a request whose Origin is another origin
 #   than the request's (its scheme and Host header, default ports aside),

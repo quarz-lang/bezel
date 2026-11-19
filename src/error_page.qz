@@ -1,4 +1,4 @@
-# The answer to a request that raised: an `HTTP::Error` (`Bezel::NotFound`
+# The answer to a request that raised: an [HTTP::Error] ([Bezel::NotFound]
 # and the others) with its status, anything else with `500`.
 #
 # In `dev` and `test` the page shows the exception's class and message,

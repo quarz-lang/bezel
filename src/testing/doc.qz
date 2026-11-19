@@ -1,4 +1,4 @@
-# A parsed HTML page for tests to query (`Testing.html_response`): its
+# A parsed HTML page for tests to query ([Testing.html_response]): its
 # elements as a tree, found by a small selector language:
 #
 # - `tag`, "#id", ".class", `[attr]`, `[attr=value]` (quoted or not),
@@ -13,7 +13,7 @@
 # doc.has_text?("nothing")                              # => false
 # ```
 #
-# The parser reads well-formed HTML as `Bezel.html` writes it, and is
+# The parser reads well-formed HTML as [Bezel.html] writes it, and is
 # forgiving with the rest: void elements need no end tag, an end tag
 # closes up to its element, entities are decoded, comments and the
 # doctype are skipped, `script`, `style`, `textarea` and `title` hold
@@ -42,11 +42,11 @@ class Testing::Doc
   # The text of the page, whitespace collapsed.
   def text -> String = @root.text
 
-  # Whether the page's text has `text` (whitespace collapsed in both).
+  # Whether the page's text has [text] (whitespace collapsed in both).
   def has_text?(text: String) -> Bool = self.text.include?(Testing::Node.squish(text))
 end
 
-# An element of a `Testing::Doc` (or its root, without a tag), or a text.
+# An element of a [Testing::Doc] (or its root, without a tag), or a text.
 class Testing::Node
   @tag: String
   @attrs: Hash[String, String]
@@ -76,13 +76,13 @@ class Testing::Node
   # Whether this is a text.
   def text? -> Bool = !@text.nil?
 
-  # The classes of the `class` attribute.
+  # The classes of the [class] attribute.
   def classes -> Array[String] = (attr("class") || "").split(" ").reject(&:empty?)
 
   # The text inside, whitespace collapsed: inline elements joined as
   # they are (`Hello, <b>Ann</b>!` is `Hello, Ann!`), block elements
   # apart; `script`, `style`, `template` and `title` inside leave theirs
-  # out (the element's own `text` gives it).
+  # out (the element's own [text] gives it).
   def text -> String
     b = String::Builder.new
     write_text(b, true)
@@ -136,7 +136,7 @@ class Testing::Node
   # The elements under this one, in document order.
   def descendants -> Array[Testing::Node] = select("*")
 
-  # `text` with runs of whitespace as one space, trimmed.
+  # [text] with runs of whitespace as one space, trimmed.
   def self.squish(text: String) -> String = text.gsub(/\s+/, " ").strip
 
   # :nodoc:

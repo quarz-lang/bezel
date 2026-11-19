@@ -9,7 +9,7 @@ enum Param
   # A nested map.
   variant Map(entries: Hash[String, Param])
 
-  # The value as a plain one: a `String`, an `Array` of plain values or a
+  # The value as a plain one: a [String], an [Array] of plain values or a
   # `Hash[String, Object?]`, which rotor's changesets take.
   def to_plain -> Object?
     case self
@@ -21,10 +21,10 @@ enum Param
 end
 
 # A request's parameters, merged: the query's, then the body's (a form
-# or a JSON object, `Bezel::Plug::Parsers`), then the path's (the
+# or a JSON object, [Bezel::Plug::Parsers]), then the path's (the
 # router's), a later one replacing an earlier one of the same name.
-# Values are strings, lists and nested maps (`Bezel::Param`); the typed
-# readers raise `Bezel::BadRequest` (a `400`) for a parameter missing or
+# Values are strings, lists and nested maps ([Bezel::Param]); the typed
+# readers raise [Bezel::BadRequest] (a `400`) for a parameter missing or
 # malformed, so that an action reads what it needs in one call.
 #
 # ```
@@ -39,7 +39,7 @@ data Params(entries: Hash[String, Param])
   def self.empty -> Params = Params.new({})
 
   # The deepest nesting a parameter's name may have (`a[b][c]` is 2):
-  # deeper is `Bezel::BadRequest`.
+  # deeper is [Bezel::BadRequest].
   MAX_DEPTH = 32
 
   # The parameters of a query string or an `application/x-www-form-urlencoded`
@@ -51,7 +51,7 @@ data Params(entries: Hash[String, Param])
   # another kind of value (`a=1&a[]=2`, `a[]=1&a[b]=2`), a list of lists
   # (`a[][]=1`, which Rack reads otherwise), a nesting deeper than
   # `MAX_DEPTH` or a value that is not UTF-8 once decoded is
-  # `Bezel::BadRequest`.
+  # [Bezel::BadRequest].
   def self.from_query(query: String) -> Params
     return Params.empty if query.empty?
     root = ParamTree::Map.new
@@ -136,7 +136,7 @@ data Params(entries: Hash[String, Param])
   def param?(key: String) -> Param? = entries[key]?
 
   # The nested parameters under `key` (`params["user"]` for `user[email]`):
-  # `Bezel::BadRequest` when `key` is missing or not a map.
+  # [Bezel::BadRequest] when `key` is missing or not a map.
   def [](key: String) -> Params
     self[key]? || raise BadRequest.new("parameter `#{key}` is missing or not a map")
   end
@@ -150,7 +150,7 @@ data Params(entries: Hash[String, Param])
     end
   end
 
-  # The string `key`: `Bezel::BadRequest` when it is missing or not a
+  # The string `key`: [Bezel::BadRequest] when it is missing or not a
   # string.
   def fetch(key: String) -> String
     string?(key) || raise BadRequest.new("parameter `#{key}` is missing")
@@ -167,14 +167,14 @@ data Params(entries: Hash[String, Param])
     end
   end
 
-  # The integer `key`: `Bezel::BadRequest` when it is missing or not an
+  # The integer `key`: [Bezel::BadRequest] when it is missing or not an
   # integer.
   def int(key: String) -> Int
     int?(key) || raise BadRequest.new("parameter `#{key}` is missing")
   end
 
   # The integer `key`, nil when it is missing or empty;
-  # `Bezel::BadRequest` when it is not an integer.
+  # [Bezel::BadRequest] when it is not an integer.
   def int?(key: String) -> Int?
     s = string?(key)
     return nil if s.nil? || s.empty?
@@ -186,13 +186,13 @@ data Params(entries: Hash[String, Param])
     end
   end
 
-  # The number `key`: `Bezel::BadRequest` when it is missing or not a
+  # The number `key`: [Bezel::BadRequest] when it is missing or not a
   # number.
   def float(key: String) -> Float
     float?(key) || raise BadRequest.new("parameter `#{key}` is missing")
   end
 
-  # The number `key`, nil when it is missing or empty; `Bezel::BadRequest`
+  # The number `key`, nil when it is missing or empty; [Bezel::BadRequest]
   # when it is not a number.
   def float?(key: String) -> Float?
     s = string?(key)
@@ -204,7 +204,7 @@ data Params(entries: Hash[String, Param])
   # The boolean `key`: `true`, `1`, `on` and `yes` are true, `false`, `0`,
   # `off`, `no` and the empty string false, a missing one false (as an
   # unchecked checkbox sends nothing); anything else is
-  # `Bezel::BadRequest`.
+  # [Bezel::BadRequest].
   def bool(key: String) -> Bool
     s = string?(key)
     return false if s.nil?
@@ -216,7 +216,7 @@ data Params(entries: Hash[String, Param])
   end
 
   # The strings of the list `key` (a single string is a list of one, a
-  # missing key an empty list): `Bezel::BadRequest` when an element is not
+  # missing key an empty list): [Bezel::BadRequest] when an element is not
   # a string.
   def array(key: String) -> Array[String]
     case entries[key]?
@@ -233,8 +233,8 @@ data Params(entries: Hash[String, Param])
     end
   end
 
-  # The parameters as plain values (`String`, `Array`, `Hash`), the shape
-  # `Rotor::Changeset.cast` takes.
+  # The parameters as plain values ([String], [Array], [Hash]), the shape
+  # [Rotor::Changeset.cast] takes.
   def to_h -> Hash[String, Object?]
     out: Hash[String, Object?] = {}
     entries.each { |k, v| out = out.put(k, v.to_plain) }
@@ -270,7 +270,7 @@ end
 module ParamTree
   # A node.
   abstract class Node
-    # The node as a `Param`.
+    # The node as a [Param].
     abstract def to_param -> Param
   end
 
@@ -296,7 +296,7 @@ module ParamTree
 
     def to_param -> Param = Param::Map.new(to_entries)
 
-    # The entries as `Param`s.
+    # The entries as [Param]s.
     def to_entries -> Hash[String, Param]
       out: Hash[String, Param] = {}
       @entries.each_pair { |k, v| out = out.put(k, v.to_param) }

@@ -1,6 +1,6 @@
 # An application's entry: the plugs every request goes through, in
 # order, the last of them usually the router. An endpoint is a class
-# whose `plugs` the application writes; `Bezel.start` serves it, and a
+# whose `plugs` the application writes; [Bezel.start] serves it, and a
 # test calls it without a socket (`MyApp::Endpoint.call(req)`).
 #
 # ```
@@ -18,8 +18,8 @@
 # ```
 #
 # A request that no plug answers is `404 Not Found`. An exception a plug
-# raises is answered by `Bezel::ErrorPage` (an `HTTP::Error` with its
-# status, any other `StandardError` with `500`), and a `500` is reported
+# raises is answered by [Bezel::ErrorPage] (an [HTTP::Error] with its
+# status, any other [StandardError] with `500`), and a `500` is reported
 # to `on_error` first.
 abstract class Endpoint
   # The plugs, in order. An endpoint overrides it; the plugs are made
@@ -28,7 +28,7 @@ abstract class Endpoint
 
   # Reports an exception answered with `500`; `conn` is the connection
   # as the plug that raised received it (after the plugs before it: the
-  # method `Plug::MethodOverride` set, the body's parameters). By default to standard error, with its
+  # method [Plug::MethodOverride] set, the body's parameters). By default to standard error, with its
   # backtrace; override it to send errors elsewhere. An exception it
   # raises is written to standard error and goes no further.
   def self.on_error(error: Exception, conn: Conn) -> Void
@@ -36,7 +36,7 @@ abstract class Endpoint
     error.backtrace.first(20).each { |l| STDERR.puts "  #{l}" }
   end
 
-  # The endpoint as an `HTTP::Handler` for `app`: what `Bezel.start`
+  # The endpoint as an [HTTP::Handler] for `app`: what [Bezel.start]
   # gives the server.
   def self.handler(app: App = App.test) -> Runner = Runner.new(self, plugs, app)
 
