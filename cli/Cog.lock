@@ -6,16 +6,16 @@ inputs = "h1:tCojVaeeS4U36VVT/RbLF+FNi3zTuqNI+JebG36pXmw="
 name = "pg"
 module = "PG"
 source = "git+https://github.com/quarz-lang/pg"
-version = "0.0.0-0.20261107075934.8450dc99d8e2"
-rev = "8450dc99d8e2bd8916adfb0670e441661634e774"
-hash = "h1:FkS+o8Kk7GAPGRRdJGiFXBn02jKaSS+iZI2mIOwiXC0="
+version = "0.0.0-0.20261119023907.0ccc5cdc7fd1"
+rev = "0ccc5cdc7fd1b030f338a73b212079ed90677557"
+hash = "h1:60lnkLZsjsqfP2JoUzh+ERzAhbhHmEdpOtFobTGxOUA="
 dependencies = []
 
 [[cog]]
 name = "rotor"
 module = "Rotor"
 source = "git+https://github.com/quarz-lang/rotor"
-version = "0.0.0-0.20261107091931.97c5585328e9"
-rev = "97c5585328e99a74e7456afb594172b12d462cb0"
-hash = "h1:mlQdaIX70+NonA+MVG2TbJShcwWKg3KQW7RW7vcwfk8="
+version = "0.0.0-0.20261119112322.756b86a79996"
+rev = "756b86a799960401d16796a61c6b9fc4f7c5213e"
+hash = "h1:xhtwAgRGngHAjMiKohnnHyDcrAmjyLe9E9Jxm0Ss7HM="
 dependencies = ["git+https://github.com/quarz-lang/pg"]
