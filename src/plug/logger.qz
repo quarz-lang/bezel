@@ -1,4 +1,4 @@
-# What `Bezel::Plug::Logger` reports of one request.
+# What [Bezel::Plug::Logger] reports of one request.
 data LogEvent(
   # The method (`"GET"`).
   method: String,
@@ -18,14 +18,14 @@ data LogEvent(
 end
 
 # Logs one line per request, once the rest of the pipeline has answered,
-# with the status the client gets (`Conn#final_status`: 404 when nothing
+# with the status the client gets ([Conn#final_status]: 404 when nothing
 # answered, the error's when a plug raised), the method and path as this
-# plug received them (before `Plug::Head` or `Plug::MethodOverride`
-# change the method), and the request's id when `Plug::RequestId` ran
+# plug received them (before [Plug::Head] or [Plug::MethodOverride]
+# change the method), and the request's id when [Plug::RequestId] ran
 # before it: to standard error, or to
 # `on_event` when given (for structured logs). Lines are written at the
 # `info` level, so a LOG_LEVEL of `warn` or `error` silences them.
-# The path is written percent-decoded, as `Conn#path`; control
+# The path is written percent-decoded, as [Conn#path]; control
 # characters in it are escaped, so that a request cannot forge a line.
 class Plug::Logger
   include Plug

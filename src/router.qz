@@ -1,7 +1,7 @@
 # An application's router: a plug (the endpoint's last, usually) that
 # matches a request to a route of its `routes` statement, runs the
 # route's pipelines, and calls the route's action on its controller
-# (`Controller#dispatch`, which runs the controller's plugs first).
+# ([Controller#dispatch], which runs the controller's plugs first).
 #
 # ```
 # class ShopItems < Bezel::Controller
@@ -26,7 +26,7 @@
 # c.resp_body                                   # => HTTP::Content::Text(text: "item 7")
 # ```
 #
-# Matching is `HTTP::Router`'s: the most specific pattern wins, HEAD is
+# Matching is [HTTP::Router]'s: the most specific pattern wins, HEAD is
 # served by a GET route, and a path that only other methods have is
 # answered `405 Method Not Allowed` with Allow. A path no route has is
 # passed on (the endpoint answers `404`). The path's parameters are merged
@@ -35,18 +35,18 @@
 #
 # The `routes` statement checks, where the router is compiled, that each
 # route's controller has its action (a public method taking and returning
-# a `Conn`) and each pipeline named is a class method of the router
+# a [Conn]) and each pipeline named is a class method of the router
 # returning plugs. It generates the route helpers: for each named route,
 # a class method `<name>_path` taking the pattern's parameters as
 # keywords (`item_path(id: 7)`). A misspelt or missing keyword is a
-# compile error; a value is an `Int` or a `String`, checked when the
-# helper runs (`ArgumentError` for another, or for an empty, `.` or `..`
+# compile error; a value is an [Int] or a [String], checked when the
+# helper runs ([ArgumentError] for another, or for an empty, `.` or `..`
 # segment), and percent-encoded. `with_query` adds a query, and
-# `Conn#url` makes the path a URL.
+# [Conn#url] makes the path a URL.
 #
 # A controller whose dispatch does not cover the action routed to (a
 # subclass's action under its superclass's dispatch) answers with an
-# `ArgumentError` (a 500, reported to `on_error`).
+# [ArgumentError] (a 500, reported to `on_error`).
 abstract class Router
   include Plug
 
@@ -76,7 +76,7 @@ abstract class Router
   def self.pipeline_table -> Hash[Symbol, Array[Plug]] = {}
 
   # Declares the routes: the block runs where the router is compiled, on
-  # a `RouteBuilder` (`scope`, `get`/`post`/`put`/`patch`/`delete`,
+  # a [RouteBuilder] (`scope`, `get`/`post`/`put`/`patch`/`delete`,
   # `resources`).
   static def self.routes(&block: RouteBuilder.() -> Void) -> Void
     b = RouteBuilder.new
@@ -144,8 +144,8 @@ abstract class Router
     end
   end
 
-  # `pattern` with its parameters taken from `values` (an `Int` or a
-  # `String` each), percent-encoded; a `{name...}` one keeps its slashes.
+  # `pattern` with its parameters taken from `values` (an [Int] or a
+  # [String] each), percent-encoded; a `{name...}` one keeps its slashes.
   def self.fill(pattern: String, values: Hash[Symbol, Object]) -> String
     parts = pattern.split("/", -1).map do |seg|
       if seg.start_with?("{") && seg.end_with?("}")

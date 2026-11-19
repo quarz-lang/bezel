@@ -10,37 +10,37 @@ data Settings(
   # The database (`postgres://...`); nil for an application without one.
   database_url: String? = nil,
   # The proxies whose `X-Forwarded-*` headers are believed (addresses or
-  # networks, as `HTTP::Server`'s `trusted_proxies:`).
+  # networks, as [HTTP::Server]'s `trusted_proxies:`).
   trusted_proxies: Array[String]? = nil,
   # `:debug`, `:info`, `:warn` or `:error`.
   log_level: Symbol? = nil,
   # The size of the database's connection pool.
   pool_size: Int? = nil,
-  # The cost of `Bezel::Password`'s hashes (`Crypto::Argon2::Params::DEFAULT`
+  # The cost of [Bezel::Password]'s hashes (`Crypto::Argon2::Params::DEFAULT`
   # when nil).
   password_params: Crypto::Argon2::Params? = nil
 )
 end
 
-# An application's settings, for one environment: what `Config.load`
-# makes of the environment variables over the application's `Settings`.
+# An application's settings, for one environment: what [Config.load]
+# makes of the environment variables over the application's [Settings].
 #
 # | Variable | Setting | Default |
 # |---|---|---|
-# | BEZEL_ENV | `env`: `dev`, `test` or `prod` | `prod`: set `BEZEL_ENV=dev` when developing (`Bezel::App.test` sets `test`) |
+# | BEZEL_ENV | [env]: `dev`, `test` or `prod` | `prod`: set `BEZEL_ENV=dev` when developing ([Bezel::App.test] sets `test`) |
 # | HOST, PORT | where the server listens | `0.0.0.0`, `4000` |
-# | DATABASE_URL | the database, a `PG::Pool` behind `Rotor::Repo` | none |
+# | DATABASE_URL | the database, a [PG::Pool] behind [Rotor::Repo] | none |
 # | POOL_SIZE | the pool's connections | 10 |
 # | SECRET_KEY_BASE | the key sessions and tokens derive theirs from, 64 bytes or more | required in `prod`; derived from the application's name in `dev` and `test`, with a warning |
 # | TRUSTED_PROXIES | proxies, separated by commas | none |
 # | TLS_CERT, TLS_KEY | paths of the certificate chain and its key (PEM): HTTPS | none (behind a proxy) |
 # | LOG_LEVEL | `debug`, `info`, `warn` or `error` | `info` |
-# | (none) | `password_params`: the cost of `Bezel::Password`'s hashes | `Crypto::Argon2::Params::DEFAULT` |
+# | (none) | [password_params]: the cost of [Bezel::Password]'s hashes | `Crypto::Argon2::Params::DEFAULT` |
 #
 # A value that does not parse (a port, a level, a proxy, a database
 # URL, a certificate and its key, which are read), or a missing one that
-# is required, is a `Bezel::ConfigError` when the configuration is
-# loaded, before the server starts. Its `inspect` and `to_s` do not show the secret or the
+# is required, is a [Bezel::ConfigError] when the configuration is
+# loaded, before the server starts. Its [inspect] and [to_s] do not show the secret or the
 # database's URL.
 #
 # ```
@@ -72,7 +72,7 @@ data Config(
   tls_key: String?,
   # `:debug`, `:info`, `:warn` or `:error`.
   log_level: Symbol,
-  # The cost of `Bezel::Password`'s hashes.
+  # The cost of [Bezel::Password]'s hashes.
   password_params: Crypto::Argon2::Params = Crypto::Argon2::Params::DEFAULT
 )
   # The levels, least severe first.
@@ -81,8 +81,8 @@ data Config(
   # The environments.
   ENVS = [:dev, :test, :prod]
 
-  # The configuration of the application `app` from the environment
-  # variables `environ` over the `Settings` its environment has in
+  # The configuration of the application [app] from the environment
+  # variables `environ` over the [Settings] its environment has in
   # `settings` (`{dev: MyApp::Config.dev, prod: MyApp::Config.prod}`).
   # A secret derived for `dev` or `test` is announced on standard error,
   # once per load, unless `quiet`.
@@ -155,11 +155,11 @@ data Config(
   end
 
   # The configuration of a task that serves no request (a migration, a
-  # job worker): as `.load` makes it of the same environment and
+  # job worker): as [.load] makes it of the same environment and
   # settings, but SECRET_KEY_BASE is not required in `prod`, and the
   # derived secret of `dev` and `test` is not announced (it is the
   # server's, so a task's tokens verify there). In `prod` without one (or
-  # with one too short), its `secret_key_base` is a placeholder that signs
+  # with one too short), its [secret_key_base] is a placeholder that signs
   # nothing: such a task must not make sessions or tokens.
   #
   # ```
@@ -175,7 +175,7 @@ data Config(
   end
 
   # The placeholder secret of a task's configuration in `prod` without
-  # SECRET_KEY_BASE (`for_task`): `Bezel::Keys.derive` refuses it, so
+  # SECRET_KEY_BASE (`for_task`): [Bezel::Keys.derive] refuses it, so
   # that nothing is signed with it, and `load` refuses it as the
   # application's.
   TASK_SECRET = "-" * 64
@@ -217,7 +217,7 @@ data Config(
     (LOG_LEVELS.index(level) || 0) >= (LOG_LEVELS.index(log_level) || 0)
   end
 
-  # The server's TLS settings, read from `tls_cert` and `tls_key`, or nil
+  # The server's TLS settings, read from [tls_cert] and [tls_key], or nil
   # without them.
   def tls -> TLS::ServerConfig?
     cert = tls_cert
@@ -235,6 +235,6 @@ data Config(
       "password_params: #{password_params.inspect}>"
   end
 
-  # As `inspect`.
+  # As [inspect].
   def to_s -> String = inspect
 end

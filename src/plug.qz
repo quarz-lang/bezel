@@ -1,19 +1,19 @@
 # A step of an endpoint's pipeline: takes the connection and returns it
 # changed, as Elixir's Plug does. A plug that answers the request calls
-# `Conn#halt` (or one of `Conn#text`, `Conn#html`, `Conn#json`, `Conn#redirect`,
-# `Conn#send_resp`, which halt), and the plugs after it do not run.
+# [Conn#halt] (or one of [Conn#text], [Conn#html], [Conn#json], [Conn#redirect],
+# [Conn#send_resp], which halt), and the plugs after it do not run.
 #
 # Plugs are Shareable values, made once when the endpoint starts and
 # used by every request: their settings are fields, their state per
-# request goes in the `Conn`.
+# request goes in the [Conn].
 #
 # A plug that must act after the rest of the pipeline (logging the
-# status, a time limit) overrides `wrap`, which is given the rest as a
+# status, a time limit) overrides [wrap], which is given the rest as a
 # procedure. The rest does not raise: an exception a later plug raised
-# comes back as the connection's `Conn#error` (the connection halted),
-# which `wrap` may inspect, or replace by clearing `error` and answering
+# comes back as the connection's [Conn#error] (the connection halted),
+# which [wrap] may inspect, or replace by clearing `error` and answering
 # itself (`out.with(error: nil).html(page, status: 404)`); an endpoint's
-# "no route" `Bezel::NotFound` comes back so too.
+# "no route" [Bezel::NotFound] comes back so too.
 #
 # ```
 # data Hello(name: String)
@@ -37,14 +37,14 @@ module Plug
     c.halted? ? c : rest.call(c)
   end
 
-  # Runs `plugs` on `conn` in order, until one halts. A `StandardError`
+  # Runs `plugs` on `conn` in order, until one halts. A [StandardError]
   # a plug raises stops the pipeline: the result is the connection as
   # that plug received it (with what the plugs before it did: the
   # request id, headers), halted, the exception its `error`.
   def self.run(plugs: Array[Plug], conn: Conn) -> Conn = Plug.run_from(plugs, 0, conn, ->(c: Conn) { c })
 
   # Runs `plugs` on `conn` in order, then `rest`, until one halts: the
-  # plugs' `wrap`s are around `rest` too.
+  # plugs' [wrap]s are around `rest` too.
   def self.run(plugs: Array[Plug], conn: Conn, rest: (Conn) -> Conn) -> Conn = Plug.run_from(plugs, 0, conn, rest)
 
   # :nodoc:

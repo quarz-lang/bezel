@@ -1,16 +1,16 @@
-# Reads the request's body into its parameters (`Conn#params`, and
-# `Conn#body_params` alone) by its `Content-Type`:
+# Reads the request's body into its parameters ([Conn#params], and
+# [Conn#body_params] alone) by its `Content-Type`:
 #
 # - `:urlencoded`: `application/x-www-form-urlencoded`, with the nesting
-#   of `Bezel::Params.from_query`;
+#   of [Bezel::Params.from_query];
 # - `:json`: `application/json` and `application/*+json`; an object's
 #   members are the parameters, anything else is under `"_json"`.
 #
-# A body over `max_body` bytes is `Bezel::PayloadTooLarge` (`413`), one
-# that does not parse (or is not UTF-8) `Bezel::BadRequest` (`400`). A
+# A body over `max_body` bytes is [Bezel::PayloadTooLarge] (`413`), one
+# that does not parse (or is not UTF-8) [Bezel::BadRequest] (`400`). A
 # body of another type is left unread when its media type matches one of
 # `pass` (`"*/*"`, the default, passes every type; `"text/*"` a family;
-# `"application/xml"` one), and is `Bezel::UnsupportedMediaType` (`415`)
+# `"application/xml"` one), and is [Bezel::UnsupportedMediaType] (`415`)
 # otherwise. A request without a body, or without a `Content-Type`, is
 # passed on as it is, and so is a JSON body that turns out empty (a
 # chunked one).

@@ -1,9 +1,9 @@
 # Chooses the response's format among `formats` (`["html", "json"]`) and
-# sets `Conn#format` (`:html`): the `_format` parameter when there is
+# sets [Conn#format] (`:html`): the `_format` parameter when there is
 # one, else the request's Accept (its media ranges by their quality;
 # `*/*` or no Accept takes the first of `formats`). A request that
 # accepts none of them, or names another `_format`, is
-# `Bezel::NotAcceptable` (`406`).
+# [Bezel::NotAcceptable] (`406`).
 #
 # The formats and their media types: `html` (`text/html`, and
 # `application/xhtml+xml` when named exactly, so that `application/*` is

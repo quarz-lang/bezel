@@ -1,6 +1,6 @@
-# HTML that is safe to send: what `Bezel.html` builds, every text in it
-# escaped. (`Html.new(source)` is `Html.raw`: the caller vouches.) A value: it is concatenated with `+`, put in another page
-# with `HtmlBuilder#append`, and sent with `Conn#html` or a controller's
+# HTML that is safe to send: what [Bezel.html] builds, every text in it
+# escaped. (`Html.new(source)` is [Html.raw]: the caller vouches.) A value: it is concatenated with [+], put in another page
+# with [HtmlBuilder#append], and sent with [Conn#html] or a controller's
 # `render`.
 #
 # ```
@@ -35,8 +35,8 @@ data Html(source: String)
 end
 
 # A component: a class that renders a piece of HTML, given the HTML its
-# caller's block made (`Html.empty` without a block), with
-# `HtmlBuilder#component`.
+# caller's block made ([Html.empty] without a block), with
+# [HtmlBuilder#component].
 #
 # ```
 # class Card
@@ -59,8 +59,8 @@ module Component
   abstract def render(h: HtmlBuilder, content: Html) -> Void
 end
 
-# HTML made by the block, on a fresh `HtmlBuilder`. With `conn`, the
-# builder's forms carry the connection's CSRF token (`Conn#csrf_token`).
+# HTML made by the block, on a fresh [HtmlBuilder]. With `conn`, the
+# builder's forms carry the connection's CSRF token ([Conn#csrf_token]).
 public def html(conn: Conn? = nil, &block: (HtmlBuilder) -> Void) -> Html
   h = HtmlBuilder.new(conn&.csrf_token)
   block.call(h)
@@ -68,20 +68,20 @@ public def html(conn: Conn? = nil, &block: (HtmlBuilder) -> Void) -> Html
 end
 
 # Writes HTML: an element per method (`h.div`, `h.a`, ...; see
-# `HtmlBuilder` in src/html/elements.qz), each taking its content as a
+# [HtmlBuilder] in src/html/elements.qz), each taking its content as a
 # text (escaped) or a block, its attributes as keywords, and the global
-# ones (`id:`, `class_name:` for `class`, `style:`, `title:`, `lang:`,
+# ones (`id:`, `class_name:` for [class], `style:`, `title:`, `lang:`,
 # `dir:`, `hidden:`, `tabindex:`, `role:`, `data:` for `data-*`, `aria:`
-# for `aria-*`, and `attrs:` for any other). (`class` cannot name a
-# parameter; `class:` waits for quarz-lang/quarz#382.) A `String`
+# for `aria-*`, and `attrs:` for any other). ([class] cannot name a
+# parameter; `class:` waits for quarz-lang/quarz#382.) A [String]
 # attribute is escaped, nil leaves it out, `true` writes a boolean
 # attribute and `false` none; an attribute given twice is an
-# `ArgumentError`. A URL attribute (`href`, `src`, `action`,
-# `formaction`, `cite`, `poster`, a `srcset`'s candidates, a meta
+# [ArgumentError]. A URL attribute (`href`, `src`, `action`,
+# `formaction`, [cite], `poster`, a `srcset`'s candidates, a meta
 # refresh's `url=`, and those names and the other URL attributes of
 # `AttrList::URL_NAMES` in `attrs:`) must be relative or of the schemes
 # http, https, mailto or tel (`data:image/` for images): another
-# (`javascript:`) is an `ArgumentError`. `srcdoc` is refused. A `style`
+# (`javascript:`) is an [ArgumentError]. `srcdoc` is refused. A [style]
 # is escaped but not checked: do not build one from input.
 #
 # A form or link carries a CSRF token only when the builder has one:
@@ -94,23 +94,23 @@ class HtmlBuilder
   @out: String::Builder = String::Builder.new
   @csrf_token: String?
 
-  # A builder whose forms carry `csrf_token` (when given).
+  # A builder whose forms carry [csrf_token] (when given).
   def initialize(@csrf_token: String? = nil); end
 
   # The CSRF token forms carry, or nil.
   def csrf_token -> String? = @csrf_token
 
-  # What was written, as `Html` (the builder is left empty).
+  # What was written, as [Html] (the builder is left empty).
   def to_html -> Html = Html.new(@out.to_s)
 
-  # Writes `text`, escaped.
+  # Writes [text], escaped.
   def text(text: String) -> Void
     @out << Html.escape(text)
     nil
   end
 
-  # Writes `value` as a template's `{expr}` does: `Html` as it is, nil
-  # as nothing, anything else as its `to_s`, escaped.
+  # Writes `value` as a template's `{expr}` does: [Html] as it is, nil
+  # as nothing, anything else as its [to_s], escaped.
   def put(value: Object?) -> Void
     case value
     when Html then append(value)
@@ -119,13 +119,13 @@ class HtmlBuilder
     end
   end
 
-  # Writes `html` as it is: `Html` is safe already.
+  # Writes [html] as it is: [Html] is safe already.
   def append(html: Html) -> Void
     @out << html.source
     nil
   end
 
-  # Writes `source` without escaping it: the caller vouches that it is
+  # Writes [source] without escaping it: the caller vouches that it is
   # safe. Never pass it what a request sent.
   def raw(source: String) -> Void
     @out << source
@@ -144,7 +144,7 @@ class HtmlBuilder
     c.render(self, capture(&block))
   end
 
-  # The HTML the block writes, as `Html`, without writing it here.
+  # The HTML the block writes, as [Html], without writing it here.
   def capture(&block: () -> Void) -> Html
     saved = @out.to_s
     inner = ""
@@ -163,7 +163,7 @@ class HtmlBuilder
   # `data-confirm` for the application's script to ask with (bezel
   # ships none). For another method
   # (`:post`, `:put`, `:patch`, `:delete`), a form posting to `to` with a
-  # button labelled `text`, carrying `_method` (`Plug::MethodOverride`)
+  # button labelled [text], carrying `_method` ([Plug::MethodOverride])
   # and the CSRF token: a link cannot send another method, and a GET
   # must not change anything.
   def link(text: String, *, to: String, method: Symbol = :get, class_name: (String | Array[String?])? = nil,
@@ -194,11 +194,11 @@ class HtmlBuilder
 
   # A form over a rotor changeset: `<form action=... method="post">`
   # with `_method` for another method and the CSRF token, and the block
-  # given a `FormBuilder` whose fields read the changeset (see
-  # `FormBuilder`). The fields' names are `<as>[<field>]`, `as` by
+  # given a [FormBuilder] whose fields read the changeset (see
+  # [FormBuilder]). The fields' names are `<as>[<field>]`, `as` by
   # default the model's class name in snake_case (`user[email]`).
   # The changeset's errors show only once its `action` is set, as
-  # `Rotor::Repo`'s `insert`, `update` and `delete` set it: a form that
+  # [Rotor::Repo]'s `insert`, `update` and `delete` set it: a form that
   # validates without saving sets it itself (`cs.with_action(:validate)`).
   def form_for[M <: Rotor::Model](cs: Rotor::Changeset[M], *, action: String, method: Symbol = :post,
                                   as: String? = nil, class_name: (String | Array[String?])? = nil,
@@ -255,7 +255,7 @@ class HtmlBuilder
   end
 
   # The elements whose content the parser reads as text up to their end
-  # tag (raw text and RCDATA, and `noscript`, raw text when scripting is
+  # tag (raw text and RCDATA, and [noscript], raw text when scripting is
   # on).
   TEXT_CONTAINERS = ["textarea", "title", "noscript", "iframe", "noembed", "noframes", "xmp"]
 

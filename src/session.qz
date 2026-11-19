@@ -1,5 +1,5 @@
-# Where a session lives between requests: `Plug::Session` loads it for a
-# request and saves it when it changed. `Session::CookieStore` keeps it
+# Where a session lives between requests: [Plug::Session] loads it for a
+# request and saves it when it changed. [Session::CookieStore] keeps it
 # in an encrypted cookie; a store on the server (rotor-backed) can come
 # later behind the same interface.
 module Session::Store
@@ -17,11 +17,11 @@ end
 
 # A session kept in a cookie: its values as JSON, encrypted and
 # authenticated with AES-256-GCM under a key derived from
-# SECRET_KEY_BASE (`Keys`), the cookie's name as associated data. A
+# SECRET_KEY_BASE ([Keys]), the cookie's name as associated data. A
 # cookie that does not decrypt (another secret, tampered with, another
 # cookie's) reads as an empty session. The cookie is HttpOnly,
 # `SameSite=Lax`, `Path=/` and Secure outside `dev`, by default; a
-# session over `MAX_BYTES` once encoded is a `Bezel::CookieOverflow`.
+# session over `MAX_BYTES` once encoded is a [Bezel::CookieOverflow].
 #
 # The values can be read by nobody without the secret, but the cookie as
 # a whole can be replayed: logging out replaces it in the browser, not
@@ -45,7 +45,7 @@ class Session::CookieStore
   # per cookie, its name and attributes included).
   MAX_BYTES = 4000
 
-  # A store in the cookie `key`, kept `max_age` seconds (nil: until the
+  # A store in the cookie [key], kept `max_age` seconds (nil: until the
   # browser closes), Secure when `secure` (nil: outside `dev`).
   def initialize(*, key: String, max_age: Int? = nil, secure: Bool? = nil, same_site: String = "Lax",
                  domain: String? = nil)
@@ -134,7 +134,7 @@ type SessionStore = Session::Store
 # :nodoc:
 SessionCookieStore = Session::CookieStore
 
-# A session that does not fit its cookie (`Session::CookieStore`): a 500,
+# A session that does not fit its cookie ([Session::CookieStore]): a 500,
 # since the application put too much in it.
 class CookieOverflow < StandardError
 end

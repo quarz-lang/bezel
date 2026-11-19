@@ -1,10 +1,10 @@
 # What every request of an application shares: its configuration and,
-# with a DATABASE_URL, the database's pool. `Bezel.start` makes it;
+# with a DATABASE_URL, the database's pool. [Bezel.start] makes it;
 # a test makes one with `App.new(config)`.
 #
-# `skip_csrf` is `Bezel::Testing`'s: requests through `Plug::CSRF` need no
+# [skip_csrf] is [Bezel::Testing]'s: requests through [Plug::CSRF] need no
 # token. It comes from the program, never from a request, and is refused
-# in `prod` (`Bezel::ConfigError` at the first request it would skip).
+# in `prod` ([Bezel::ConfigError] at the first request it would skip).
 data App(config: Config, pool: PG::Pool? = nil, skip_csrf: Bool = false)
   # An application `name` in `test`, without a database: what a test of
   # an endpoint uses when it gives none.
@@ -13,16 +13,16 @@ data App(config: Config, pool: PG::Pool? = nil, skip_csrf: Bool = false)
   end
 end
 
-# The session's values, which `Plug::Session` loads from its store
-# (`Session::Store`) and writes back when they changed; empty, and not
-# `loaded`, without that plug. Values are strings (an application
+# The session's values, which [Plug::Session] loads from its store
+# ([Session::Store]) and writes back when they changed; empty, and not
+# [loaded], without that plug. Values are strings (an application
 # stores ids, not objects).
 data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: Bool = false, loaded: Bool = false)
   # The value of `key`, or nil.
   def [](key: String) -> String? = values[key]?
 
   # The session with `key` set to `value`.
-  # (After `drop`, a value put starts a new session: logging in after
+  # (After [drop], a value put starts a new session: logging in after
   # dropping the old one.)
   def put(key: String, value: String) -> Session = with(values: values.put(key, value), changed: true, dropped: false)
 
@@ -33,7 +33,7 @@ data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: 
   # fresh CSRF secret when it had one; a store deletes its cookie when
   # nothing is left, else writes the new one.
   # The CSRF secret goes too, replaced by a fresh one when the session had
-  # one, so that a page rendered after `drop` has a token that holds.
+  # one, so that a page rendered after [drop] has a token that holds.
   def drop -> Session
     fresh: Hash[String, String] = values.key?("_csrf_token") ? {"_csrf_token" => Plug::CSRF.new_secret} : {}
     Session.new(fresh, true, true, loaded)
@@ -41,8 +41,8 @@ data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: 
 
   # The session with a new CSRF secret (when it had one): the values
   # stay, so that a page rendered after it carries a token of the new
-  # secret. Against a session planted before a login, `drop` then `put`
-  # the user's id: `renew` keeps whatever else the planted cookie held.
+  # secret. Against a session planted before a login, [drop] then [put]
+  # the user's id: [renew] keeps whatever else the planted cookie held.
   # (A server-side store would change its id here too.)
   def renew -> Session
     v = values.key?("_csrf_token") ? values.put("_csrf_token", Plug::CSRF.new_secret) : values
@@ -50,11 +50,11 @@ data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: 
   end
 end
 
-# The flash: messages kept for the next request (`put`), and those the
-# previous request left (`[]`). the flash plug (bezel#6) carries
-# them in the session (`kept` is what goes there).
+# The flash: messages kept for the next request ([put]), and those the
+# previous request left ([\[\]]). the flash plug (bezel#6) carries
+# them in the session ([kept] is what goes there).
 data Flash(current: Hash[Symbol, String] = {}, kept: Hash[Symbol, String] = {})
-  # The message of `kind` the previous request left, or one `now` put.
+  # The message of `kind` the previous request left, or one [now] put.
   def [](kind: Symbol) -> String? = current[kind]?
 
   # The flash with `message` kept for the next request.
@@ -65,10 +65,10 @@ data Flash(current: Hash[Symbol, String] = {}, kept: Hash[Symbol, String] = {})
 end
 
 # A connection: one request and the response being made for it, flowing
-# through the plugs of an endpoint (`Bezel::Plug`). A `Conn` is a value:
-# every change makes a new one (`with`, or the methods below), which a
-# plug returns. A plug that answers (`send_resp` and friends) and stops
-# the rest of the pipeline also calls `halt`.
+# through the plugs of an endpoint ([Bezel::Plug]). A [Conn] is a value:
+# every change makes a new one ([with], or the methods below), which a
+# plug returns. A plug that answers ([send_resp] and friends) and stops
+# the rest of the pipeline also calls [halt].
 #
 # Not Shareable: the request's body is read from its connection.
 #
@@ -80,13 +80,13 @@ end
 # conn.to_response.headers["x-frame-options"] # => "DENY"
 # ```
 data Conn(
-  # The request, as the plugs left it (`Plug::MethodOverride` changes its
+  # The request, as the plugs left it ([Plug::MethodOverride] changes its
   # method).
   request: HTTP::Server::Request,
-  # The parameters: query, body (once `Plug::Parsers` ran), path (once the
+  # The parameters: query, body (once [Plug::Parsers] ran), path (once the
   # router matched), merged.
   params: Params,
-  # The body's parameters alone (`Bezel::Plug::Parsers`).
+  # The body's parameters alone ([Bezel::Plug::Parsers]).
   body_params: Params,
   # Values the plugs and the action pass on (the current user, say).
   assigns: Hash[Symbol, Object],
@@ -102,26 +102,26 @@ data Conn(
   resp_body: HTTP::Content?,
   # Whether a plug stopped the pipeline: the plugs after it do not run.
   halted: Bool,
-  # The request's id (`Bezel::Plug::RequestId`), or nil.
+  # The request's id ([Bezel::Plug::RequestId]), or nil.
   request_id: String?,
   # The application.
   app: App,
-  # When the endpoint took the request (`Time.monotonic`).
+  # When the endpoint took the request ([Time.monotonic]).
   started: Duration,
   # The exception a plug raised, which stopped the pipeline
-  # (`Plug.run`): the endpoint answers it with `Bezel::ErrorPage`.
+  # ([Plug.run]): the endpoint answers it with [Bezel::ErrorPage].
   error: StandardError? = nil,
-  # The response's format `Plug::Accepts` chose (`:html`, `:json`), or
+  # The response's format [Plug::Accepts] chose (`:html`, `:json`), or
   # nil.
   format: Symbol? = nil
 )
-  # A connection for `req` in `app`, its parameters those of the query
-  # (`Bezel::BadRequest` when it does not decode).
+  # A connection for `req` in [app], its parameters those of the query
+  # ([Bezel::BadRequest] when it does not decode).
   def self.build(req: HTTP::Server::Request, app: App = App.test) -> Conn
     Conn.bare(req, app).merge_params(Params.from_query(req.query))
   end
 
-  # A connection for `req` in `app`, without parameters.
+  # A connection for `req` in [app], without parameters.
   def self.bare(req: HTTP::Server::Request, app: App) -> Conn
     Conn.new(req, Params.empty, Params.empty, {}, Session.new, Flash.new, 200,
              HTTP::Headers.empty, nil, false, nil, app, Time.monotonic)
@@ -140,7 +140,7 @@ data Conn(
   def config -> Config = app.config
 
   # The CSRF token forms of this request carry, or nil: the session's
-  # CSRF secret (`Plug::CSRF` makes one), masked afresh at each call, so
+  # CSRF secret ([Plug::CSRF] makes one), masked afresh at each call, so
   # that it follows a `renew` or `drop` in this request; else the
   # `:csrf_token` assign.
   def csrf_token -> String?
@@ -150,14 +150,14 @@ data Conn(
     assigns[:csrf_token]?.as?(String)
   end
 
-  # `path` (a route helper's) as a URL of this request's scheme and host:
+  # [path] (a route helper's) as a URL of this request's scheme and host:
   # `Conn#url(Router.user_path(id: 1))`. The host is the request's Host header
   # (`localhost` without one), which the proxy in front sets: behind
   # none, a client chooses it, so a URL meant for elsewhere (an email's
   # link) should use a host of the configuration's instead.
   #
   # A Host header that is not a host and an optional port (letters,
-  # digits, `.`, `-`, `:`, `[` and `]`) is `Bezel::BadRequest`, so that it
+  # digits, `.`, `-`, `:`, `[` and `]`) is [Bezel::BadRequest], so that it
   # cannot bring a path or a query of its own.
   def url(path: String) -> String
     given = request.host
@@ -166,7 +166,7 @@ data Conn(
     "#{request.scheme}://#{host}#{path}"
   end
 
-  # A repository over the application's database pool: `Bezel::ConfigError`
+  # A repository over the application's database pool: [Bezel::ConfigError]
   # when the application has none (no DATABASE_URL). Cheap: the pool is
   # the application's, the repository a view of it.
   def repo -> Rotor::Repo
@@ -181,16 +181,16 @@ data Conn(
   # Whether a response's body is set.
   def sent? -> Bool = !resp_body.nil?
 
-  # The status the client gets: the error's (an `HTTP::Error`'s own,
+  # The status the client gets: the error's (an [HTTP::Error]'s own,
   # 500 for another exception) when a plug raised, else 404 when no
-  # plug answered, else `status`.
+  # plug answered, else [status].
   def final_status -> Int
     e = error
     return Conn.status_of(e) if e
     sent? ? status : 404
   end
 
-  # The status an exception is answered with: an `HTTP::Error`'s own,
+  # The status an exception is answered with: an [HTTP::Error]'s own,
   # else 500.
   def self.status_of(error: Exception) -> Int = error.is_a?(HTTP::Error) ? error.status : 500
 
@@ -203,12 +203,12 @@ data Conn(
   # The value assigned to `key`, or nil (`conn.assign?(:user).as?(User)`).
   def assign?(key: Symbol) -> Object? = assigns[key]?
 
-  # The value assigned to `key`: `KeyError` when none is.
+  # The value assigned to `key`: [KeyError] when none is.
   def assign(key: Symbol) -> Object
     assigns[key]? || raise KeyError.new("nothing is assigned to #{key.inspect}")
   end
 
-  # The connection with the status `status`.
+  # The connection with the status [status].
   def put_status(status: Int) -> Conn = with(status: status)
 
   # The connection with the response header `name` set to `value`
@@ -221,7 +221,7 @@ data Conn(
   # The connection without the response header `name`.
   def delete_resp_header(name: String) -> Conn = with(resp_headers: resp_headers.delete(name))
 
-  # The connection with the session `session`.
+  # The connection with the session [session].
   def put_session(session: Session) -> Conn = with(session: session)
 
   # The connection with the session's `key` set to `value`.
@@ -230,10 +230,10 @@ data Conn(
   # The connection with `message` in the flash for the next request.
   def put_flash(kind: Symbol, message: String) -> Conn = with(flash: flash.put(kind, message))
 
-  # The connection with `params` merged over its parameters.
+  # The connection with [params] merged over its parameters.
   def merge_params(more: Params) -> Conn = with(params: params.merge(more))
 
-  # The connection answered with `status` and `body` (its content type
+  # The connection answered with [status] and `body` (its content type
   # `content_type` unless one is set), and halted.
   def send_resp(status: Int, body: HTTP::Content, content_type: String? = nil) -> Conn
     h = resp_headers
@@ -264,7 +264,7 @@ data Conn(
   end
 
   # The connection answered with a redirect to `to` (`302 Found`, or
-  # `status`), and halted. A `to` that is a full URL must be one the
+  # [status]), and halted. A `to` that is a full URL must be one the
   # application chose: redirecting to a URL from the request is an open
   # redirect.
   def redirect(to: String, status: Int = 302) -> Conn

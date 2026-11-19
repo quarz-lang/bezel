@@ -17,7 +17,7 @@ module Keys
   # The keys derived so far, by secret and purpose.
   CACHE = Atom.new(Hash[String, Bytes].new)
 
-  # A 32-byte key for `purpose` from `secret`; `Bezel::ConfigError` for
+  # A 32-byte key for `purpose` from `secret`; [Bezel::ConfigError] for
   # the placeholder of a task's configuration (`Config::TASK_SECRET`),
   # which is public: a task without SECRET_KEY_BASE signs nothing.
   def self.derive(secret: String, purpose: String) -> Bytes
@@ -53,7 +53,7 @@ module Cookies
 
   # A `Set-Cookie` value: `name=value` and its attributes. `name` must be
   # a token and `value` cookie characters (no spaces, quotes, commas,
-  # semicolons or backslashes): `ArgumentError` otherwise.
+  # semicolons or backslashes): [ArgumentError] otherwise.
   def self.set_cookie(name: String, value: String, *, path: String = "/", max_age: Int? = nil,
                       http_only: Bool = true, secure: Bool = false, same_site: String? = "Lax",
                       domain: String? = nil) -> String

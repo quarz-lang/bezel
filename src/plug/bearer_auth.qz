@@ -5,7 +5,7 @@
 # configured one shows in the time taken. A request that passes goes on
 # unchanged. One that does not is answered `401 Unauthorized`, with
 # `WWW-Authenticate: Bearer realm="<realm>"` and the body
-# `Unauthorized`, saying nothing of why. A nil or empty configured token
+# [Unauthorized], saying nothing of why. A nil or empty configured token
 # refuses every request.
 #
 # ```
