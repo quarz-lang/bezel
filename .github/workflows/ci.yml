@@ -56,9 +56,16 @@ jobs:
         run: quarz test --doc
       - name: Docs
         run: quarz doc --check
-      - name: The bezel command (cli/)
+      # (cli/ is an application and commits its lock, the reproducible
+      # one for `cd cli && quarz build`. CI re-resolves it first, so that
+      # cli/ is tested against rotor's and pg's main as the cog's steps
+      # are, and prints what moved; the committed lock moves by hand, in
+      # a pull request, #83.)
+      - name: The bezel command (cli/), its lock re-resolved
         working-directory: cli
         run: |
+          quarz cog update
+          git diff -- Cog.lock
           quarz check
           quarz test --timeout=600s
           quarz test --release --timeout=600s
