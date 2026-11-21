@@ -70,6 +70,21 @@ class ConfigTest < Test::Case
     assert_raise(Bezel::ConfigError) { Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "PORT" => "x"}) }
   end
 
+  # A derived key is a secret, made without a plain Bytes, the same one
+  # for every caller; one wiped is derived again.
+  def test_keys_are_secrets
+    secret = "k" * 64
+    k = Bezel::Keys.derive(secret, "a test purpose")
+    assert_equal("#<Bytes::Secret>", k.inspect)
+    assert_true(k.equal?(Bezel::Keys.derive(secret, "a test purpose")))
+    assert_equal(Digest::PBKDF2.sha256(secret, "a test purpose", Bezel::Keys::ITERATIONS, 32), k.expose_bytes)
+    k.wipe
+    again = Bezel::Keys.derive(secret, "a test purpose")
+    assert_false(again.wiped?)
+    assert_false(again.equal?(k))
+    assert_equal(again, Bytes::Secret.of(Digest::PBKDF2.sha256(secret, "a test purpose", Bezel::Keys::ITERATIONS, 32)))
+  end
+
   def test_prod_needs_a_secret
     e = assert_raise(Bezel::ConfigError) { load({"BEZEL_ENV" => "prod"}) }
     assert_match(/SECRET_KEY_BASE is required/, e.message)
