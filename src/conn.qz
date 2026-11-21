@@ -48,6 +48,15 @@ data Session(values: Hash[String, String] = {}, changed: Bool = false, dropped: 
     v = values.key?("_csrf_token") ? values.put("_csrf_token", Plug::CSRF.new_secret) : values
     with(values: v, changed: true, dropped: false)
   end
+
+  # The session's keys and state, not its values (a CSRF secret, a
+  # user's id).
+  def inspect -> String
+    "#<Bezel::Session keys: #{values.keys.inspect}, changed: #{changed}, dropped: #{dropped}, loaded: #{loaded}>"
+  end
+
+  # As [inspect].
+  def to_s -> String = inspect
 end
 
 # The flash: messages kept for the next request ([put]), and those the
@@ -276,4 +285,15 @@ data Conn(
   def to_response -> HTTP::Server::Response
     HTTP::Server::Response.new(status, resp_headers, resp_body || HTTP::Content::Empty)
   end
+
+  # The connection without the request's header values, its parameters'
+  # values or the session's ([Session#inspect]): the method, the path,
+  # the parameters' names, the response's status.
+  def inspect -> String
+    "#<Bezel::Conn #{method} #{path.inspect}, params: #{params.entries.keys.inspect}, " +
+      "session: #{session.inspect}, status: #{status}, halted: #{halted}, request_id: #{request_id.inspect}>"
+  end
+
+  # As [inspect].
+  def to_s -> String = inspect
 end

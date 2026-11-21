@@ -105,6 +105,21 @@ class ParamsTest < Test::Case
     assert_raise(Bezel::BadRequest) { Bezel::Params.from_query("a" + "[b]" * 15_000 + "=1") }
   end
 
+  # bezel#87: names like a password or a token, at any depth, in lists
+  # and maps; other values as they are.
+  def test_filtered
+    ps = Bezel::Params.from_query("user[password]=a&user[name]=b&Password=c&_csrf_token=d&passwd=e&" +
+                                  "list[][api_token]=f&list[][x]=g&tokens[]=h&q=i")
+    f = ps.filtered
+    assert_equal("[FILTERED]", f["user"].fetch("password"))
+    assert_equal("b", f["user"].fetch("name"))
+    ["Password", "_csrf_token", "passwd", "tokens"].each { |k| assert_equal("[FILTERED]", f.string?(k), k) }
+    assert_equal([{"api_token" => "[FILTERED]", "x" => "g"}].inspect, f.to_h["list"]?.inspect)
+    assert_equal("i", f.string?("q"))
+    # The parameters themselves are as given.
+    assert_equal("a", ps["user"].fetch("password"))
+  end
+
   def test_large_forms_are_linear
     list = (0...40_000).map { |i| "t[]=#{i}" }.join("&")
     map = (0...40_000).map { |i| "u[k#{i}]=#{i}" }.join("&")
