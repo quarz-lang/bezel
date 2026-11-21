@@ -15,19 +15,22 @@ module Keys
   ITERATIONS = 1000
 
   # The keys derived so far, by secret and purpose.
-  CACHE = Atom.new(Hash[String, Bytes].new)
+  CACHE = Atom.new(Hash[String, Bytes::Secret].new)
 
   # A 32-byte key for `purpose` from `secret`; [Bezel::ConfigError] for
   # the placeholder of a task's configuration (`Config::TASK_SECRET`),
   # which is public: a task without SECRET_KEY_BASE signs nothing.
-  def self.derive(secret: String, purpose: String) -> Bytes
+  #
+  # The same [Bytes::Secret] for the process, every caller's: a key
+  # wiped by one is derived again at the next call.
+  def self.derive(secret: String, purpose: String) -> Bytes::Secret
     if secret == Config::TASK_SECRET
       raise ConfigError.new("no SECRET_KEY_BASE of 64 bytes or more: this is a task's configuration (Bezel::Config.for_task), whose placeholder signs nothing; set SECRET_KEY_BASE to make #{purpose} keys")
     end
     id = Digest::SHA256.hexdigest("#{purpose}\0#{secret}")
     known = CACHE.value[id]?
-    return known if known
-    key = Digest::PBKDF2.sha256(secret, purpose, ITERATIONS, 32)
+    return known if known && !known.wiped?
+    key = Digest::PBKDF2.sha256_secret(secret, purpose, ITERATIONS, 32)
     CACHE.update { |h| h.put(id, key) }
     key
   end
