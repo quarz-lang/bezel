@@ -101,6 +101,20 @@ class EndpointTest < Test::Case
     assert_equal(500, body["error"]["status"].as_i)
   end
 
+  # bezel#87: the dev pages show parameters named like a password or a
+  # token filtered, at any depth.
+  def test_dev_error_pages_filter_secrets
+    query = "/boom?user%5Bname%5D=ann&user%5Bpassword%5D=hunter2&password_confirmation=hunter2&api_token=t0k3n&q=x"
+    html = text_of(EndpointTestApp.call(HTTP::Server::Request.get(query)))
+    json = text_of(EndpointTestApp.call(HTTP::Server::Request.get(query, HTTP::Headers.of({"Accept" => "application/json"}))))
+    [html, json].each do |page|
+      assert_false(page.include?("hunter2"), page)
+      assert_false(page.include?("t0k3n"), page)
+      assert_true(page.include?("[FILTERED]"), page)
+      assert_true(page.include?("ann"), page)
+    end
+  end
+
   def test_prod_error_pages
     res = EndpointTestApp.call(HTTP::Server::Request.get("/boom"), prod)
     assert_equal(500, res.status)

@@ -54,7 +54,7 @@ module ErrorPage
       "backtrace" => JSON::Value::Array.new(trace),
       "method" => JSON::Value::String.new(conn.method),
       "path" => JSON::Value::String.new(conn.path),
-      "params" => JSON::Value::String.new(conn.params.to_h.inspect)
+      "params" => JSON::Value::String.new(conn.params.filtered.to_h.inspect)
     })})
   end
 
@@ -80,7 +80,7 @@ module ErrorPage
       <tr><th>Method</th><td><code>#{e.call(conn.method)}</code></td></tr>
       <tr><th>Path</th><td><code>#{e.call(conn.path)}</code></td></tr>
       <tr><th>Request id</th><td><code>#{e.call(conn.request_id || "-")}</code></td></tr>
-      <tr><th>Parameters</th><td><code>#{e.call(conn.params.to_h.inspect)}</code></td></tr>
+      <tr><th>Parameters</th><td><code>#{e.call(conn.params.filtered.to_h.inspect)}</code></td></tr>
       </table>
       <h2>Session keys</h2>
       <ul>#{session}</ul>

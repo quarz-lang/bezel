@@ -93,6 +93,21 @@ class PlugTest < Test::Case
     assert_equal("#<Bezel::Plug::BearerAuth realm: \"api\", token: nil>", Bezel::Plug::BearerAuth.new(token: nil, realm: "api").inspect)
   end
 
+  # bezel#87: a connection and its session show no header value, no
+  # parameter value and no session value.
+  def test_conn_and_session_inspect
+    req = HTTP::Server::Request.get("/a?password=hunter2&q=x",
+                                    HTTP::Headers.of({"Authorization" => "Bearer t0k3n", "Cookie" => "sid=c00kie"}))
+    conn = Bezel::Conn.build(req)
+    conn = conn.with(session: conn.session.put("_csrf_token", "s3cr3t").put("user_id", "42"))
+    [conn.inspect, conn.to_s, [conn].inspect, conn.session.inspect, conn.session.to_s].each do |text|
+      ["hunter2", "t0k3n", "c00kie", "s3cr3t", "42"].each { |v| assert_false(text.include?(v), "#{v} in #{text}") }
+    end
+    assert_equal("#<Bezel::Session keys: [\"_csrf_token\", \"user_id\"], changed: true, dropped: false, loaded: false>",
+                 conn.session.inspect)
+    assert_match(/\A#<Bezel::Conn GET "\/a", params: \["password", "q"\], /, conn.inspect)
+  end
+
   def test_bearer_auth
     auth = Bezel::Plug::BearerAuth.new(token: "s3cret-token", realm: "api")
     # The token, the scheme in any case: through, unchanged.

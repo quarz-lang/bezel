@@ -261,6 +261,38 @@ data Params(entries: Hash[String, Param])
     end
     [key[0, i], parts.to_a]
   end
+
+  # What [filtered] hides: a name, at any depth, holding `passw` or
+  # `token` in any case (`password`, `password_confirmation`,
+  # `user[password]`, `_csrf_token`, `api_token`).
+  FILTERED = /passw|token/i
+
+  # The parameters with the value of each one named like a password or a
+  # token ([FILTERED]) written `[FILTERED]`, at any depth: for a page or
+  # a log that shows them (the error page of `dev` and `test`).
+  #
+  # ```
+  # Bezel::Params.from_query("user[name]=ann&user[password]=pw&q=x").filtered.to_h
+  # # => {"user" => {"name" => "ann", "password" => "[FILTERED]"}, "q" => "x"}
+  # ```
+  def filtered -> Params
+    out: Hash[String, Param] = {}
+    entries.each { |k, v| out = out.put(k, Params.filter(k, v)) }
+    Params.new(out)
+  end
+
+  # :nodoc:
+  def self.filter(name: String, v: Param) -> Param
+    return Param::Str.new("[FILTERED]") if name.match?(FILTERED)
+    case v
+    in Param::Str then v
+    in Param::List(items:) then Param::List.new(items.map { |i| Params.filter("", i) })
+    in Param::Map(entries:)
+      out: Hash[String, Param] = {}
+      entries.each { |k, e| out = out.put(k, Params.filter(k, e)) }
+      Param::Map.new(out)
+    end
+  end
 end
 
 # :nodoc:
