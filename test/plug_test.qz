@@ -83,6 +83,16 @@ class PlugTest < Test::Case
     auth.call(Bezel::Conn.build(HTTP::Server::Request.get("/", headers)))
   end
 
+  # bezel#86: the plug's inspect shows whether a token is set, not it.
+  def test_bearer_auth_hides_its_token
+    auth = Bezel::Plug::BearerAuth.new(token: "s3cret-token", realm: "api")
+    [auth.inspect, auth.to_s, [auth].inspect].each do |text|
+      assert_false(text.include?("s3cret-token"), text)
+    end
+    assert_equal("#<Bezel::Plug::BearerAuth realm: \"api\", token: (set)>", auth.inspect)
+    assert_equal("#<Bezel::Plug::BearerAuth realm: \"api\", token: nil>", Bezel::Plug::BearerAuth.new(token: nil, realm: "api").inspect)
+  end
+
   def test_bearer_auth
     auth = Bezel::Plug::BearerAuth.new(token: "s3cret-token", realm: "api")
     # The token, the scheme in any case: through, unchanged.
