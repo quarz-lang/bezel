@@ -6,7 +6,7 @@
 # unchanged. One that does not is answered `401 Unauthorized`, with
 # `WWW-Authenticate: Bearer realm="<realm>"` and the body
 # [Unauthorized], saying nothing of why. A nil or empty configured token
-# refuses every request.
+# refuses every request. Its [inspect] does not show the token.
 #
 # ```
 # auth = Bezel::Plug::BearerAuth.new(token: "s3cret", realm: "api")
@@ -42,6 +42,12 @@ class Plug::BearerAuth
   def initialize(*, token: String?, realm: String)
     @token = token
     @realm = realm
+  end
+
+  # The plug without its token: whether one is set, and the realm.
+  def inspect -> String
+    t = @token
+    "#<Bezel::Plug::BearerAuth realm: #{@realm.inspect}, token: #{t.nil? || t.empty? ? "nil" : "(set)"}>"
   end
 
   def call(conn: Conn) -> Conn

@@ -103,6 +103,19 @@ class ConfigTest < Test::Case
     assert_match(/database_url: \(set\)/, c.to_s)
   end
 
+  # bezel#86: the settings an application's config gives hide the URL too.
+  def test_settings_hide_the_database_url
+    s = Bezel::Settings.new(host: "127.0.0.1", database_url: "postgres://app:hunter2@db/app")
+    [s.inspect, s.to_s, [s].inspect].each do |text|
+      assert_false(text.include?("hunter2"), text)
+      assert_match(/database_url: \(set\)/, text)
+    end
+    assert_match(/host: "127.0.0.1"/, s.inspect)
+    assert_match(/database_url: nil/, Bezel::Settings.new.inspect)
+    # The value itself is as given.
+    assert_equal("postgres://app:hunter2@db/app", s.database_url)
+  end
+
   def test_bad_values
     assert_raise(Bezel::ConfigError) { load({"BEZEL_ENV" => "staging"}) }
     assert_raise(Bezel::ConfigError) { load({"PORT" => "http"}) }

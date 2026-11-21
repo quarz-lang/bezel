@@ -1,7 +1,8 @@
 # What an application's `config/<env>.qz` gives for one environment
 # (MyApp::Config.dev returns one): every setting optional, the
 # environment variables taking precedence over it. Secrets are not here:
-# SECRET_KEY_BASE comes from the environment only.
+# SECRET_KEY_BASE comes from the environment only. Its [inspect] and
+# [to_s] do not show the database's URL, which holds its password.
 data Settings(
   # The address to listen on.
   host: String? = nil,
@@ -20,6 +21,15 @@ data Settings(
   # when nil).
   password_params: Crypto::Argon2::Params? = nil
 )
+  # The settings without the database's URL.
+  def inspect -> String
+    "#<Bezel::Settings host: #{host.inspect}, port: #{port.inspect}, " +
+      "database_url: #{database_url ? "(set)" : "nil"}, trusted_proxies: #{trusted_proxies.inspect}, " +
+      "log_level: #{log_level.inspect}, pool_size: #{pool_size.inspect}, password_params: #{password_params.inspect}>"
+  end
+
+  # As [inspect].
+  def to_s -> String = inspect
 end
 
 # An application's settings, for one environment: what [Config.load]
