@@ -60,7 +60,13 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
   `on_error`. In `dev` and `test` the page shows the exception, its
   backtrace and the request (HTML, or JSON for a JSON `Accept`); in
   `prod` it shows the status only. Headers the plugs set (the request
-  id) stay on the error page.
+  id) stay on the error page. Its parameters are filtered: the value of
+  a parameter whose name holds `passw`, `token`, `secret`, `_key`,
+  `otp`, `cvv` or `cvc` (in any case, at any depth) shows `[FILTERED]`.
+  `_key` needs its underscore: it hides `api_key` and `secret_key_base`,
+  not `key` alone or `keyword`. An application adds its own names with
+  [Bezel::Settings]'s `filter_parameters:` (a `String` is a part of the
+  name, in any case; a `Regexp` a pattern), which add to the list.
 - **[Bezel::Config]** reads `BEZEL_ENV` (`dev`, `test`, `prod`; `prod` when unset, so that a deploy that forgets it shows no backtraces), `HOST`,
   `PORT`, `DATABASE_URL`, `POOL_SIZE`, `SECRET_KEY_BASE` (required in
   `prod`, 64 bytes or more), `TRUSTED_PROXIES`, `TLS_CERT`/`TLS_KEY` and
