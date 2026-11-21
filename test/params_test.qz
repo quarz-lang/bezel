@@ -120,6 +120,26 @@ class ParamsTest < Test::Case
     assert_equal("a", ps["user"].fetch("password"))
   end
 
+  # bezel#91: the default list, `_key`'s underscore, and names added.
+  def test_filtered_list
+    hidden = ["client_secret", "SECRET", "api_key", "secret_key_base", "Api_Key", "otp", "otp_code",
+              "cvv", "card_cvc", "CVC2", "my_token", "passwd", "footprint"]
+    shown = ["key", "keyword", "monkey", "name", "pin", "keys", "q"]
+    hidden.each { |n| assert_true(Bezel::Params.filtered?(n), n) }
+    shown.each { |n| assert_false(Bezel::Params.filtered?(n), n) }
+    ps = Bezel::Params.from_query("card[cvv]=1&card[number]=2&pin=3&Ssn=4&q=5&account_no=6")
+    f = ps.filtered(["PIN", /\Assn\z/i, ""])
+    assert_equal("[FILTERED]", f["card"].fetch("cvv"))
+    assert_equal("2", f["card"].fetch("number"))
+    assert_equal("[FILTERED]", f.string?("pin"))
+    assert_equal("[FILTERED]", f.string?("Ssn"))
+    assert_equal("5", f.string?("q"))
+    # (An empty String adds nothing: not every name.)
+    assert_equal("6", f.string?("account_no"))
+    # Without them, the default list only.
+    assert_equal("3", ps.filtered.string?("pin"))
+  end
+
   def test_large_forms_are_linear
     list = (0...40_000).map { |i| "t[]=#{i}" }.join("&")
     map = (0...40_000).map { |i| "u[k#{i}]=#{i}" }.join("&")

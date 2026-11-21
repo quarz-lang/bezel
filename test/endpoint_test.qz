@@ -115,6 +115,24 @@ class EndpointTest < Test::Case
     end
   end
 
+  # bezel#91: the default list on the dev page, and names the settings
+  # add.
+  def test_dev_error_pages_filter_configured_names
+    settings = {test: Bezel::Settings.new(filter_parameters: ["pin", /\Assn\z/])}
+    app = Bezel::App.new(Bezel::Config.load("t", settings, environ: {"BEZEL_ENV" => "test"}, quiet: true))
+    query = "/boom?client_secret=s3cr3t&api_key=k3y&pin=9876&ssn=123456789&keyword=shown"
+    html = text_of(EndpointTestApp.call(HTTP::Server::Request.get(query), app))
+    json = text_of(EndpointTestApp.call(HTTP::Server::Request.get(query, HTTP::Headers.of({"Accept" => "application/json"})), app))
+    [html, json].each do |page|
+      ["s3cr3t", "k3y", "9876", "123456789"].each { |v| assert_false(page.include?(v), "#{v} in #{page}") }
+      assert_true(page.include?("shown"), page)
+    end
+    # Without the setting: the default list only.
+    page = text_of(EndpointTestApp.call(HTTP::Server::Request.get(query)))
+    assert_true(page.include?("9876"), page)
+    assert_false(page.include?("s3cr3t"), page)
+  end
+
   def test_prod_error_pages
     res = EndpointTestApp.call(HTTP::Server::Request.get("/boom"), prod)
     assert_equal(500, res.status)

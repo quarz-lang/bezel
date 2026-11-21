@@ -19,13 +19,18 @@ data Settings(
   pool_size: Int? = nil,
   # The cost of [Bezel::Password]'s hashes (`Crypto::Argon2::Params::DEFAULT`
   # when nil).
-  password_params: Crypto::Argon2::Params? = nil
+  password_params: Crypto::Argon2::Params? = nil,
+  # Parameter names the error pages hide beside [Bezel::Params::FILTERED]
+  # (a [String] is a part of the name, in any case; a [Regexp] a
+  # pattern): [Bezel::Params#filtered].
+  filter_parameters: Array[String | Regexp]? = nil
 )
   # The settings without the database's URL.
   def inspect -> String
     "#<Bezel::Settings host: #{host.inspect}, port: #{port.inspect}, " +
       "database_url: #{database_url ? "(set)" : "nil"}, trusted_proxies: #{trusted_proxies.inspect}, " +
-      "log_level: #{log_level.inspect}, pool_size: #{pool_size.inspect}, password_params: #{password_params.inspect}>"
+      "log_level: #{log_level.inspect}, pool_size: #{pool_size.inspect}, password_params: #{password_params.inspect}, " +
+      "filter_parameters: #{filter_parameters.inspect}>"
   end
 
   # As [inspect].
@@ -46,6 +51,7 @@ end
 # | TLS_CERT, TLS_KEY | paths of the certificate chain and its key (PEM): HTTPS | none (behind a proxy) |
 # | LOG_LEVEL | `debug`, `info`, `warn` or `error` | `info` |
 # | (none) | [password_params]: the cost of [Bezel::Password]'s hashes | `Crypto::Argon2::Params::DEFAULT` |
+# | (none) | [filter_parameters]: parameter names the error pages hide beside [Bezel::Params::FILTERED] | none |
 #
 # A value that does not parse (a port, a level, a proxy, a database
 # URL, a certificate and its key, which are read), or a missing one that
@@ -83,7 +89,10 @@ data Config(
   # `:debug`, `:info`, `:warn` or `:error`.
   log_level: Symbol,
   # The cost of [Bezel::Password]'s hashes.
-  password_params: Crypto::Argon2::Params = Crypto::Argon2::Params::DEFAULT
+  password_params: Crypto::Argon2::Params = Crypto::Argon2::Params::DEFAULT,
+  # Parameter names the error pages hide beside [Bezel::Params::FILTERED]
+  # ([Bezel::Params#filtered]).
+  filter_parameters: Array[String | Regexp] = []
 )
   # The levels, least severe first.
   LOG_LEVELS = [:debug, :info, :warn, :error]
@@ -161,7 +170,7 @@ data Config(
       STDERR.puts "bezel: SECRET_KEY_BASE is not set; #{env} uses one derived from the application's name, not for production" unless quiet || env == :test
     end
     Config.new(app, env, host, port, db, pool_size, secret, proxies, cert, key, level,
-               s.password_params || Crypto::Argon2::Params::DEFAULT)
+               s.password_params || Crypto::Argon2::Params::DEFAULT, s.filter_parameters || [])
   end
 
   # The configuration of a task that serves no request (a migration, a
@@ -242,7 +251,7 @@ data Config(
     "#<Bezel::Config app: #{app.inspect}, env: #{env.inspect}, host: #{host.inspect}, port: #{port}, " +
       "database_url: #{database_url ? "(set)" : "nil"}, pool_size: #{pool_size}, secret_key_base: <hidden>, " +
       "trusted_proxies: #{trusted_proxies.inspect}, tls: #{tls_cert ? "on" : "off"}, log_level: #{log_level.inspect}, " +
-      "password_params: #{password_params.inspect}>"
+      "password_params: #{password_params.inspect}, filter_parameters: #{filter_parameters.inspect}>"
   end
 
   # As [inspect].

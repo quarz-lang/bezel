@@ -262,34 +262,54 @@ data Params(entries: Hash[String, Param])
     [key[0, i], parts.to_a]
   end
 
-  # What [filtered] hides: a name, at any depth, holding `passw` or
-  # `token` in any case (`password`, `password_confirmation`,
-  # `user[password]`, `_csrf_token`, `api_token`).
-  FILTERED = /passw|token/i
+  # What [filtered] hides by default: a name, at any depth, holding one
+  # of `passw`, `token`, `secret`, `_key`, `otp`, `cvv` or `cvc`, in any
+  # case (`password`, `user[password]`, `_csrf_token`, `client_secret`,
+  # `api_key`, `secret_key_base`, `otp_code`, `card[cvv]`). `_key` needs
+  # its underscore: `key` alone and `keyword` are shown. As any
+  # containment, it also hides a name that holds one by chance
+  # (`footprint` holds `otp`).
+  FILTERED = /passw|token|secret|_key|otp|cvv|cvc/i
 
-  # The parameters with the value of each one named like a password or a
-  # token ([FILTERED]) written `[FILTERED]`, at any depth: for a page or
-  # a log that shows them (the error page of `dev` and `test`).
+  # The parameters with the value of each one named like a secret
+  # ([FILTERED], and `also`: a [String] is a part of the name, in any
+  # case, a [Regexp] a pattern it matches) written `[FILTERED]`, at any
+  # depth: for a page or a log that shows them (the error page of `dev`
+  # and `test`, with the configuration's `filter_parameters` as `also`).
   #
   # ```
   # Bezel::Params.from_query("user[name]=ann&user[password]=pw&q=x").filtered.to_h
   # # => {"user" => {"name" => "ann", "password" => "[FILTERED]"}, "q" => "x"}
+  # Bezel::Params.from_query("pin=1234&q=x").filtered(["PIN"]).to_h
+  # # => {"pin" => "[FILTERED]", "q" => "x"}
   # ```
-  def filtered -> Params
+  def filtered(also: Array[String | Regexp] = []) -> Params
     out: Hash[String, Param] = {}
-    entries.each { |k, v| out = out.put(k, Params.filter(k, v)) }
+    entries.each { |k, v| out = out.put(k, Params.filter(k, v, also)) }
     Params.new(out)
   end
 
+  # Whether [filtered] hides the parameter `name`.
+  def self.filtered?(name: String, also: Array[String | Regexp] = []) -> Bool
+    return true if name.match?(FILTERED)
+    folded = name.downcase
+    also.any? do |p|
+      case p
+      in String then !p.empty? && folded.include?(p.downcase)
+      in Regexp then name.match?(p)
+      end
+    end
+  end
+
   # :nodoc:
-  def self.filter(name: String, v: Param) -> Param
-    return Param::Str.new("[FILTERED]") if name.match?(FILTERED)
+  def self.filter(name: String, v: Param, also: Array[String | Regexp]) -> Param
+    return Param::Str.new("[FILTERED]") if Params.filtered?(name, also)
     case v
     in Param::Str then v
-    in Param::List(items:) then Param::List.new(items.map { |i| Params.filter("", i) })
+    in Param::List(items:) then Param::List.new(items.map { |i| Params.filter("", i, also) })
     in Param::Map(entries:)
       out: Hash[String, Param] = {}
-      entries.each { |k, e| out = out.put(k, Params.filter(k, e)) }
+      entries.each { |k, e| out = out.put(k, Params.filter(k, e, also)) }
       Param::Map.new(out)
     end
   end
