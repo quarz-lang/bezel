@@ -13,8 +13,6 @@ module Cli::Resource
     <<~QZ
       # The #{plural.gsub("_", " ")}: the seven actions of `resources`.
       class #{m}::#{Cli.camel(plural)}Controller < Bezel::Controller
-        controller
-
         def index(conn: Bezel::Conn) -> Bezel::Conn
           in_layout(conn, #{Cli.camel(plural).inspect}, #{view}.index(conn, conn.repo.all(#{model}.query)))
         end

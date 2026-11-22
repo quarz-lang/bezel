@@ -78,8 +78,9 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
 
 A router declares its routes in one `routes` block, checked where it is
 compiled. A controller declares its plugs, one `plug` or `skip` line
-each (a controller without plugs of its own writes `controller`); the
-class generates the dispatch to its actions, which runs the plugs:
+each (a controller without plugs of its own writes none, and runs its
+superclass's); each controller class gets its own dispatch to its
+actions, which runs the plugs:
 
 ```crystal
 class Shop::UsersController < Bezel::Controller

@@ -190,8 +190,6 @@ module Cli::Skeleton
       "src/controllers/page_controller.qz" => <<~QZ,
         # The home page.
         class #{m}::PageController < Bezel::Controller
-          controller
-
           def home(conn: Bezel::Conn) -> Bezel::Conn
             render(conn, #{m}::LayoutsView.app(conn, "#{m}", #{m}::PageView.home(conn)))
           end
