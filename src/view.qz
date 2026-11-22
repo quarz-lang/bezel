@@ -1,0 +1,32 @@
+# What a view includes: the helpers it calls without the cog's name,
+# `html` for now. Including it gives `html` on the including module's
+# or class's class side and on its instance side, so a view written as
+# a module of `def self.` methods, a class with class methods, and an
+# instance method all call `html(...)`:
+#
+# ```
+# module GreetingView
+#   include Bezel::View
+#
+#   def self.hello(name: String) -> Bezel::Html
+#     html do |h|
+#       h.h1("Hello, #{name}")
+#     end
+#   end
+# end
+#
+# GreetingView.hello("Ann & Bob").to_s   # => "<h1>Hello, Ann &amp; Bob</h1>"
+# ```
+#
+# Inside the block, `h.html` is the `<html>` element and the bare `html`
+# is this module's. Later view helpers go in this module as they are
+# asked for.
+module View
+  # HTML made by the block, on a fresh [HtmlBuilder]: [Bezel.html], with
+  # its forms carrying `conn`'s CSRF token when `conn` is given.
+  def self.html(conn: Conn? = nil, &block: (HtmlBuilder) -> Void) -> Html = ::html(conn, &block)
+
+  # HTML made by the block, on a fresh [HtmlBuilder]: [Bezel.html], with
+  # its forms carrying `conn`'s CSRF token when `conn` is given.
+  def html(conn: Conn? = nil, &block: (HtmlBuilder) -> Void) -> Html = ::html(conn, &block)
+end

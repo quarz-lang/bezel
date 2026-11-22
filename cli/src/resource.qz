@@ -95,9 +95,10 @@ module Cli::Resource
     end.join
     "# The views of the #{plural.gsub("_", " ")} (written by `bezel gen resource`: edit as you like).\n" +
       "module #{m}::#{Cli.camel(plural)}View\n" +
+      "  include Bezel::View\n\n" +
       "  # The list.\n" +
       "  def self.index(conn: Bezel::Conn, #{plural}: Array[#{model}]) -> Bezel::Html\n" +
-      "    Bezel.html(conn) do |h|\n" +
+      "    html(conn) do |h|\n" +
       "      h.h1(#{Cli.camel(plural).inspect})\n" +
       "      h.table do\n" +
       "        h.thead do\n" +
@@ -120,7 +121,7 @@ module Cli::Resource
       "  end\n\n" +
       "  # One #{human}.\n" +
       "  def self.show(conn: Bezel::Conn, #{n}: #{model}) -> Bezel::Html\n" +
-      "    Bezel.html(conn) do |h|\n" +
+      "    html(conn) do |h|\n" +
       "      h.dl do\n" +
       items +
       "      end\n" +
@@ -134,7 +135,7 @@ module Cli::Resource
       "  end\n\n" +
       "  # The form of a new #{human} or an edited one, posting to `action`.\n" +
       "  def self.form(conn: Bezel::Conn, cs: Rotor::Changeset[#{model}], action: String, method: Symbol) -> Bezel::Html\n" +
-      "    Bezel.html(conn) do |h|\n" +
+      "    html(conn) do |h|\n" +
       "      h.form_for(cs, action: action, method: method) do |f|\n" +
       inputs +
       "        f.submit(\"Save\")\n" +
