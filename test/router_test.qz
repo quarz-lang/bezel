@@ -122,10 +122,47 @@ class RtSessionsMore < RtSessions
   controller
 end
 
-# A subclass with an action of its own but no statement: its superclass's
-# dispatch does not know it.
+# A subclass of a controller with a bare `controller`, with an action of
+# its own and no statement: it gets its own dispatch, which knows it.
 class RtPagesMore < RtPages
   def more(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "more")
+end
+
+# Controllers without any statement (`Bezel::Controller.inherited`
+# generates their dispatch): one directly below `Bezel::Controller`, an
+# abstract one with an abstract action and its concrete subclass, and a
+# subclass of a controller with plugs, whose action runs behind them.
+class RtPlain < Bezel::Controller
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "plain")
+end
+
+abstract class RtPlainBase < Bezel::Controller
+  abstract def page(conn: Bezel::Conn) -> Bezel::Conn
+  def about(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "about")
+end
+
+class RtPlainLeaf < RtPlainBase
+  def page(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "page")
+  def extra(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "extra")
+end
+
+class RtAdminPlain < RtAdminBase
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "plain #{conn.assign(:admin)}")
+end
+
+class RtPlainRouter < Bezel::Router
+  routes do
+    get "/", RtPlain, :home
+    get "/page", RtPlainLeaf, :page
+    get "/about", RtPlainLeaf, :about
+    get "/extra", RtPlainLeaf, :extra
+    get "/admin", RtAdminPlain, :index
+  end
+end
+
+class RtPlainEndpoint < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [RtPlainRouter.new]
+  def self.on_error(error: Exception, conn: Bezel::Conn) -> Void = nil
 end
 
 class RtRouter < Bezel::Router
@@ -172,6 +209,10 @@ class RouterTest < Test::Case
 
   def get(path: String, headers: Hash[String, String] = {}) -> HTTP::Server::Response
     Bezel::Testing.get(RtEndpoint, path, headers: headers)
+  end
+
+  def plain_get(path: String, headers: Hash[String, String] = {}) -> HTTP::Server::Response
+    Bezel::Testing.get(RtPlainEndpoint, path, headers: headers)
   end
 
   def form(method: String, path: String, body: String, admin: Bool = true) -> HTTP::Server::Response
@@ -287,10 +328,20 @@ class RouterTest < Test::Case
     assert_equal(2, RtAdminUsers.controller_plugs.size)
   end
 
-  def test_an_action_the_statement_does_not_cover_is_a_500
-    res = get("/admin/more")
-    assert_equal(500, res.status)
-    assert_match(/RtPages has no action more \(a subclass&#39;s actions need its own plug lines or `controller` statement\)/, text_of(res))
+  def test_a_subclass_dispatches_its_own_actions
+    assert_equal("more", text_of(get("/admin/more")))
+    c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    assert_raise(ArgumentError) { RtPages.new.dispatch(:more, c) }
+  end
+
+  def test_a_controller_without_statements
+    assert_equal("plain", text_of(plain_get("/")))
+    assert_equal("page", text_of(plain_get("/page")))
+    assert_equal("about", text_of(plain_get("/about")))
+    assert_equal("extra", text_of(plain_get("/extra")))
+    assert_equal(403, plain_get("/admin").status)
+    assert_equal("plain yes", text_of(plain_get("/admin", {"X-Admin" => "1"})))
+    assert_equal(1, RtAdminPlain.controller_plugs.size)
   end
 
   def test_a_head_route_beats_get_for_head
@@ -373,13 +424,6 @@ class RouterTest < Test::Case
     assert(!out.success?)
     assert_match(/`controller` raised ArgumentError: skip :requre_login: no plug of that name \(:require_login\)/, out.stderr)
     assert_match(/Sessions: skip :require_login names :nwe, which is not an action/, out.stderr)
-  end
-
-  def test_a_controller_without_dispatch_is_a_compile_error
-    out = check("controller_no_dispatch")
-    assert(!out.success?)
-    assert_match(/`Undeclared` must implement `dispatch` \(abstract in `Bezel::Controller`\)/, out.stderr)
-    assert(!out.stderr.include?("`Declared` must"), out.stderr)
   end
 
   def test_route_helper_keywords_are_checked
