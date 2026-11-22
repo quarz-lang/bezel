@@ -37,10 +37,14 @@ class HtCard
   end
 end
 
-# A layout: a function of the connection, the title and the inner HTML.
+# A layout: a function of the connection, the title and the inner HTML,
+# in a view module (`Bezel::View`): the bare `html` is the view's, `h.html`
+# the element.
 module HtLayouts
+  include Bezel::View
+
   def self.app(conn: Bezel::Conn, title: String, inner: Bezel::Html) -> Bezel::Html
-    Bezel.html(conn) do |h|
+    html(conn) do |h|
       h.doctype
       h.html(lang: "en") do
         h.head do
@@ -57,6 +61,38 @@ end
 
 class HtController < Bezel::Controller
   controller
+end
+
+# A view class: `html` on its class side and its instance side, the
+# subclass of an abstract one included.
+abstract class HtPageView
+  include Bezel::View
+
+  abstract def heading -> String
+
+  def page(conn: Bezel::Conn) -> Bezel::Html
+    html(conn) do |h|
+      h.h1(heading)
+      h.link("Delete", to: "/users/1", method: :delete)
+    end
+  end
+
+  def self.note(text: String) -> Bezel::Html = html { |h| h.p(text) }
+end
+
+class HtUsersPage < HtPageView
+  def heading -> String = "Users"
+end
+
+# A view module whose form is built through the included `html(conn)`.
+module HtUserView
+  include Bezel::View
+
+  def self.edit(conn: Bezel::Conn, cs: Rotor::Changeset[HtUser]) -> Bezel::Html
+    html(conn) do |h|
+      h.form_for(cs, action: "/users/1", method: :patch) { |f| f.text_field(:name) }
+    end
+  end
 end
 
 class HtmlTest < Test::Case
@@ -147,6 +183,23 @@ class HtmlTest < Test::Case
     sent = ctl.render(conn, HtLayouts.app(conn, "T", inner))
     assert_equal("text/html; charset=utf-8", sent.resp_headers["content-type"])
     assert_true(sent.halted?)
+  end
+
+  def test_views_include_bezel_view
+    conn = Bezel::Conn.build(HTTP::Server::Request.get("/")).assign(:csrf_token, "tok")
+    token = "<input type=\"hidden\" name=\"_csrf_token\" value=\"tok\">"
+    # A class view: the instance side, with the connection's token, and
+    # the class side, without a connection.
+    page = HtUsersPage.new.page(conn).to_s
+    assert_equal("<h1>Users</h1><form action=\"/users/1\" method=\"post\" class=\"bezel-link\"><input type=\"hidden\" name=\"_method\" value=\"delete\">#{token}<button type=\"submit\">Delete</button></form>", page)
+    assert_equal("<p>a &amp; b</p>", HtUsersPage.note("a & b").to_s)
+    assert_equal("<p>x</p>", HtPageView.note("x").to_s)
+    # A module view's form carries the token, as through `Bezel.html`.
+    cs = Rotor::Changeset.cast(HtUser, {"name" => "Ann"}, [:name])
+    via_view = HtUserView.edit(conn, cs).to_s
+    assert_true(via_view.include?(token), via_view)
+    direct = Bezel.html(conn) { |h| h.form_for(cs, action: "/users/1", method: :patch) { |f| f.text_field(:name) } }.to_s
+    assert_equal(direct, via_view)
   end
 
   def form_of(cs: Rotor::Changeset[HtUser], method: Symbol = :post, token: String? = "t") -> String

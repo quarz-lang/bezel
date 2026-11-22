@@ -123,18 +123,21 @@ Shop::Router.user_post_path(user_id: 5, id: 2)      # => "/users/5/posts/2"
 - Matching is the standard [HTTP::Router]'s: the most specific pattern,
   `HEAD` by `GET`, `405` with `Allow` for another method's path.
 
-Views are Quarz code: [Bezel.html] gives a builder with a method per
-HTML element, every text and attribute escaped, attributes as typed
-keywords (`class_name:` is the `class` attribute, since `class` cannot
-name a parameter; `class:` waits for quarz-lang/quarz#382). A layout is
-a function taking the inner HTML; a component includes
+Views are Quarz code: a view includes [Bezel::View], whose `html` (the
+same as [Bezel.html]) gives a builder with a method per HTML element,
+every text and attribute escaped, attributes as typed keywords
+(`class_name:` is the `class` attribute, since `class` cannot name a
+parameter; `class:` waits for quarz-lang/quarz#382). A layout is a
+function taking the inner HTML; a component includes
 [Bezel::Component]; a form over a changeset shows its values and, once
 a save was tried (the changeset's `action` is set), its errors:
 
 ```crystal
 module UserView
+  include Bezel::View
+
   def self.edit(conn: Bezel::Conn, cs: Rotor::Changeset[User]) -> Bezel::Html
-    Bezel.html(conn) do |h|
+    html(conn) do |h|
       h.h1("Edit #{cs.data.name}")
       h.form_for(cs, action: Shop::Router.user_path(id: cs.data.id), method: :patch) do |f|
         f.label(:email)
@@ -156,7 +159,7 @@ end
   mailto and tel (relative URLs are fine); `srcdoc` is refused; `<script>`
   and `<style>` refuse content that could end them. A `style` is escaped
   but not checked: do not build one from input.
-- Forms carry the CSRF token (from `Bezel.html(conn)`, once the CSRF
+- Forms carry the CSRF token (from `html(conn)`, once the CSRF
   plug sets it) and `_method`, name their fields `user[email]`, and show
   the input as typed for a field with errors. `link`'s `confirm:` writes
   `data-confirm` for the application's script.
