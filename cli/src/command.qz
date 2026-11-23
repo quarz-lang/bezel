@@ -14,7 +14,7 @@ module Cli::Commands
   class GenController < CommandLine
     program "bezel gen controller"
     banner "usage: bezel gen controller NAME [ACTION...]"
-    about "A controller with an action and a template per ACTION (index)."
+    about "A controller, with an action and a template per ACTION.\nThe action is `index` when none is given."
     rest :args, min: 1, arg: "NAME"
   end
 
@@ -46,7 +46,7 @@ module Cli::Commands
   class GenResource < CommandLine
     program "bezel gen resource"
     banner "usage: bezel gen resource NAME FIELD:TYPE..."
-    about "A model, its migration, a controller of the seven actions, its views, and its routes."
+    about "A model with a controller of the seven actions.\nAlso its migration, its views and its routes."
     rest :args, min: 1, arg: "NAME"
 
     def validate -> Void
@@ -117,13 +117,13 @@ module Cli::Commands
   # `bezel server`.
   class Server < CommandLine
     program "bezel server"
-    about "Run the application (BEZEL_ENV=dev unless set), and again when a source or template changes."
+    about "Run the application, and again on each change.\nBEZEL_ENV=dev unless set; it is run again when a source or a template\nchanges."
   end
 
   # `bezel jobs`.
   class Jobs < CommandLine
     program "bezel jobs"
-    about "Run the application's jobs: a divider worker (BEZEL_ENV=dev unless set)."
+    about "Run the application's jobs: a divider worker.\nBEZEL_ENV=dev unless set."
   end
 
   # `bezel help [COMMAND]`.
@@ -157,6 +157,7 @@ module Cli::Commands
     command :test, Tests
     command :server, Server
     command :jobs, Jobs
+    # (In full: in this body `Help` would be the inherited `CommandLine::Help`.)
     command :help, Cli::Commands::Help
   end
 end

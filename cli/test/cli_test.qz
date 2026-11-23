@@ -124,6 +124,33 @@ class CliTest < Test::Case
     end
   end
 
+  # The commands the help lists, `Cli::Commands::Help::NAMES` and
+  # `Cli.help_of` name the same commands: each one's help is its own.
+  def test_help_knows_every_command
+    dir = CliTest.tmp
+    begin
+      _, top = bezel([], dir)
+      lines = top.lines.map(&:chomp)
+      start = lines.index("Commands:") || -1
+      names = Array::Builder[String].new
+      lines[(start + 1)...lines.size].each do |l|
+        break if l.empty?
+        names << l.strip.split(" ")[0]
+      end
+      listed = names.to_a
+      assert_equal(Cli::Commands::Help::NAMES, listed)
+      listed.each do |n|
+        status, out = bezel(["help", n], dir)
+        assert_equal(0, status, n)
+        assert(out.start_with?("usage: bezel #{n} "), "#{n}: #{out}")
+        # (The raw ones hand `--help` on to the program they run.)
+        assert_equal([0, out], bezel([n, "--help"], dir), n) unless ["routes", "migrate", "rollback", "status", "test"].include?(n)
+      end
+    ensure
+      Dir.rm_rf(dir)
+    end
+  end
+
   def test_generators
     root = new_app
     begin
