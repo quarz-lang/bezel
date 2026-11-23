@@ -13,17 +13,15 @@ module Cli::Gen
   # The line of the router `gen` adds its routes before.
   MARKER = "# bezel gen: routes"
 
-  # Runs the command.
-  def self.command(args: Array[String], app: Cli::App, out: IO) -> Int
-    kind = args.first?
-    rest = args.empty? ? args : args[1...args.size]
-    case kind
-    when "controller" then Cli::Gen.controller(rest, app, out)
-    when "model" then Cli::Gen.model(rest, app, out)
-    when "migration" then Cli::Gen.migration_command(rest, app, out)
-    when "resource" then Cli::Gen.resource(rest, app, out)
-    when "job" then Cli::Gen.job(rest, app, out)
-    else raise Cli::Error.new("gen takes controller, model, migration, resource or job, not #{(kind || "nothing").inspect}")
+  # Runs the command `gen` holds.
+  def self.command(gen: Cli::Commands::Gen, app: Cli::App, out: IO) -> Int
+    case gen.command
+    in Cli::Commands::GenController => c then Cli::Gen.controller(c.args, app, out)
+    in Cli::Commands::GenModel => c then Cli::Gen.model(c.args, app, out)
+    in Cli::Commands::GenMigration => c then Cli::Gen.migration_command(c.name[0], c.version, app, out)
+    in Cli::Commands::GenResource => c then Cli::Gen.resource(c.args, app, out)
+    in Cli::Commands::GenJob => c then Cli::Gen.job(c.args, app, out)
+    else raise Cli::Error.new("gen: no command")
     end
   end
 
@@ -140,8 +138,7 @@ module Cli::Gen
         out.puts "  update  src/router.qz"
       end
       Cli::Views.write(app, out) if files.any? { |f| f[0].end_with?(".html.bz") }
-      none: Array[String] = []
-      Cli::Migrations.command(none, app, out) if files.any? { |f| f[0].start_with?("src/migrations/") }
+      Cli::Migrations.command(false, app, out) if files.any? { |f| f[0].start_with?("src/migrations/") }
       Cli::Jobs.write(app, out) if files.any? { |f| f[0].start_with?("src/jobs/") }
     rescue Exception => e
       # (Each undoing step's own error would hide `e`: ignored.)
@@ -221,24 +218,9 @@ module Cli::Gen
   end
 
   # `gen migration NAME [--version V]`: an empty migration.
-  def self.migration_command(args: Array[String], app: Cli::App, out: IO) -> Int
-    version: String? = nil
-    names = Array::Builder[String].new
-    i = 0
-    while i < args.size
-      if args[i] == "--version"
-        raise Cli::Error.new("--version needs a value") if i + 1 >= args.size
-        version = args[i + 1]
-        i += 2
-      else
-        names << args[i]
-        i += 1
-      end
-    end
-    given = names.to_a
-    raise Cli::Error.new("gen migration takes one NAME") unless given.size == 1
+  def self.migration_command(name: String, version: String?, app: Cli::App, out: IO) -> Int
     none: Array[String] = []
-    Cli::Gen.apply(app, [Cli::Gen.migration(app, Cli::Gen.name_of(given[0], "migration"), "", version)], none, out)
+    Cli::Gen.apply(app, [Cli::Gen.migration(app, Cli::Gen.name_of(name, "migration"), "", version)], none, out)
     0
   end
 
@@ -363,7 +345,6 @@ module Cli::Gen
   def self.resource(args: Array[String], app: Cli::App, out: IO) -> Int
     n = Cli::Gen.name_of(args.first?, "resource")
     fields = Cli::Gen.fields(args.size > 1 ? args[1...args.size] : Array[String].new)
-    raise Cli::Error.new("gen resource needs at least one FIELD:TYPE") if fields.empty?
     plural = Rotor::Inflector.pluralize(n)
     raise Cli::Error.new("#{n}: its plural is the same word; name it otherwise") if plural == n
     # (The router names a resource's routes from its path's plural.)

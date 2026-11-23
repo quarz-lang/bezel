@@ -8,8 +8,7 @@ module Cli::Server
   STOP_GRACE = 5.seconds
 
   # Runs the command until SIGINT or SIGTERM.
-  def self.command(args: Array[String], app: Cli::App, out: IO) -> Int
-    raise Cli::Error.new("server takes no arguments, not #{args.join(" ")}") unless args.empty?
+  def self.command(app: Cli::App, out: IO) -> Int
     stop = Channel[Nil].new
     # (Ctrl-C reaches the application too, which shuts down by itself:
     # it gets time to before TERM, which it would take as a second
