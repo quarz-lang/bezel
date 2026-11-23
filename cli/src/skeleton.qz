@@ -21,26 +21,11 @@ module Cli::Skeleton
            # (Standard modules loaded when named, and the dependencies.)
            "Test", "Socket", "SocketError", "Crypto", "Digest", "Base64", "Bezel", "Rotor", "Divider", "PG", "Main", "Cli"]
 
-  # Runs the command.
-  def self.command(args: Array[String], cwd: String, out: IO) -> Int
-    name: String? = nil
-    bezel: String? = nil
-    i = 0
-    while i < args.size
-      a = args[i]
-      if a == "--bezel"
-        raise Cli::Error.new("--bezel needs a directory") if i + 1 >= args.size
-        bezel = File.expand_path(args[i + 1], cwd)
-        i += 2
-      elsif name.nil? && !a.start_with?("-")
-        name = a
-        i += 1
-      else
-        raise Cli::Error.new("new takes NAME [--bezel PATH], not #{a}")
-      end
-    end
+  # Runs the command: the application `name`, depending on the bezel
+  # checkout `bezel_dir` (relative to `cwd`) when one is given.
+  def self.command(name: String, bezel_dir: String?, cwd: String, out: IO) -> Int
+    bezel = bezel_dir.nil? ? nil : File.expand_path(bezel_dir, cwd)
     n = name
-    raise Cli::Error.new("new needs the application's NAME") if n.nil?
     raise Cli::Error.new("#{n.inspect}: an application's name is snake_case (shop, my_shop)") unless n.match?(/\A[a-z][a-z0-9_]*\z/)
     if TAKEN.include?(Cli.camel(n))
       raise Cli::Error.new("#{n}: its module #{Cli.camel(n)} is a standard or dependency's name; choose another")
@@ -54,8 +39,7 @@ module Cli::Skeleton
     app = Cli::App.new(root, n, Cli.camel(n))
     Cli::Skeleton.files(app, bezel).each { |path, content| Cli.create(root, path, content, out) }
     Cli::Views.write(app, out)
-    none: Array[String] = []
-    Cli::Migrations.command(none, app, out)
+    Cli::Migrations.command(false, app, out)
     Cli::Jobs.write(app, out)
     out.puts ""
     out.puts "Next: cd #{n}, then `bezel server` serves it on http://localhost:4000"

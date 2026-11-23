@@ -1,32 +1,5 @@
 # The `bezel` command: generators and tasks for a bezel application.
 module Cli
-  # What `bezel help` prints.
-  USAGE = <<~TEXT
-    usage: bezel COMMAND [ARGS]
-
-      new NAME [--bezel PATH]        a new application in the directory NAME
-      gen controller NAME [ACTION...] a controller with an action and a template per ACTION (index)
-      gen model NAME [FIELD:TYPE...]  a rotor model, its changeset and its migration
-      gen migration NAME              an empty migration
-      gen job NAME [FIELD:TYPE...]    a divider job, with arguments of those fields
-      gen resource NAME [FIELD:TYPE...] a model, its migration, a controller of the seven
-                                      actions, its views, and its routes
-      templates [--check]            compile src/views/*/*.html.bz into src/views/generated/
-      migrations [--check]           write src/migrations.qz, the list of src/migrations/
-      routes                         print the routes
-      migrate [--to VERSION]         run the pending migrations (DATABASE_URL)
-      rollback [--steps N | --to VERSION]
-      status                         each migration, up or pending
-      test [ARGS...]                 run the tests (quarz test)
-      server                         run the application (BEZEL_ENV=dev unless set),
-                                      and again when a source or template changes
-      jobs                           run the application's jobs: a divider worker
-                                      (BEZEL_ENV=dev unless set)
-
-    FIELD:TYPE types: string, text, integer, float, boolean, time. Commands but
-    `new` run in the application around the current directory (its Cog.toml).
-  TEXT
-
   # The application a command runs in: its directory, its cog's name and
   # the module its code lives in (`shop` and `Shop`).
   data App = (root: String, name: String, module_name: String)
@@ -35,33 +8,29 @@ module Cli
   class Error < StandardError
   end
 
-  # Runs `bezel` with `argv` in the directory `cwd`; the exit status.
+  # Runs `bezel` with `argv` in the directory `cwd`; the exit status: 2
+  # for a mistake in the arguments (`Cli::Commands`, the error and the
+  # usage on standard error), 1 for a command that fails (`bezel:
+  # <message>`), and what a task's program returns. The help, and
+  # what the commands print, go to `out`.
   def self.run(argv: Array[String], cwd: String, out: IO = STDOUT) -> Int
-    cmd = argv.first? || "help"
-    rest = argv.empty? ? argv : argv[1...argv.size]
+    if argv.empty?
+      out.print Cli::Commands::Bezel.help
+      return 0
+    end
+    line = begin
+      Cli::Commands::Bezel.parse(argv, exit: false)
+    rescue CommandLine::Help => h
+      out.print h.message
+      return 0
+    rescue CommandLine::Error => e
+      STDERR.puts "#{e.program}: #{e.message}"
+      STDERR.print e.usage
+      STDERR.puts "Try '#{e.program} --help' for more information."
+      return 2
+    end
     begin
-      case cmd
-      when "new" then Cli::Skeleton.command(rest, cwd, out)
-      when "gen" then Cli::Gen.command(rest, Cli.app(cwd), out)
-      when "templates" then Cli::Views.command(rest, Cli.app(cwd), out)
-      when "migrations" then Cli::Migrations.command(rest, Cli.app(cwd), out)
-      when "routes", "migrate", "rollback", "status"
-        Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", cmd] + rest, out)
-      when "test" then Cli.in_app(Cli.app(cwd), [Cli.quarz, "test"] + rest, out)
-      when "server" then Cli::Server.command(rest, Cli.app(cwd), out)
-      when "jobs"
-        raise Cli::Error.new("jobs takes no arguments, not #{rest.join(" ")}") unless rest.empty?
-        # (A development command, as `server`: BEZEL_ENV=dev unless set.)
-        env: Hash[String, String] = (ENV["BEZEL_ENV"]? || "").empty? ? {"BEZEL_ENV" => "dev"} : Hash[String, String].new
-        Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", "jobs"] + rest, out, env)
-      when "help", "--help", "-h"
-        out.print USAGE
-        0
-      else
-        STDERR.puts "bezel: unknown command #{cmd.inspect}"
-        STDERR.print USAGE
-        2
-      end
+      Cli.dispatch(line, cwd, out)
     rescue Cli::Error => e
       STDERR.puts "bezel: #{e.message}"
       1
@@ -71,6 +40,52 @@ module Cli
     rescue SystemCallError, IOError => e
       STDERR.puts "bezel: #{e.message}"
       1
+    end
+  end
+
+  # Runs the command `line` holds.
+  def self.dispatch(line: Cli::Commands::Bezel, cwd: String, out: IO) -> Int
+    case line.command
+    in Cli::Commands::New => c then Cli::Skeleton.command(c.name[0], c.bezel, cwd, out)
+    in Cli::Commands::Gen => g then Cli::Gen.command(g, Cli.app(cwd), out)
+    in Cli::Commands::Templates => c then Cli::Views.command(c.check, Cli.app(cwd), out)
+    in Cli::Commands::Migrations => c then Cli::Migrations.command(c.check, Cli.app(cwd), out)
+    in Cli::Commands::Routes => c then Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", "routes"] + c.args, out)
+    in Cli::Commands::Migrate => c then Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", "migrate"] + c.args, out)
+    in Cli::Commands::Rollback => c then Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", "rollback"] + c.args, out)
+    in Cli::Commands::Status => c then Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", "status"] + c.args, out)
+    in Cli::Commands::Tests => c then Cli.in_app(Cli.app(cwd), [Cli.quarz, "test"] + c.args, out)
+    in Cli::Commands::Server then Cli::Server.command(Cli.app(cwd), out)
+    in Cli::Commands::Jobs
+      # (A development command, as `server`: BEZEL_ENV=dev unless set.)
+      env: Hash[String, String] = (ENV["BEZEL_ENV"]? || "").empty? ? {"BEZEL_ENV" => "dev"} : Hash[String, String].new
+      Cli.in_app(Cli.app(cwd), [Cli.quarz, "run", "--", "jobs"], out, env)
+    in Cli::Commands::Help => c
+      out.print Cli.help_of(c.topic.first?)
+      0
+    else
+      raise Cli::Error.new("no command")
+    end
+  end
+
+  # The help of the command `name` (`gen`), or `bezel`'s.
+  def self.help_of(name: String?) -> String
+    case name
+    when nil then Cli::Commands::Bezel.help
+    when "new" then Cli::Commands::New.help
+    when "gen" then Cli::Commands::Gen.help
+    when "templates" then Cli::Commands::Templates.help
+    when "migrations" then Cli::Commands::Migrations.help
+    when "routes" then Cli::Commands::Routes.help
+    when "migrate" then Cli::Commands::Migrate.help
+    when "rollback" then Cli::Commands::Rollback.help
+    when "status" then Cli::Commands::Status.help
+    when "test" then Cli::Commands::Tests.help
+    when "server" then Cli::Commands::Server.help
+    when "jobs" then Cli::Commands::Jobs.help
+    when "help" then Cli::Commands::Help.help
+    # (`Cli::Commands::Help#validate` refused another name.)
+    else Cli::Commands::Bezel.help
     end
   end
 

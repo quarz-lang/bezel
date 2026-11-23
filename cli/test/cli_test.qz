@@ -74,8 +74,8 @@ class CliTest < Test::Case
     dir = CliTest.tmp
     begin
       assert_equal(1, bezel(["new", "Shop"], dir)[0])
-      assert_equal(1, bezel(["new"], dir)[0])
-      assert_equal(1, bezel(["new", "a", "b"], dir)[0])
+      assert_equal(2, bezel(["new"], dir)[0])
+      assert_equal(2, bezel(["new", "a", "b"], dir)[0])
       # (A dependency's module: divider's, which every application has.)
       assert_equal(1, bezel(["new", "divider"], dir)[0])
       Dir.mkdir(File.join(dir, "taken"))
@@ -91,6 +91,61 @@ class CliTest < Test::Case
       assert_equal(1, bezel(["templates"], dir)[0])
       assert_equal(2, bezel(["nope"], dir)[0])
       assert_equal(0, bezel(["help"], dir)[0])
+    ensure
+      Dir.rm_rf(dir)
+    end
+  end
+
+  # A mistake in the arguments is found before anything runs, and ends
+  # with 2; the help goes to `out`.
+  def test_argument_mistakes_and_help
+    dir = CliTest.tmp
+    begin
+      [["new"], ["new", "a", "b"], ["new", "a", "--bezel"], ["new", "--wat", "a"], ["templates", "extra"],
+       ["templates", "--x"], ["server", "x"], ["jobs", "x"], ["gen"], ["gen", "x"], ["gen", "migration"],
+       ["gen", "migration", "a", "--version"], ["gen", "resource", "x"], ["help", "nope"], ["-x"]].each do |argv|
+        assert_equal(2, bezel(argv, dir)[0], argv.join(" "))
+      end
+      status, out = bezel([], dir)
+      assert_equal(0, status)
+      assert(out.start_with?("usage: bezel [options] COMMAND [ARGS...]\n"), out)
+      assert(out.include?("  gen         Generate code into the application.\n"), out)
+      assert_equal([0, out], bezel(["--help"], dir))
+      assert_equal([0, out], bezel(["help"], dir))
+      status, gen = bezel(["help", "gen"], dir)
+      assert_equal(0, status)
+      assert(gen.start_with?("usage: bezel gen [options] COMMAND [ARGS...]\n"), gen)
+      assert(gen.include?("FIELD:TYPE types: string, text, integer, float, boolean, time.\n"), gen)
+      status, model = bezel(["gen", "model", "--help"], dir)
+      assert_equal(0, status)
+      assert(model.start_with?("usage: bezel gen model NAME [FIELD:TYPE...]\n"), model)
+    ensure
+      Dir.rm_rf(dir)
+    end
+  end
+
+  # The commands the help lists, `Cli::Commands::Help::NAMES` and
+  # `Cli.help_of` name the same commands: each one's help is its own.
+  def test_help_knows_every_command
+    dir = CliTest.tmp
+    begin
+      _, top = bezel([], dir)
+      lines = top.lines.map(&:chomp)
+      start = lines.index("Commands:") || -1
+      names = Array::Builder[String].new
+      lines[(start + 1)...lines.size].each do |l|
+        break if l.empty?
+        names << l.strip.split(" ")[0]
+      end
+      listed = names.to_a
+      assert_equal(Cli::Commands::Help::NAMES, listed)
+      listed.each do |n|
+        status, out = bezel(["help", n], dir)
+        assert_equal(0, status, n)
+        assert(out.start_with?("usage: bezel #{n} "), "#{n}: #{out}")
+        # (The raw ones hand `--help` on to the program they run.)
+        assert_equal([0, out], bezel([n, "--help"], dir), n) unless ["routes", "migrate", "rollback", "status", "test"].include?(n)
+      end
     ensure
       Dir.rm_rf(dir)
     end
@@ -152,7 +207,7 @@ class CliTest < Test::Case
       assert(v.include?("    html(conn) do |h|\n"), v)
       assert_false(v.include?("Bezel.html"), v)
       assert_equal(1, bezel(["gen", "resource", "post", "title:string"], root)[0])
-      assert_equal(1, bezel(["gen", "resource", "comment"], root)[0])
+      assert_equal(2, bezel(["gen", "resource", "comment"], root)[0])
       # The application with the resource checks, passes its test and
       # lists the resource's routes.
       res = quarz_check(root)

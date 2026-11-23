@@ -5,9 +5,7 @@
 # `Shop::UserView.show`).
 module Cli::Views
   # Runs the command.
-  def self.command(args: Array[String], app: Cli::App, out: IO) -> Int
-    check = args == ["--check"]
-    raise Cli::Error.new("templates takes --check or nothing, not #{args.join(" ")}") unless check || args.empty?
+  def self.command(check: Bool, app: Cli::App, out: IO) -> Int
     check ? Cli::Views.check(app, out) : Cli::Views.write(app, out)
   end
 
@@ -80,9 +78,7 @@ end
 # (`<App>::Migrations.all`, which src/main.qz gives `Bezel.main`).
 module Cli::Migrations
   # Runs the command.
-  def self.command(args: Array[String], app: Cli::App, out: IO) -> Int
-    check = args == ["--check"]
-    raise Cli::Error.new("migrations takes --check or nothing, not #{args.join(" ")}") unless check || args.empty?
+  def self.command(check: Bool, app: Cli::App, out: IO) -> Int
     content = Cli::Migrations.list(app)
     path = File.join(app.root, "src", "migrations.qz")
     if check
