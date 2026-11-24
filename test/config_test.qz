@@ -16,14 +16,31 @@ class ConfigTest < Test::Case
     c = load({})
     assert_equal(:dev, c.env)
     assert_true(c.dev?)
-    assert_equal("0.0.0.0", c.host)
+    assert_equal("127.0.0.1", c.host)
     assert_equal(4000, c.port)
     assert_nil(c.database_url)
     assert_equal(10, c.pool_size)
     assert_equal(:info, c.log_level)
-    assert_equal(Bezel::Config.dev_secret("shop"), c.secret_key_base)
+    assert_equal(Bezel::Config.dev_secret(:dev), c.secret_key_base)
     assert_equal(64, c.secret_key_base.size)
     assert_nil(c.tls)
+  end
+
+  # bezel#99: loopback outside prod; a secret no one can compute: dev's
+  # kept in tmp/dev_secret across loads, test's one per process.
+  def test_dev_host_and_secret
+    prod = Bezel::Config.load("shop", environ: {"SECRET_KEY_BASE" => "s" * 64}, quiet: true)
+    assert_equal("0.0.0.0", prod.host)
+    assert_equal("127.0.0.1", load({"BEZEL_ENV" => "test"}).host)
+    assert_equal("0.0.0.0", load({"HOST" => "0.0.0.0"}).host)
+    dev = load({}).secret_key_base
+    assert_false(dev == Digest::SHA256.hexdigest("bezel dev secret for shop"))
+    assert_equal(dev, load({}).secret_key_base)
+    assert_equal(dev, File.read(Bezel::Config::DEV_SECRET_PATH).strip)
+    assert_match(/\A[0-9a-f]{64}\z/, dev)
+    t = load({"BEZEL_ENV" => "test"}).secret_key_base
+    assert_equal(t, load({"BEZEL_ENV" => "test"}).secret_key_base)
+    assert_false(t == dev)
   end
 
   def test_environment_over_settings
@@ -56,7 +73,7 @@ class ConfigTest < Test::Case
     assert_equal(Bezel::Config::TASK_SECRET, Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "short"}).secret_key_base)
     # In dev and test, the server's derived secret; settings are read.
     dev = Bezel::Config.for_task("shop", {dev: Bezel::Settings.new(port: 5001)}, environ: {"BEZEL_ENV" => "dev"})
-    assert_equal(Bezel::Config.dev_secret("shop"), dev.secret_key_base)
+    assert_equal(Bezel::Config.dev_secret(:dev), dev.secret_key_base)
     assert_equal(5001, dev.port)
     # (A short one in dev is refused, as `load` refuses it.)
     assert_raise(Bezel::ConfigError) { Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "dev", "SECRET_KEY_BASE" => "short"}) }

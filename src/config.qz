@@ -43,10 +43,10 @@ end
 # | Variable | Setting | Default |
 # |---|---|---|
 # | BEZEL_ENV | [env]: `dev`, `test` or `prod` | `prod`: set `BEZEL_ENV=dev` when developing ([Bezel::App.test] sets `test`) |
-# | HOST, PORT | where the server listens | `0.0.0.0`, `4000` |
+# | HOST, PORT | where the server listens | `127.0.0.1` in `dev` and `test`, `0.0.0.0` in `prod`; `4000` |
 # | DATABASE_URL | the database, a [PG::Pool] behind [Rotor::Repo] | none |
 # | POOL_SIZE | the pool's connections | 10 |
-# | SECRET_KEY_BASE | the key sessions and tokens derive theirs from, 64 bytes or more | required in `prod`; derived from the application's name in `dev` and `test`, with a warning |
+# | SECRET_KEY_BASE | the key sessions and tokens derive theirs from, 64 bytes or more | required in `prod`; in `dev`, a random one kept in `tmp/dev_secret` (made on first use, announced); in `test`, a random one per process |
 # | TRUSTED_PROXIES | proxies, separated by commas | none |
 # | TLS_CERT, TLS_KEY | paths of the certificate chain and its key (PEM): HTTPS | none (behind a proxy) |
 # | LOG_LEVEL | `debug`, `info`, `warn` or `error` | `info` |
@@ -103,8 +103,8 @@ data Config(
   # The configuration of the application [app] from the environment
   # variables `environ` over the [Settings] its environment has in
   # `settings` (`{dev: MyApp::Config.dev, prod: MyApp::Config.prod}`).
-  # A secret derived for `dev` or `test` is announced on standard error,
-  # once per load, unless `quiet`.
+  # A secret made for `dev` is announced on standard error, once per
+  # load, unless `quiet`.
   #
   # A SECRET_KEY_BASE equal to `TASK_SECRET`, the placeholder of a task's
   # configuration, is refused: it is public. (`task:` is `for_task`'s.)
@@ -117,7 +117,9 @@ data Config(
       raise ConfigError.new("BEZEL_ENV must be dev, test or prod, not #{env_name.inspect}")
     end
     s = settings[env]? || Settings.new
-    host = Config.var(environ, "HOST") || s.host || "0.0.0.0"
+    # Loopback outside `prod` (bezel#99): a development server on every
+    # interface shows its error pages, and its sessions, to the network.
+    host = Config.var(environ, "HOST") || s.host || (env == :prod ? "0.0.0.0" : "127.0.0.1")
     port = Config.int_var(environ, "PORT") || s.port || 4000
     raise ConfigError.new("PORT must be within 0..65535, not #{port}") if port < 0 || port > 65_535
     pool_size = Config.int_var(environ, "POOL_SIZE") || s.pool_size || 10
@@ -166,8 +168,11 @@ data Config(
     elsif env == :prod
       raise ConfigError.new("SECRET_KEY_BASE is required in prod (64 bytes or more; `openssl rand -hex 32` gives one); BEZEL_ENV is prod unless set to dev or test")
     else
-      secret = Config.dev_secret(app)
-      STDERR.puts "bezel: SECRET_KEY_BASE is not set; #{env} uses one derived from the application's name, not for production" unless quiet || env == :test
+      secret = Config.dev_secret(env)
+      unless quiet || env == :test
+        STDERR.puts "bezel: SECRET_KEY_BASE is not set; dev uses the random one in #{DEV_SECRET_PATH} " +
+                    "(made on first use: keep tmp/ out of version control), not for production"
+      end
     end
     Config.new(app, env, host, port, db, pool_size, secret, proxies, cert, key, level,
                s.password_params || Crypto::Argon2::Params::DEFAULT, s.filter_parameters || [])
@@ -176,8 +181,8 @@ data Config(
   # The configuration of a task that serves no request (a migration, a
   # job worker): as [.load] makes it of the same environment and
   # settings, but SECRET_KEY_BASE is not required in `prod`, and the
-  # derived secret of `dev` and `test` is not announced (it is the
-  # server's, so a task's tokens verify there). In `prod` without one (or
+  # secret of `dev` and `test` is not announced (it is the server's: in
+  # `dev` the same file, so a task's tokens verify there). In `prod` without one (or
   # with one too short), its [secret_key_base] is a placeholder that signs
   # nothing: such a task must not make sessions or tokens.
   #
@@ -199,12 +204,46 @@ data Config(
   # application's.
   TASK_SECRET = "-" * 64
 
-  # The secret `dev` and `test` use without SECRET_KEY_BASE: a digest
-  # of the application's name, the same on every run so that sessions
-  # survive a restart.
-  def self.dev_secret(app: String) -> String
-    Digest::SHA256.hexdigest("bezel dev secret for #{app}")
+  # Where `dev` keeps its secret, relative to the application's
+  # directory (the one it runs in).
+  DEV_SECRET_PATH = "tmp/dev_secret"
+
+  # A secret made once per process (`test`, and `dev` when its file cannot
+  # be written).
+  PROCESS_SECRET = Atom[String?].new(nil)
+
+  # The secret `dev` and `test` use without SECRET_KEY_BASE (bezel#99):
+  # random, so that no one can compute it (a digest of the application's
+  # name could be, and with it any session sealed). In `dev`, kept in
+  # [DEV_SECRET_PATH], made on first use, so that sessions survive a
+  # restart and a task's tokens verify in the server; when the file
+  # cannot be written, one per process, with a warning. In `test`, one per
+  # process.
+  def self.dev_secret(env: Symbol) -> String
+    if env == :dev
+      begin
+        if File.file?(DEV_SECRET_PATH)
+          kept = File.read(DEV_SECRET_PATH).strip
+          return kept if kept.bytesize >= 64
+        end
+        made = Config.random_secret
+        Dir.mkdir_p(File.dirname(DEV_SECRET_PATH))
+        File.write(DEV_SECRET_PATH, made + "\n")
+        return made
+      rescue IOError, SystemCallError => e
+        STDERR.puts "bezel: #{DEV_SECRET_PATH} cannot be kept (#{e.message}); this process uses a secret of its own"
+      end
+    end
+    loop do
+      current = PROCESS_SECRET.get
+      return current if current
+      PROCESS_SECRET.compare_and_set(nil, Config.random_secret)
+    end
   end
+
+  # :nodoc:
+  # 32 random bytes from the system's source, as 64 hexadecimal digits.
+  def self.random_secret -> String = Crypto.random_bytes(32).hex
 
   # :nodoc:
   def self.var(environ: Hash[String, String], name: String) -> String?
