@@ -58,6 +58,17 @@ class PlugTest < Test::Case
     assert_match(/\AGET \/p -> 201 in /, events.value[0])
   end
 
+  # bezel#100: the ids do not come from Random: the same seed twice gives
+  # two different ids.
+  def test_request_id_not_from_random
+    srand(7)
+    a = Bezel::Plug::RequestId.generate
+    srand(7)
+    b = Bezel::Plug::RequestId.generate
+    assert_false(a == b)
+    assert_equal(22, a.size)
+  end
+
   def test_request_id
     out = Bezel::Plug::RequestId.new.call(Bezel::Conn.build(req))
     id = out.request_id || ""
