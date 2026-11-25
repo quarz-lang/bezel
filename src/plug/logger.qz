@@ -26,7 +26,7 @@ end
 # `on_event` when given (for structured logs). Lines are written at the
 # `info` level, so a LOG_LEVEL of `warn` or `error` silences them.
 # The path is written percent-decoded, as [Conn#path]; control
-# characters in it are escaped, so that a request cannot forge a line.
+# characters in it ([LogText.escape]) are escaped, so that a request cannot forge a line.
 class Plug::Logger
   include Plug
 
@@ -46,7 +46,7 @@ class Plug::Logger
 
   # :nodoc:
   def report(conn: Conn, status: Int, request_id: String?) -> Void
-    path = conn.path.gsub(/[\x00-\x1f\x7f]/) { |c| "\\x#{c.ord.to_s(16).rjust(2, "0")}" }
+    path = LogText.escape(conn.path)
     event = LogEvent.new(conn.method, path, status, Time.monotonic - conn.started, request_id)
     f = @on_event
     if f

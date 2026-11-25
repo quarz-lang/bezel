@@ -32,8 +32,18 @@ abstract class Endpoint
   # backtrace; override it to send errors elsewhere. An exception it
   # raises is written to standard error and goes no further.
   def self.on_error(error: Exception, conn: Conn) -> Void
-    STDERR.puts "bezel: #{conn.method} #{conn.request.target.partition("?")[0]} raised #{error.class.name}: #{error.message}"
+    STDERR.puts error_line(error, conn)
     error.backtrace.first(20).each { |l| STDERR.puts "  #{l}" }
+  end
+
+  # The first line `on_error` writes: the method and the target without
+  # its query, and the exception's class and message, with what a request
+  # chose escaped ([LogText.escape]).
+  #
+  # :nodoc:
+  def self.error_line(error: Exception, conn: Conn) -> String
+    target = LogText.escape(conn.request.target.partition("?")[0])
+    "bezel: #{conn.method} #{target} raised #{error.class.name}: #{LogText.escape(error.message)}"
   end
 
   # The endpoint as an [HTTP::Handler] for `app`: what [Bezel.start]
@@ -89,7 +99,7 @@ data Runner(endpoint: Type[Endpoint], plugs: Array[Plug], app: App)
       begin
         endpoint.on_error(error, conn)
       rescue StandardError => e
-        STDERR.puts "bezel: on_error raised #{e.class.name}: #{e.message}"
+        STDERR.puts "bezel: on_error raised #{e.class.name}: #{LogText.escape(e.message)}"
       end
     end
     res = ErrorPage.response(conn, error, status)

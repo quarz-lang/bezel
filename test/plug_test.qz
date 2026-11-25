@@ -170,6 +170,16 @@ class PlugTest < Test::Case
     assert_match(/\AHEAD \/x -> 404 in /, events.value[2])
   end
 
+  # bezel#101: C1 controls, U+2028 and U+2029 are escaped as C0 ones are.
+  def test_logger_escapes_c1_and_separators
+    events = Atom.new(Array[String].new)
+    rec = Bezel::Plug::Logger.new(->(e: Bezel::LogEvent) { events.update { |es| es.push(e.to_s) }; nil })
+    plugs: Array[Bezel::Plug] = [rec, Bezel.plug { |c| c.text("x") }]
+    # U+009B, U+0085, U+2028 and U+2029, percent-encoded.
+    Bezel::Plug.run(plugs, Bezel::Conn.build(req("/a%C2%9Bb%C2%85c%E2%80%A8d%E2%80%A9e")))
+    assert_match(/\AGET \/a\\u009bb\\u0085c\\u2028d\\u2029e -> 200 in /, events.value[0])
+  end
+
   def test_logger_silent_above_info
     events = Atom.new(Array[String].new)
     rec = Bezel::Plug::Logger.new(->(e: Bezel::LogEvent) { events.update { |es| es.push(e.to_s) }; nil })

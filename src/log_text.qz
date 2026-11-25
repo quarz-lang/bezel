@@ -1,0 +1,20 @@
+# Text taken from a request, made safe for a log line.
+module LogText
+  # `text` with the characters a terminal or a log viewer acts on written
+  # out, so that a request cannot forge a line or an escape sequence: the
+  # C0 controls and DEL as `\x1b`, the C1 controls (U+0080 to U+009F, among
+  # them U+009B, the one-character CSI, and U+0085, NEL), the line
+  # separator U+2028 and the paragraph separator U+2029 as `\u009b`.
+  #
+  # ```
+  # Bezel::LogText.escape("a\nb")        # => "a\\x0ab"
+  # Bezel::LogText.escape("a\u{9b}b")    # => "a\\u009bb"
+  # Bezel::LogText.escape("plain text")  # => "plain text"
+  # ```
+  def self.escape(text: String) -> String
+    text.gsub(/[\x00-\x1f\x7f\u{80}-\u{9f}\u{2028}\u{2029}]/) do |c|
+      n = c.ord
+      n < 0x80 ? "\\x#{n.to_s(16).rjust(2, "0")}" : "\\u#{n.to_s(16).rjust(4, "0")}"
+    end
+  end
+end
