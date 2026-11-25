@@ -76,6 +76,15 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
   `SECRET_KEY_BASE` `dev` uses a random secret it keeps in
   `tmp/dev_secret` (made on first use; keep `tmp/` out of version
   control), `test` one per process.
+- **The database URL:** pg answers md5, or no authentication at all, only
+  from a server authenticated otherwise (a unix socket, or TLS verified
+  against roots) unless the URL's `require_auth` lists them
+  ([PG.connect]). A local development server that lets `localhost` in on
+  `trust` (or md5) therefore needs `?require_auth=none` (or `md5`) in a
+  TCP URL such as the generated `postgres://localhost/shop_dev`; a
+  unix-socket URL (`postgres:///shop_dev?host=/var/run/postgresql`) or a
+  server on scram-sha-256 needs nothing. The client's error names the
+  setting to add.
 - **[Bezel.start]** serves the endpoint with [HTTP::Server], opens a
   [PG::Pool] when there is a `DATABASE_URL`, and stops gracefully on
   `SIGTERM` and `SIGINT` (a second signal ends the process at once).

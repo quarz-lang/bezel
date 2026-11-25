@@ -92,6 +92,13 @@ module Cli::Skeleton
         - `bezel server` listens on 127.0.0.1 (set HOST=0.0.0.0 to reach it from
           outside, as in a container); without SECRET_KEY_BASE, dev makes a random
           secret in tmp/dev_secret, which .gitignore leaves out.
+        - The dev and test databases (src/config.qz) are reached over TCP on
+          localhost. pg accepts md5 or no authentication there only when the URL
+          allows it: with a local server that lets localhost in on `trust` (or
+          md5), the error "the server asked for no authentication ... pass
+          require_auth" means adding `?require_auth=none` (or `md5`) to the URL.
+          A unix-socket URL (`postgres:///NAME_dev?host=/var/run/postgresql`)
+          needs nothing, nor does a server using scram-sha-256.
       MD
       ".github/workflows/ci.yml" => <<~YML,
         name: CI
@@ -131,7 +138,9 @@ module Cli::Skeleton
       QZ
       "src/config.qz" => <<~QZ,
         # The application's settings per environment; the environment's
-        # variables (HOST, PORT, DATABASE_URL, ...) override them.
+        # variables (HOST, PORT, DATABASE_URL, ...) override them. A local
+        # server on `trust` or md5 needs `?require_auth=none` (or `md5`) in
+        # these URLs (see the README).
         module #{m}::Config
           # The settings of each environment (BEZEL_ENV).
           def self.settings -> Hash[Symbol, Bezel::Settings]
