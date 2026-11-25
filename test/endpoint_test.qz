@@ -35,6 +35,23 @@ class EndpointTest < Test::Case
     Bezel::App.new(Bezel::Config.load("t", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "k" * 64}))
   end
 
+  # bezel#101: what a request chose is escaped in `on_error`'s line: the
+  # target (C0, DEL, C1, U+2028, U+2029) and the message, not the query.
+  def test_error_line_escapes_what_a_request_chose
+    conn = Bezel::Conn.build(HTTP::Server::Request.get("/a\u{1b}b\u{7f}c\u{9b}d\u{85}e\u{2028}f\u{2029}g?tok=1"))
+    line = Bezel::Endpoint.error_line(ArgumentError.new("bad \u{9b}31m \n x\u{2028}y"), conn)
+    assert_equal("bezel: GET /a\\x1bb\\x7fc\\u009bd\\u0085e\\u2028f\\u2029g raised ArgumentError: bad \\u009b31m \\x0a x\\u2028y", line)
+  end
+
+  def test_log_text_escapes_each_class
+    assert_equal("plain: é 日本", Bezel::LogText.escape("plain: é 日本"))
+    assert_equal("\\x00\\x0a\\x1f", Bezel::LogText.escape("\u{0}\n\u{1f}"))
+    assert_equal("\\x7f", Bezel::LogText.escape("\u{7f}"))
+    assert_equal("\\u0080\\u009f", Bezel::LogText.escape("\u{80}\u{9f}"))
+    assert_equal("\u{a0}\u{2027}\u{202a}", Bezel::LogText.escape("\u{a0}\u{2027}\u{202a}"))
+    assert_equal("\\u2028\\u2029", Bezel::LogText.escape("\u{2028}\u{2029}"))
+  end
+
   def test_answers
     res = EndpointTestApp.call(HTTP::Server::Request.get("/"))
     assert_equal(200, res.status)
