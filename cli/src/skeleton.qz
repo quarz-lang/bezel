@@ -151,14 +151,18 @@ module Cli::Skeleton
       QZ
       "src/endpoint.qz" => <<~QZ,
         # Every request goes through these plugs, the router last.
+        # SecureHeaders comes before Static so that static files and the
+        # error pages (404, 400, 405, ...) carry its headers too.
         class #{m}::Endpoint < Bezel::Endpoint
           def self.plugs -> Array[Bezel::Plug]
             [Bezel::Plug::RequestId.new,
              Bezel::Plug::Logger.new,
+             Bezel::Plug::SecureHeaders.new,
              Bezel::Plug::Static.new(at: "/", from: "priv/static"),
              Bezel::Plug::Parsers.new,
              Bezel::Plug::MethodOverride.new,
              Bezel::Plug::Head.new,
+             Bezel::Plug::Timeout.new(15.seconds),
              #{m}::Router.new]
           end
         end
@@ -168,8 +172,7 @@ module Cli::Skeleton
         class #{m}::Router < Bezel::Router
           # The plugs of pages for browsers: sessions, the flash, CSRF protection.
           def self.browser -> Array[Bezel::Plug]
-            [Bezel::Plug::SecureHeaders.new,
-             Bezel::Plug::Accepts.new(["html"]),
+            [Bezel::Plug::Accepts.new(["html"]),
              Bezel::Plug::Session.new(key: "_#{n}"),
              Bezel::Plug::Flash.new,
              Bezel::Plug::CSRF.new]

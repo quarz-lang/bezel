@@ -27,6 +27,7 @@ class Shop::Endpoint < Bezel::Endpoint
   def self.plugs -> Array[Bezel::Plug]
     [Bezel::Plug::RequestId.new,
      Bezel::Plug::Logger.new,
+     Bezel::Plug::SecureHeaders.new,       # before Static: files and error pages get them too
      Bezel::Plug::Static.new(at: "/", from: "priv/static"),
      Bezel::Plug::Parsers.new(parsers: [:urlencoded, :json], max_body: 1_048_576),
      Bezel::Plug::MethodOverride.new,
@@ -234,7 +235,6 @@ A browser pipeline adds sessions and protection:
 ```crystal
 def self.browser -> Array[Bezel::Plug]
   [Bezel::Plug::HostAuthorization.new(["shop.example"]),
-   Bezel::Plug::SecureHeaders.new,               # first: error pages get them too
    Bezel::Plug::Session.new(key: "_shop"),      # an encrypted cookie (AES-256-GCM)
    Bezel::Plug::Flash.new,
    Bezel::Plug::CSRF.new]                        # forms from Bezel.html(conn) carry the token
