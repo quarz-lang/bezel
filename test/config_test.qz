@@ -38,6 +38,18 @@ class ConfigTest < Test::Case
     assert_equal(dev, load({}).secret_key_base)
     assert_equal(dev, File.read(Bezel::Config::DEV_SECRET_PATH).strip)
     assert_match(/\A[0-9a-f]{64}\z/, dev)
+    # Readable by its owner alone (GNU stat, as on CI's Linux).
+    stat = Process.run("stat", "-c", "%a", Bezel::Config::DEV_SECRET_PATH)
+    assert_equal("600", stat.stdout.strip) if stat.success?
+    # Made at once by several tasks: one secret, the file's, for all.
+    File.delete(Bezel::Config::DEV_SECRET_PATH)
+    got = Task.scope do |scope|
+      tasks = 4.times.map { scope.spawn { Bezel::Config.dev_secret(:dev) } }.to_a
+      tasks.map(&:await)
+    end
+    assert_equal(1, got.uniq.size)
+    assert_equal(got[0], File.read(Bezel::Config::DEV_SECRET_PATH).strip)
+    dev = got[0]
     t = load({"BEZEL_ENV" => "test"}).secret_key_base
     assert_equal(t, load({"BEZEL_ENV" => "test"}).secret_key_base)
     assert_false(t == dev)

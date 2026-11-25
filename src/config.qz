@@ -215,21 +215,33 @@ data Config(
   # The secret `dev` and `test` use without SECRET_KEY_BASE (bezel#99):
   # random, so that no one can compute it (a digest of the application's
   # name could be, and with it any session sealed). In `dev`, kept in
-  # [DEV_SECRET_PATH], made on first use, so that sessions survive a
-  # restart and a task's tokens verify in the server; when the file
-  # cannot be written, one per process, with a warning. In `test`, one per
-  # process.
+  # [DEV_SECRET_PATH], made on first use only when absent and readable by
+  # its owner alone (`0o600`), so that sessions survive a restart and a
+  # task's tokens verify in the server, however many processes start at
+  # once; when the file cannot be kept, one per process, with a warning.
+  # In `test`, one per process.
   def self.dev_secret(env: Symbol) -> String
     if env == :dev
       begin
-        if File.file?(DEV_SECRET_PATH)
+        Dir.mkdir_p(File.dirname(DEV_SECRET_PATH))
+        made = Config.random_secret
+        begin
+          # Made only when absent, readable by this user alone: two
+          # processes at first use (a server and a task) end with the one
+          # secret the file holds, not each its own.
+          File.open(DEV_SECRET_PATH, "wx", perm: 0o600) { |f| f.write(made + "\n") }
+          return made
+        rescue SystemCallError => e
+          raise e unless File.exist?(DEV_SECRET_PATH)
+        end
+        # Another process made it, or is making it: what the file holds,
+        # once it is whole.
+        40.times do
           kept = File.read(DEV_SECRET_PATH).strip
           return kept if kept.bytesize >= 64
+          Task.sleep(50.ms)
         end
-        made = Config.random_secret
-        Dir.mkdir_p(File.dirname(DEV_SECRET_PATH))
-        File.write(DEV_SECRET_PATH, made + "\n")
-        return made
+        raise IOError.new("it holds no secret of 64 bytes")
       rescue IOError, SystemCallError => e
         STDERR.puts "bezel: #{DEV_SECRET_PATH} cannot be kept (#{e.message}); this process uses a secret of its own"
       end
