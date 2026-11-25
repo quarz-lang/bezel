@@ -70,7 +70,7 @@ module Cli::Skeleton
         PG = { git = #{PG_GIT.inspect}, branch = "main" }
         Divider = { git = #{DIVIDER_GIT.inspect}, branch = "main" }
       TOML
-      ".gitignore" => "/#{n}\nCog.local.toml\n",
+      ".gitignore" => "/#{n}\nCog.local.toml\n/tmp/\n",
       "README.md" => <<~MD,
         # #{m}
 
@@ -89,6 +89,9 @@ module Cli::Skeleton
           src/models/, src/migrations/ (listed by src/migrations.qz).
         - Settings per environment in src/config.qz; HOST, PORT, DATABASE_URL,
           SECRET_KEY_BASE (required in prod) and the others from the environment.
+        - `bezel server` listens on 127.0.0.1 (set HOST=0.0.0.0 to reach it from
+          outside, as in a container); without SECRET_KEY_BASE, dev makes a random
+          secret in tmp/dev_secret, which .gitignore leaves out.
       MD
       ".github/workflows/ci.yml" => <<~YML,
         name: CI

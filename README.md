@@ -71,7 +71,11 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
   `PORT`, `DATABASE_URL`, `POOL_SIZE`, `SECRET_KEY_BASE` (required in
   `prod`, 64 bytes or more), `TRUSTED_PROXIES`, `TLS_CERT`/`TLS_KEY` and
   `LOG_LEVEL` over the application's own [Bezel::Settings] per
-  environment.
+  environment. Outside `prod`, the server listens on `127.0.0.1` unless
+  `HOST` says otherwise (`HOST=0.0.0.0` in a container), and without
+  `SECRET_KEY_BASE` `dev` uses a random secret it keeps in
+  `tmp/dev_secret` (made on first use; keep `tmp/` out of version
+  control), `test` one per process.
 - **[Bezel.start]** serves the endpoint with [HTTP::Server], opens a
   [PG::Pool] when there is a `DATABASE_URL`, and stops gracefully on
   `SIGTERM` and `SIGINT` (a second signal ends the process at once).

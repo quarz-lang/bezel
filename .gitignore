@@ -6,3 +6,5 @@
 /Cog.local.toml
 # The fixtures' resolutions (test/fixtures/*/Cog.toml).
 /test/fixtures/*/Cog.lock
+# The development secret the tests make (Config::DEV_SECRET_PATH).
+/tmp/
