@@ -57,6 +57,15 @@ class CliTest < Test::Case
       assert(read(root, "src/jobs.qz").include?("def self.all -> Array[Type[Divider::Job]] = []"))
       assert_equal("[patch]\nBezel = { path = #{CliTest.repo.inspect} }\n", read(root, "Cog.local.toml"))
       assert(read(root, "src/views/generated/page.qz").include?("module Shop::PageView"))
+      # SecureHeaders in the endpoint, before Static (bezel#102), so that
+      # files and error pages carry its headers; not in the browser pipeline.
+      plugs = ["[Bezel::Plug::RequestId.new,", "Bezel::Plug::Logger.new,", "Bezel::Plug::SecureHeaders.new,",
+               "Bezel::Plug::Static.new(at: \"/\", from: \"priv/static\"),", "Bezel::Plug::Parsers.new,",
+               "Bezel::Plug::MethodOverride.new,", "Bezel::Plug::Head.new,", "Bezel::Plug::Timeout.new(15.seconds),",
+               "Shop::Router.new]"]
+      endpoint = read(root, "src/endpoint.qz").lines.map(&:strip).select { |l| l.start_with?("[Bezel::", "Bezel::", "Shop::Router") }
+      assert_equal(plugs, endpoint)
+      assert_false(read(root, "src/router.qz").include?("SecureHeaders"))
       assert_equal(0, bezel(["templates", "--check"], root)[0])
       assert_equal(0, bezel(["migrations", "--check"], root)[0])
       res = quarz_check(root)
