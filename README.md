@@ -89,6 +89,24 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
 - **[Bezel.start]** serves the endpoint with [HTTP::Server], opens a
   [PG::Pool] when there is a `DATABASE_URL`, and stops gracefully on
   `SIGTERM` and `SIGINT` (a second signal ends the process at once).
+- **[Bezel.serve]** does the same for several servers and services in
+  one process: a public endpoint and an internal one on another port,
+  and a job worker. Each server is made with [Bezel.server], the pool
+  with [Bezel.open_pool], and anything else that runs and stops with
+  them with [Bezel.service]:
+
+  ```crystal
+  config = Bezel::Config.load("shop", settings)
+  app = Bezel::App.new(config, Bezel.open_pool(config))
+  Bezel.serve([Bezel.server(Shop::Endpoint, app, port: 8080), Bezel.server(Shop::Internal, app, port: 8081)],
+              grace: 25.seconds,
+              also: [Bezel.service(run: -> { worker.run }, shutdown: ->(g: Duration) { worker.shutdown(g) })])
+  ```
+
+  `SIGTERM` shuts all of them down at once with the grace, `SIGINT`
+  with one second, and a second signal ends the process. When one of
+  them ends or raises, the others are shut down as well, and the first
+  exception is raised again once all have stopped.
 
 A router declares its routes in one `routes` block, checked where it is
 compiled. A controller declares its plugs, one `plug` or `skip` line

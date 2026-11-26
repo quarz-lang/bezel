@@ -70,4 +70,121 @@ class ServerTest < Test::Case
     end
     assert_equal("stopped", out)
   end
+
+  # bezel#112: Bezel.serve, for several servers and services.
+  def two_servers -> Array[HTTP::Server]
+    app = Bezel::App.new(Bezel::Config.load("serve_test", environ: {"BEZEL_ENV" => "test", "HOST" => "127.0.0.1"}))
+    [Bezel.server(ServerTestApp, app, port: 0), Bezel.server(ServerTestApp, app, port: 0)]
+  end
+
+  # A service that runs until its shutdown, recording the grace it got;
+  # `fail` makes its run raise, `bad_shutdown` its shutdown.
+  def fake_service(graces: Atom[Array[Duration]], *, fail: Bool = false, bad_shutdown: Bool = false) -> Bezel::Service
+    stop = Channel[Nil].new
+    Bezel.service(run: -> {
+      if fail
+        Task.sleep(50.ms)
+        raise ArgumentError.new("the service failed")
+      end
+      stop.receive?
+      nil
+    }, shutdown: ->(g: Duration) {
+      graces.update { |a| a + [g] }
+      raise ArgumentError.new("cannot stop") if bad_shutdown
+      stop.close
+      nil
+    })
+  end
+
+  def up?(port: Int) -> Bool
+    100.times do
+      begin
+        HTTP::Client.new(timeout: 1.second, proxy: nil).get("http://127.0.0.1:#{port}/nothing").close
+        return true
+      rescue HTTP::Client::Error
+        Task.sleep(50.ms)
+      end
+    end
+    false
+  end
+
+  def test_serve_stops_servers_and_services_on_term
+    servers = two_servers
+    ports = servers.map { |srv| srv.local_address.port }
+    graces = Atom[Array[Duration]].new([])
+    svc = fake_service(graces)
+    out = Task.scope do |s|
+      t = s.spawn do
+        Bezel.serve(servers, grace: 2.seconds, also: [svc])
+        "stopped"
+      end
+      assert_true(ports.all? { |port| up?(port) })
+      Process.run("kill", "-TERM", Process.pid.to_s)
+      t.await
+    end
+    assert_equal("stopped", out)
+    assert_equal([2.seconds], graces.get)
+    # Both stopped: nothing answers any more.
+    ports.each do |port|
+      assert_raise(HTTP::Client::Error) { HTTP::Client.new(timeout: 1.second, proxy: nil).get("http://127.0.0.1:#{port}/") }
+    end
+  end
+
+  # One task that raises shuts the others down, and its error is raised
+  # again once all have stopped.
+  def test_serve_a_failing_service_stops_the_servers
+    servers = two_servers
+    graces = Atom[Array[Duration]].new([])
+    other = fake_service(graces)
+    e = assert_raise(ArgumentError) { Bezel.serve(servers, grace: 1.second, also: [fake_service(graces, fail: true), other]) }
+    assert_equal("the service failed", e.message)
+    assert_equal(2, graces.get.size)
+  end
+
+  # A server already shut down (its serve returns at once) ends the
+  # others too.
+  def test_serve_with_a_server_already_shut_down
+    servers = two_servers
+    servers[0].shutdown(timeout: 1.second)
+    graces = Atom[Array[Duration]].new([])
+    Bezel.serve(servers, grace: 1.second, also: [fake_service(graces)])
+    assert_equal([1.second], graces.get)
+  end
+
+  # A service whose shutdown raises is reported, and its run cancelled
+  # after the grace plus 10 seconds: serve still returns.
+  def test_serve_a_shutdown_that_raises
+    graces = Atom[Array[Duration]].new([])
+    servers = two_servers
+    servers[0].shutdown(timeout: 1.second)
+    started = Time.now
+    Bezel.serve(servers, grace: 100.ms, also: [fake_service(graces, bad_shutdown: true)])
+    assert_equal(1, graces.get.size)
+    assert_true(Time.now - started < 30.seconds)
+  end
+
+  # After SIGINT, a service that never returns is cancelled one second
+  # (SIGINT's grace) plus 10 seconds later, not `grace` plus 10.
+  def test_serve_int_with_a_service_that_never_returns
+    servers = two_servers
+    ports = servers.map { |srv| srv.local_address.port }
+    never = Channel[Nil].new
+    stuck = Bezel.service(run: -> { never.receive?; nil }, shutdown: ->(g: Duration) { nil })
+    started = Time.now
+    Task.scope do |s|
+      t = s.spawn do
+        Bezel.serve(servers, grace: 60.seconds, also: [stuck])
+        nil
+      end
+      assert_true(ports.all? { |port| up?(port) })
+      Process.run("kill", "-INT", Process.pid.to_s)
+      t.await
+    end
+    took = Time.now - started
+    assert_true(took >= 10.seconds && took < 20.seconds, took.inspect)
+  end
+
+  def test_serve_needs_something
+    assert_raise(ArgumentError) { Bezel.serve(Array[HTTP::Server].new) }
+  end
 end
