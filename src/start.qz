@@ -46,10 +46,12 @@ end
 # [Bezel.service] makes one.
 data Service = (run: shareable () -> Void, shutdown: shareable (Duration) -> Void)
 
-# A [Service] of `run` and `shutdown`: a job worker, say.
+# A [Service] of `run` and `shutdown`: a job worker, say
+# (`Bezel.service(run: -> { worker.run }, shutdown: ->(g: Duration) { worker.shutdown(g) })`).
 #
 # ```quarz no_run
-# Bezel.service(run: -> { worker.run }, shutdown: ->(g: Duration) { worker.shutdown(g) })
+# stop = Channel[Nil].new
+# Bezel.service(run: -> { stop.receive?; nil }, shutdown: ->(g: Duration) { stop.close; nil })
 # ```
 public def service(*, run: shareable () -> Void, shutdown: shareable (Duration) -> Void) -> Service = Service.new(run, shutdown)
 
@@ -78,12 +80,19 @@ public def service(*, run: shareable () -> Void, shutdown: shareable (Duration) 
 # are dropped, not restored).
 #
 # ```quarz no_run
-# config = Bezel::Config.load("store", {prod: Store::Config.prod})
+# class ShopFront < Bezel::Endpoint
+#   def self.plugs -> Array[Bezel::Plug] = [Bezel.plug { |conn| conn.text("hi") }]
+# end
+#
+# class ShopInternal < Bezel::Endpoint
+#   def self.plugs -> Array[Bezel::Plug] = [Bezel.plug { |conn| conn.text("ok") }]
+# end
+#
+# config = Bezel::Config.load("store", {prod: Bezel::Settings.new(port: 8080)})
 # app = Bezel::App.new(config, Bezel.open_pool(config))
-# public_side = Bezel.server(Store::Endpoint, app, port: 8080)
-# internal = Bezel.server(Store::Internal, app, port: 8081)
-# Bezel.serve([public_side, internal], grace: 25.seconds,
-#             also: [Bezel.service(run: -> { worker.run }, shutdown: ->(g: Duration) { worker.shutdown(g) })])
+# stop = Channel[Nil].new
+# jobs = Bezel.service(run: -> { stop.receive?; nil }, shutdown: ->(g: Duration) { stop.close; nil })
+# Bezel.serve([Bezel.server(ShopFront, app), Bezel.server(ShopInternal, app, port: 8081)], grace: 25.seconds, also: [jobs])
 # ```
 #
 # ## Raises
