@@ -33,30 +33,163 @@ public def start(endpoint: Type[Endpoint], settings: Hash[Symbol, Settings] = {}
   pool = open_pool(c)
   begin
     srv = server(endpoint, App.new(c, pool))
-    signals = Atom.new(0)
-    Signal.trap(:TERM) do
-      if signals.update { |n| n + 1 } > 1
-        STDERR.puts "bezel: a second signal: exiting now"
-        exit!(1)
-      end
-      srv.shutdown(timeout: grace)
-    end
-    Signal.trap(:INT) do
-      if signals.update { |n| n + 1 } > 1
-        STDERR.puts "bezel: a second signal: exiting now"
-        exit!(1)
-      end
-      srv.shutdown(timeout: 1.second)
-    end
     a = srv.local_address
     STDERR.puts "bezel: #{c.app} (#{c.env}) listening on #{c.tls_cert ? "https" : "http"}://#{a.host}:#{a.port}"
-    Task.scope do |s|
-      s.spawn { srv.serve }
-    end
+    serve([srv], grace: grace)
   ensure
+    pool&.close
+  end
+end
+
+# Something else a process runs and stops with its servers ([Bezel.serve]):
+# `run` runs it until `shutdown` (given the grace) asks it to stop.
+# [Bezel.service] makes one.
+data Service = (run: shareable () -> Void, shutdown: shareable (Duration) -> Void)
+
+# A [Service] of `run` and `shutdown`: a job worker, say.
+#
+# ```quarz no_run
+# Bezel.service(run: -> { worker.run }, shutdown: ->(g: Duration) { worker.shutdown(g) })
+# ```
+public def service(*, run: shareable () -> Void, shutdown: shareable (Duration) -> Void) -> Service = Service.new(run, shutdown)
+
+# Serves `servers` and runs the services `also` until the process is told
+# to stop, as [Bezel.start] does for its one server: for a process with
+# several endpoints (each made with [Bezel.server], on its own port) and
+# what else it runs (a job worker).
+#
+# Each server's `serve` and each service's `run` runs in a task of its
+# own; a line `bezel: serving on HOST:PORT` (`bezel: serving on a UNIX
+# socket`, `bezel: serving a server already shut down`) is printed for
+# each server first. SIGTERM shuts them all down
+# at once, each server with `grace` for its requests in flight
+# ([HTTP::Server#shutdown]) and each service's `shutdown` given `grace`;
+# SIGINT (Ctrl-C) does the same with one second. A second signal during
+# the shutdown ends the process at once (status 1). When a server's
+# `serve` or a service's `run` ends by itself or raises, the others are
+# shut down as if SIGTERM had come (so a server already shut down, or
+# given twice, ends them all at once). A service's `shutdown` that raises
+# is reported on standard error (its class only) and the shutdown goes
+# on; a task still running `grace` plus 10 seconds after the shutdown
+# began is cancelled (a task that never waits cannot be: the second
+# signal ends the process). Returns once every task has ended, raising
+# again the first exception one ended with, with the default actions of
+# SIGTERM and SIGINT back (traps the application set for them before
+# are dropped, not restored).
+#
+# ```quarz no_run
+# config = Bezel::Config.load("store", {prod: Store::Config.prod})
+# app = Bezel::App.new(config, Bezel.open_pool(config))
+# public_side = Bezel.server(Store::Endpoint, app, port: 8080)
+# internal = Bezel.server(Store::Internal, app, port: 8081)
+# Bezel.serve([public_side, internal], grace: 25.seconds,
+#             also: [Bezel.service(run: -> { worker.run }, shutdown: ->(g: Duration) { worker.shutdown(g) })])
+# ```
+#
+# ## Raises
+#
+# [ArgumentError] when there is neither a server nor a service; the first
+# exception a server or a service ended with.
+public def serve(servers: Array[HTTP::Server], *, grace: Duration = 30.seconds, also: Array[Service] = []) -> Void
+  raise ArgumentError.new("Bezel.serve: no server and no service") if servers.empty? && also.empty?
+  stopping = Atom.new(false)
+  signals = Atom.new(0)
+  # The index of the first task that raised (-1: none).
+  failed = Atom.new(-1)
+  tasks: Array[Task[Nil]] = []
+  # Stops everything once, with `g`, and cancels what still runs after
+  # `g` plus 10 seconds.
+  stop: shareable (Duration) -> Void = ->(g: Duration) {
+    if stopping.compare_and_set(false, true)
+      servers.each { |srv| srv.shutdown(timeout: g) }
+      also.each do |svc|
+        Task.spawn do
+          begin
+            svc.shutdown.call(g)
+          rescue StandardError => e
+            STDERR.puts "bezel: a service's shutdown raised #{e.class.name}"
+          end
+          nil
+        end
+      end
+    end
+    nil
+  }
+  Signal.trap(:TERM) do
+    if signals.update { |n| n + 1 } > 1
+      STDERR.puts "bezel: a second signal: exiting now"
+      exit!(1)
+    end
+    stop.call(grace)
+  end
+  Signal.trap(:INT) do
+    if signals.update { |n| n + 1 } > 1
+      STDERR.puts "bezel: a second signal: exiting now"
+      exit!(1)
+    end
+    stop.call(1.second)
+  end
+  begin
+    servers.each do |srv|
+      text = begin
+               a = srv.local_address
+               "on " + (a.host.include?(":") ? "[#{a.host}]:#{a.port}" : "#{a.host}:#{a.port}")
+             rescue ArgumentError
+               "on a UNIX socket"
+             rescue StandardError
+               # (A server already shut down has no address to show:
+               # quarz#1184.)
+               "a server already shut down"
+             end
+      STDERR.puts "bezel: serving #{text}"
+    end
+    bodies: Array[shareable () -> Void] = servers.map { |srv| ->() { srv.serve } }
+    bodies = bodies + also.map { |svc| svc.run }
+    bodies.each_with_index do |body, i|
+      tasks = tasks.push(Task.spawn do
+        begin
+          body.call
+        rescue Task::Cancelled => c
+          raise c
+        rescue Exception => e
+          failed.compare_and_set(-1, i)
+          raise e
+        ensure
+          stop.call(grace)
+        end
+        nil
+      end)
+    end
+    # Cancels what still runs `grace` plus 10 seconds after a shutdown began.
+    all = tasks
+    watchdog = Task.spawn do
+      until stopping.get
+        Task.sleep(100.ms)
+      end
+      Task.sleep(grace + 10.seconds)
+      all.each(&:cancel)
+      nil
+    end
+    tasks.each do |t|
+      begin
+        t.await
+      rescue Task::Cancelled => c
+        # (The caller cancelled: not a task the watchdog cancelled.)
+        raise c if Task.current.cancelled?
+      rescue Exception
+        nil
+      end
+    end
+    watchdog.cancel
+    if (i = failed.get) >= 0
+      tasks[i].await
+    end
+    nil
+  ensure
+    # (Nothing outlives the call, should the caller be cancelled.)
+    tasks.each(&:cancel)
     Signal.trap(:TERM, :default)
     Signal.trap(:INT, :default)
-    pool&.close
   end
 end
 
@@ -75,9 +208,11 @@ public def app_name(endpoint: Type[Endpoint]) -> String
   Rotor::Inflector.underscore(endpoint.name.partition("::")[0])
 end
 
-# :nodoc:
-# The pool of `config`'s database, or nil without one.
-def open_pool(config: Config) -> PG::Pool?
+# The pool of `config`'s database (its DATABASE_URL, `pool_size`
+# connections), or nil without one: the pool [Bezel.start] opens, for an
+# application that builds its [App] and servers itself ([Bezel.serve]).
+# Close it when done.
+public def open_pool(config: Config) -> PG::Pool?
   url = config.database_url
   url ? PG::Pool.new(url, config.pool_size) : nil
 end
