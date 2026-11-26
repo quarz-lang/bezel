@@ -1,15 +1,34 @@
 # Chooses the response's format among `formats` (`["html", "json"]`) and
-# sets [Conn#format] (`:html`): the `_format` parameter when there is
-# one, else the request's Accept (its media ranges by their quality;
-# `*/*` or no Accept takes the first of `formats`). A request that
-# accepts none of them, or names another `_format`, is
-# [Bezel::NotAcceptable] (`406`).
+# sets [Conn#format] (`:html`) and the media type to answer it with,
+# [Conn#format_type]: the `_format` parameter when there is one, else the
+# request's Accept (its media ranges by their quality; `*/*` or no Accept
+# takes the first of `formats`). A request that accepts none of them, or
+# names another `_format`, is [Bezel::NotAcceptable] (`406`).
 #
 # The formats and their media types: `html` (`text/html`, and
 # `application/xhtml+xml` when named exactly, so that `application/*` is
 # no HTML), `json`
 # (`application/json`), `text` (`text/plain`), `xml` (`application/xml`
-# and `text/xml`), `csv` (`text/csv`).
+# and `text/xml`), `csv` (`text/csv`); and those `types` gives (bezel#113),
+# which may also replace a known format's types:
+#
+# ```
+# accepts = Bezel::Plug::Accepts.new(["html", "doc"], types: {"doc" => ["application/vnd.example+json",
+#                                                                        "application/ld+json; profile=\"https://example.com/profile\""]})
+# req = HTTP::Server::Request.get("/", HTTP::Headers.of({"Accept" => "application/ld+json; profile=\"https://example.com/profile\""}))
+# conn = accepts.call(Bezel::Conn.build(req))
+# conn.format        # => :doc
+# conn.format_type   # => "application/ld+json; profile=\"https://example.com/profile\""
+# ```
+#
+# A media type's parameters (`profile`, `charset`; never `q`) take no part
+# in the match unless the listed type names them: then the request's range
+# must carry each, with the same value (names compared without case,
+# values exactly, quotes removed). `type/*` and `*/*` reach every type of
+# their kind, parameters or not. The type answered ([Conn#format_type]) is
+# the format's listed type the request asked for with the highest
+# quality, the earlier listed among equals (the first listed for `*/*`,
+# no Accept, or `_format`).
 #
 # ```
 # req = HTTP::Server::Request.get("/", HTTP::Headers.of({"Accept" => "application/json, text/html;q=0.5"}))
@@ -18,7 +37,18 @@
 class Plug::Accepts
   include Plug
 
+  # A media type a format answers with: `type/subtype` (lowercased), its
+  # parameters (names lowercased, values unquoted), and its text as
+  # listed (what [Conn#format_type] gives).
+  data MediaType = (name: String, params: Hash[String, String], text: String)
+
+  # A media range of an Accept header: `type/subtype` (or `type/*`,
+  # `*/*`), lowercased, its parameters but `q`, and its quality.
+  data Range = (name: String, params: Hash[String, String], q: Float)
+
   @formats: Array[String]
+  # The media types of each format accepted, the first the default.
+  @types: Hash[String, Array[MediaType]]
 
   # The media types of the formats known.
   TYPES = {
@@ -26,95 +56,222 @@ class Plug::Accepts
     "text" => ["text/plain"], "xml" => ["application/xml", "text/xml"], "csv" => ["text/csv"]
   }
 
-  # The plug, accepting `formats` (preferred first).
-  def initialize(@formats: Array[String])
+  # The plug, accepting `formats` (preferred first); `types` gives the
+  # media types of more formats (a name of letters, digits and `_`), or
+  # replaces a known one's. Raises [ArgumentError] for no format, a
+  # format neither knows, a bad name, or a media type that is not
+  # `type/subtype` with `; name=value` parameters.
+  def initialize(@formats: Array[String], *, types: Hash[String, Array[String]] = {})
     raise ArgumentError.new("Accepts needs at least one format") if @formats.empty?
+    known: Hash[String, Array[MediaType]] = {}
     @formats.each do |f|
-      raise ArgumentError.new("unknown format #{f.inspect}: #{TYPES.keys.join(", ")}") unless TYPES.key?(f)
+      listed = types[f]? || TYPES[f]?
+      if listed.nil?
+        raise ArgumentError.new("unknown format #{f.inspect}: #{TYPES.keys.join(", ")}, or one given in types:")
+      end
+      raise ArgumentError.new("a format's name is letters, digits and _, not #{f.inspect}") unless f.match?(/\A[a-z0-9_]+\z/)
+      raise ArgumentError.new("the format #{f} has no media type") if listed.empty?
+      known = known.put(f, listed.map { |t| Accepts.media_type(t, f) })
     end
+    @types = known
   end
 
   def call(conn: Conn) -> Conn
     given = conn.params.string?("_format")
     if given
       raise NotAcceptable.new("format #{given.inspect} is not served here") unless @formats.include?(given)
-      return conn.with(format: given.to_sym)
+      return conn.with(format: given.to_sym, format_type: @types[given][0].text)
     end
     accept = conn.header("accept")
-    return conn.with(format: @formats[0].to_sym) if accept.nil? || accept.strip.empty?
+    if accept.nil? || accept.strip.empty?
+      return conn.with(format: @formats[0].to_sym, format_type: @types[@formats[0]][0].text)
+    end
     chosen = choose(accept)
     raise NotAcceptable.new("none of #{@formats.join(", ")} is acceptable") if chosen.nil?
-    conn.with(format: chosen.to_sym)
+    f, t = chosen
+    conn.with(format: f.to_sym, format_type: t)
   end
 
   # Media types a format takes only when the header names them exactly.
   EXACT = {"html" => ["application/xhtml+xml"]}
 
   # :nodoc:
-  # The format the Accept header prefers, or nil (RFC 9110 §12.5.1):
-  # a media type takes the quality of the most specific range matching
-  # it (`text/html;q=0` refuses HTML even under `*/*`), a format the best
-  # of its media types', and the highest quality above 0 wins, the format
-  # listed first among equals.
-  def choose(accept: String) -> String?
-    ranges: Array[[String, Float]] = []
-    accept.split(",").each do |part|
-      bits = part.split(";").map(&:strip)
-      range = (bits[0]? || "").downcase
-      next if range.empty?
-      q = 1.0
-      bits.drop(1).each do |o|
-        k, _, v = o.partition("=")
-        if k.strip.downcase == "q"
-          vs = v.strip
-          q = vs.match?(/\A(0(\.[0-9]{0,3})?|1(\.0{0,3})?)\z/) ? vs.to_f : 0.0
-        end
-      end
-      ranges = ranges.push([range, q])
-    end
-    best: String? = nil
+  # The format the Accept header prefers and the media type to answer it
+  # with, or nil (RFC 9110 §12.5.1): a media type takes the quality of
+  # the most specific range matching it (`text/html;q=0` refuses HTML
+  # even under `*/*`), a format the best of its media types', and the
+  # highest quality above 0 wins, the format listed first among equals;
+  # its type the one of the best quality, the earlier listed among
+  # equals.
+  def choose(accept: String) -> [String, String]?
+    ranges = Accepts.ranges(accept)
+    best: [String, String]? = nil
     best_q = 0.0
     @formats.each do |f|
+      listed = @types[f]
       fq = 0.0
-      (TYPES[f]? || []).each do |t|
-        main = t.partition("/")[0]
-        spec = 0
-        tq = 0.0
-        ranges.each do |rq|
-          range, q = rq
-          s = if range == t
-            3
-          elsif range == "#{main}/*"
-            2
-          elsif range == "*/*"
-            1
-          else
-            0
-          end
-          if s > spec
-            spec = s
-            tq = q
-          end
+      ft = listed[0].text
+      listed.each do |t|
+        tq = Accepts.quality(t, ranges)
+        if tq > fq
+          fq = tq
+          ft = t.text
         end
-        fq = tq if tq > fq
       end
       # (Unless the header refuses the format's own types by name:
       # `text/html;q=0, application/xhtml+xml` is no HTML, which is sent
       # as text/html.)
-      refused = (TYPES[f]? || []).any? { |t| ranges.any? { |rq| rq[0] == t && rq[1] == 0.0 } }
+      refused = listed.any? { |t| ranges.any? { |r| r.name == t.name && Accepts.carries?(r, t) && r.q == 0.0 } }
       unless refused
-        (EXACT[f]? || []).each do |t|
-          ranges.each do |rq|
-            range, q = rq
-            fq = q if range == t && q > fq
+        (EXACT[f]? || []).each do |e|
+          ranges.each do |r|
+            if r.name == e && r.q > fq
+              fq = r.q
+              ft = listed[0].text
+            end
           end
         end
       end
       if fq > best_q
-        best = f
+        best = [f, ft]
         best_q = fq
       end
     end
     best
+  end
+
+  # :nodoc:
+  # The quality `ranges` give `t`: that of the most specific range
+  # matching it (its exact name carrying its parameters, then `type/*`,
+  # then `*/*`), 0 when none does.
+  def self.quality(t: MediaType, ranges: Array[Range]) -> Float
+    main = t.name.partition("/")[0]
+    spec = 0
+    q = 0.0
+    ranges.each do |r|
+      s = if r.name == t.name && Accepts.carries?(r, t)
+        3
+      elsif r.name == "#{main}/*"
+        2
+      elsif r.name == "*/*"
+        1
+      else
+        0
+      end
+      if s > spec
+        spec = s
+        q = r.q
+      end
+    end
+    q
+  end
+
+  # :nodoc:
+  # Whether the range `r` carries each parameter `t` names, with the
+  # same value.
+  def self.carries?(r: Range, t: MediaType) -> Bool
+    t.params.all? { |k, v| r.params[k]? == v }
+  end
+
+  # :nodoc:
+  # The media type `text` listed for the format `f`. Raises
+  # [ArgumentError] naming the format when it is not `type/subtype` with
+  # `; name=value` parameters.
+  def self.media_type(text: String, f: String) -> MediaType
+    parsed = Accepts.parse_one(text)
+    bad = "the format #{f}: #{text.inspect} is not a media type (type/subtype; name=value)"
+    raise ArgumentError.new(bad) if parsed.nil?
+    Accepts.split_outside_quotes(text, 59).drop(1).each do |b|
+      raise ArgumentError.new(bad) unless b.match?(/\A\s*[!#$%&'*+.^_`|~0-9A-Za-z-]+=([!#$%&'*+.^_`|~0-9A-Za-z-]+|"([^"\\]|\\.)*")\s*\z/)
+    end
+    name, params = parsed
+    raise ArgumentError.new(bad) unless name.match?(/\A[!#$%&'+.^_`|~0-9a-z-]+\/[!#$%&'+.^_`|~0-9a-z-]+\z/)
+    raise ArgumentError.new("the format #{f}: a media type's parameters cannot hold q") if params.key?("q")
+    MediaType.new(name, params, text.strip)
+  end
+
+  # :nodoc:
+  # The media ranges of an Accept header, the ones it cannot read
+  # skipped: split at commas outside quoted strings.
+  def self.ranges(accept: String) -> Array[Range]
+    out: Array[Range] = []
+    Accepts.split_outside_quotes(accept, 44).each do |part|
+      parsed = Accepts.parse_one(part)
+      next if parsed.nil?
+      name, params = parsed
+      next unless name.match?(/\A[^\/\s]+\/[^\/\s]+\z/)
+      q = 1.0
+      if (v = params["q"]?)
+        q = v.match?(/\A(0(\.[0-9]{0,3})?|1(\.0{0,3})?)\z/) ? v.to_f : 0.0
+      end
+      out = out.push(Range.new(name, params.delete("q"), q))
+    end
+    out
+  end
+
+  # :nodoc:
+  # `type/subtype; name=value; ...` read: the name lowercased, the
+  # parameters by name lowercased, values unquoted (`\x` escapes taken),
+  # the first of a name kept, a parameter without `=` skipped (as the
+  # reader of Accept always did); nil when empty.
+  def self.parse_one(text: String) -> [String, Hash[String, String]]?
+    bits = Accepts.split_outside_quotes(text, 59)
+    name = (bits[0]? || "").strip.downcase
+    return nil if name.empty?
+    params: Hash[String, String] = {}
+    bits.drop(1).each do |b|
+      k, eq, v = b.partition("=")
+      key = k.strip.downcase
+      next if eq.empty? || key.empty?
+      value = v.strip
+      if value.size >= 2 && value.start_with?("\"") && value.end_with?("\"")
+        value = Accepts.unquote(value[1, value.size - 2])
+      end
+      params = params.put(key, value) unless params.key?(key)
+    end
+    [name, params]
+  end
+
+  # :nodoc:
+  # A quoted string's inside, its `\x` escapes taken.
+  def self.unquote(inner: String) -> String
+    b = inner.to_bytes
+    out = Bytes::Builder.new
+    i = 0
+    while i < b.size
+      i += 1 if b[i] == 92 && i + 1 < b.size
+      out << b[i]
+      i += 1
+    end
+    out.to_bytes.decode? || inner
+  end
+
+  # :nodoc:
+  # `text` cut at each byte `sep` (`,` or `;`) outside double quotes
+  # (a `\` escaping the next byte inside them). An unclosed quote runs to
+  # the end.
+  def self.split_outside_quotes(text: String, sep: Int) -> Array[String]
+    out: Array[String] = []
+    b = text.to_bytes
+    start = 0
+    quoted = false
+    i = 0
+    while i < b.size
+      c = b[i]
+      if quoted
+        if c == 92
+          i += 1
+        elsif c == 34
+          quoted = false
+        end
+      elsif c == 34
+        quoted = true
+      elsif c == sep
+        out = out.push(b.slice(start, i - start).decode)
+        start = i + 1
+      end
+      i += 1
+    end
+    out.push(b.slice(start, b.size - start).decode)
   end
 end

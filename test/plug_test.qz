@@ -354,6 +354,69 @@ class PlugTest < Test::Case
     assert_raise(ArgumentError) { Bezel::Plug::Accepts.new(["yaml"]) }
   end
 
+  # bezel#113: formats given with `types:`, their parameters, and the
+  # media type chosen to answer with.
+  PROFILE = "application/ld+json; profile=\"https://example.com/profile\""
+  DOC = {"doc" => ["application/vnd.example+json", PROFILE]}
+
+  def chosen(header: String?, formats: Array[String] = ["html", "doc"], target: String = "/",
+             types: Hash[String, Array[String]] = DOC) -> [String, String]
+    h = header ? HTTP::Headers.of({"Accept" => header}) : HTTP::Headers.empty
+    c = Bezel::Plug::Accepts.new(formats, types: types).call(Bezel::Conn.build(HTTP::Server::Request.get(target, h)))
+    [c.format.inspect, c.format_type || ""]
+  end
+
+  def test_accepts_types
+    assert_equal([":doc", "application/vnd.example+json"], chosen("application/vnd.example+json"))
+    # The type asked for is the one answered, parameters as listed.
+    assert_equal([":doc", PROFILE], chosen("application/ld+json; profile=\"https://example.com/profile\""))
+    assert_equal([":doc", PROFILE], chosen("application/ld+json;PROFILE=https://example.com/profile;q=0.9, text/html;q=0.5"))
+    # A listed parameter is required, and equal.
+    assert_equal([":html", "text/html"], chosen("application/ld+json, text/html;q=0.1"))
+    assert_raise(Bezel::NotAcceptable) { chosen("application/ld+json; profile=\"https://example.com/other\"") }
+    # A parameter the listed type does not name is ignored.
+    assert_equal([":doc", "application/vnd.example+json"], chosen("application/vnd.example+json; version=2"))
+    # A quoted value holding `,` and `;`.
+    tricky = {"doc" => ["application/ld+json; profile=\"https://example.com/a,b;c\""]}
+    assert_equal([":doc", "application/ld+json; profile=\"https://example.com/a,b;c\""],
+                 chosen("text/html;q=0.2, application/ld+json; profile=\"https://example.com/a,b;c\"", types: tricky))
+    assert_equal([":html", "text/html"], chosen("text/html;q=0.2, application/ld+json; profile=\"https://example.com/a\"", types: tricky))
+    # Wildcards: the first listed; equal qualities: the earlier listed.
+    assert_equal([":doc", "application/vnd.example+json"], chosen("application/*", formats: ["doc", "html"]))
+    assert_equal([":doc", "application/vnd.example+json"], chosen("*/*", formats: ["doc"]))
+    assert_equal([":doc", "application/vnd.example+json"],
+                 chosen("application/ld+json; profile=\"https://example.com/profile\", application/vnd.example+json"))
+    assert_equal([":doc", PROFILE],
+                 chosen("application/ld+json; profile=\"https://example.com/profile\", application/vnd.example+json;q=0.5"))
+    # No Accept, and `_format`: the first listed.
+    assert_equal([":doc", "application/vnd.example+json"], chosen(nil, formats: ["doc", "html"]))
+    assert_equal([":doc", "application/vnd.example+json"], chosen("text/html", target: "/?_format=doc"))
+    # Refused by name.
+    assert_raise(Bezel::NotAcceptable) { chosen("application/vnd.example+json;q=0, application/ld+json;q=0", formats: ["doc"]) }
+    # Built-in formats: their first type; replaced by types:.
+    assert_equal([":json", "application/json"], chosen("application/json", formats: ["json"]))
+    assert_equal([":xml", "application/xml"], chosen("*/*", formats: ["xml"]))
+    assert_equal([":xml", "text/xml"], chosen("text/xml", formats: ["xml"]))
+    assert_equal([":json", "application/vnd.example+json"],
+                 chosen("application/vnd.example+json", formats: ["json"], types: {"json" => ["application/vnd.example+json"]}))
+    # What types: refuses.
+    ["application", "application/*", "a/b/c", "application/x; q=1", "application/x; p", "application/x; p=\"open"].each do |t|
+      assert_raise(ArgumentError) { Bezel::Plug::Accepts.new(["doc"], types: {"doc" => [t]}) }
+    end
+    assert_raise(ArgumentError) { Bezel::Plug::Accepts.new(["Doc"], types: {"Doc" => ["application/x"]}) }
+    assert_raise(ArgumentError) { Bezel::Plug::Accepts.new(["doc"], types: {"doc" => Array[String].new}) }
+  end
+
+  def test_respond
+    h = HTTP::Headers.of({"Accept" => PROFILE})
+    c = Bezel::Plug::Accepts.new(["doc"], types: DOC).call(Bezel::Conn.build(HTTP::Server::Request.get("/", h)))
+    out = c.respond("{}", status: 201)
+    assert_equal([PROFILE, "201", "true"], [out.resp_headers["content-type"] || "", out.status.to_s, out.halted?.to_s])
+    assert_equal("application/vnd.example+json", c.with(format_type: "application/vnd.example+json").respond(b"\x00").resp_headers["content-type"])
+    e = assert_raise(ArgumentError) { Bezel::Conn.build(HTTP::Server::Request.get("/")).respond("{}") }
+    assert_equal("respond: no media type was chosen for the request (no Bezel::Plug::Accepts ran)", e.message)
+  end
+
   def test_controller_helpers
     c = Bezel::Conn.build(req)
     ctl = PlugTestController.new

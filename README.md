@@ -128,6 +128,16 @@ Shop::Router.user_path(id: 5)                       # => "/users/5"
 Shop::Router.user_post_path(user_id: 5, id: 2)      # => "/users/5/posts/2"
 ```
 
+- [Bezel::Plug::Accepts] chooses the response's format (`conn.format`)
+  from `_format` or the Accept header among `html`, `json`, `text`,
+  `xml` and `csv`, and those `types:` gives, each with its media types:
+  `Accepts.new(["html", "doc"], types: {"doc" => ["application/vnd.example+json",
+  "application/ld+json; profile=\"https://example.com/profile\""]})`.
+  A media type's parameters take no part in the match unless the listed
+  type names them, which the request must then carry with the same
+  value. `conn.format_type` is the media type to answer with: of the
+  format's types, the one the request asked for (the first listed for
+  `*/*`, no Accept or `_format`). `conn.respond(body)` answers with it.
 - A route whose controller lacks its action, a pipeline the router does
   not define, a controller plug that is not a method, and a route helper
   given a wrong keyword are compile errors. A helper's keywords are typed
