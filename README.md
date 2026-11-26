@@ -144,11 +144,12 @@ Shop::Router.user_post_path(user_id: 5, id: 2)      # => "/users/5/posts/2"
   `Bezel::Controller`'s own helpers (`text`, `redirect`, ...). A
   `private` or `protected` method is no action: helpers and plug methods
   are written `private`, as `require_login` above. `resources` routes
-  those of the seven names the controller has, `only:`/`except:`
-  choosing among them. An action is reached only through a route, whose
-  action is fixed where the routes are declared, or through an
-  application's own call of `dispatch`, which reaches any action by the
-  name it is given.
+  all seven names unless `only:`/`except:` choose among them, and the
+  controller must have each name routed as an action (a compile error
+  otherwise): a public method of one of those names is what `resources`
+  routes. An action is reached only through a route, whose action is
+  fixed where the routes are declared, or through an application's own
+  call of `dispatch`, which reaches any action by the name it is given.
 - Matching is the standard [HTTP::Router]'s: the most specific pattern,
   `HEAD` by `GET`, `405` with `Allow` for another method's path.
 

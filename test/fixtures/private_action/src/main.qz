@@ -33,3 +33,27 @@ end
 
 class SubPages < Pages
 end
+
+# `resources` routes all seven names unless `only:`/`except:` choose: a
+# controller lacking one is refused, and accepted once it is left out.
+class Items < Bezel::Controller
+  controller
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "index")
+  def new(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "new")
+  def create(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "create")
+  def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "show")
+  def edit(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "edit")
+  def update(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "update")
+end
+
+class AllItemsRouter < Bezel::Router
+  routes do
+    resources "/items", Items
+  end
+end
+
+class SomeItemsRouter < Bezel::Router
+  routes do
+    resources "/items", Items, except: [:delete]
+  end
+end

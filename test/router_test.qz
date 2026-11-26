@@ -371,6 +371,10 @@ class RouterTest < Test::Case
     assert_match(/main\.qz:16:3: error: `routes` raised ArgumentError: GET \/guarded: Pages has no action `guarded`/, out.stderr)
     assert_match(/main\.qz:22:3: error: `routes` raised ArgumentError: GET \/inherited: SubPages has no action `secret`/, out.stderr)
     refute_match(/main\.qz:3:3: error/, out.stderr)
+    # `resources` routes all seven names unless `only:`/`except:` choose:
+    # a controller lacking `delete` is refused, and accepted without it.
+    assert_match(/main\.qz:50:3: error: `routes` raised ArgumentError: DELETE \/items\/\{id\}: Items has no action `delete`/, out.stderr)
+    refute_match(/main\.qz:56:3: error/, out.stderr)
   end
 
   def test_inherited_plugs
