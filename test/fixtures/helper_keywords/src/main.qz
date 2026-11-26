@@ -6,8 +6,14 @@ end
 class AppRouter < Bezel::Router
   routes do
     get "/posts/{post_id}/items/{id}", Pages, :show, as: "post_item"
+    get "/files/{path...}", Pages, :show, as: "file"
   end
 end
 
 puts AppRouter.post_item_path(post_id: 1, idd: 2)
 puts AppRouter.post_item_path(post_id: 1)
+# bezel#37: keywords typed `Int | String`, a `{name...}` one too.
+puts AppRouter.post_item_path(post_id: 1, id: 1.5)
+puts AppRouter.post_item_path(post_id: nil, id: 2)
+puts AppRouter.post_item_path(post_id: :a, id: 2)
+puts AppRouter.file_path(path: 3.0)

@@ -130,7 +130,11 @@ Shop::Router.user_post_path(user_id: 5, id: 2)      # => "/users/5/posts/2"
 
 - A route whose controller lacks its action, a pipeline the router does
   not define, a controller plug that is not a method, and a route helper
-  given a wrong keyword are compile errors.
+  given a wrong keyword are compile errors. A helper's keywords are typed
+  `Int | String` (`user_path(id: 5)` and `user_path(id: "5")` give one
+  path), so a value of another class, nil included, is a compile error
+  at the call too; the value is percent-encoded, and an empty, `.` or
+  `..` segment raises `ArgumentError`.
 - `resources` makes the seven routes (`index`, `new`, `create`, `show`,
   `edit`, `update` with `PATCH` and `PUT`, `delete`), `only:`/`except:`
   choose, and a block nests routes under `/{user_id}`.

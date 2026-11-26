@@ -255,12 +255,20 @@ class RouterTest < Test::Case
     assert_equal("/users", RtRouter.users_path)
     assert_equal("/users/7", RtRouter.user_path(id: 7))
     assert_equal("/users/a%2Fb", RtRouter.user_path(id: "a/b"))
+    # bezel#37: an Int and its String give one path; a `{name...}` one
+    # takes an Int too.
+    assert_equal(RtRouter.user_path(id: 7), RtRouter.user_path(id: "7"))
+    assert_equal("/users/%C3%A9t%C3%A9%20x", RtRouter.user_path(id: "été x"))
+    assert_equal("/files/5", RtRouter.file_path(path: 5))
+    # (`Router.fill`, public, takes any value: it still refuses another
+    # class when called directly.)
+    given: Hash[Symbol, Object] = {id: 1.5}
+    assert_raise_message(/id: an Int or a String, not Float/) { Bezel::Router.fill("/users/{id}", given) }
     assert_equal("/users/7/edit", RtRouter.edit_user_path(id: 7))
     assert_equal("/users/new", RtRouter.new_user_path)
     assert_equal("/users/3/comments/9", RtRouter.user_comment_path(user_id: 3, id: 9))
     assert_equal("/files/a/b%20c.txt", RtRouter.file_path(path: "a/b c.txt"))
     assert_equal("/api/data", RtRouter.api_data_path)
-    assert_raise(ArgumentError) { RtRouter.user_path(id: 1.5) }
     [".", "..", ""].each { |bad| assert_raise(ArgumentError) { RtRouter.user_path(id: bad) } }
     assert_raise(ArgumentError) { RtRouter.file_path(path: "../../etc/passwd") }
     assert_raise(ArgumentError) { RtRouter.file_path(path: "a//b") }
@@ -429,7 +437,13 @@ class RouterTest < Test::Case
   def test_route_helper_keywords_are_checked
     out = check("helper_keywords")
     assert(!out.success?)
-    assert_match(/post_item_path\(post_id: Object, id: Object\) -> String has no parameter `idd`/, out.stderr)
-    assert_match(/post_item_path\(post_id: Object, id: Object\) -> String is missing the argument `id`/, out.stderr)
+    assert_match(/main\.qz:13:6: error: post_item_path\(post_id: Int \| String, id: Int \| String\) -> String has no parameter `idd`/, out.stderr)
+    assert_match(/main\.qz:14:6: error: post_item_path\(post_id: Int \| String, id: Int \| String\) -> String is missing the argument `id`/, out.stderr)
+    # bezel#37: a value of another class is a compile error at the call
+    # (it was an ArgumentError when the helper ran), a `{name...}` one's too.
+    assert_match(/main\.qz:16:47: error: argument `id` of post_item_path\(.*\) -> String expects Int \| String but found Float/, out.stderr)
+    assert_match(/main\.qz:17:40: error: argument `post_id` of post_item_path\(.*\) -> String expects Int \| String but found Nil/, out.stderr)
+    assert_match(/main\.qz:18:40: error: argument `post_id` of post_item_path\(.*\) -> String expects Int \| String but found Symbol/, out.stderr)
+    assert_match(/main\.qz:19:32: error: argument `path` of file_path\(path: Int \| String\) -> String expects Int \| String but found Float/, out.stderr)
   end
 end

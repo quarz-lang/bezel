@@ -38,10 +38,11 @@
 # a [Conn]) and each pipeline named is a class method of the router
 # returning plugs. It generates the route helpers: for each named route,
 # a class method `<name>_path` taking the pattern's parameters as
-# keywords (`item_path(id: 7)`). A misspelt or missing keyword is a
-# compile error; a value is an [Int] or a [String], checked when the
-# helper runs ([ArgumentError] for another, or for an empty, `.` or `..`
-# segment), and percent-encoded. `with_query` adds a query, and
+# keywords (`item_path(id: 7)`), each typed `Int | String`: a misspelt
+# or missing keyword, or a value of another class (a [Float], nil, a
+# model), is a compile error at the call. The value is percent-encoded;
+# an empty, `.` or `..` segment raises [ArgumentError] when the helper
+# runs. `with_query` adds a query, and
 # [Conn#url] makes the path a URL.
 #
 # A controller whose dispatch does not cover the action routed to (a
@@ -123,6 +124,11 @@ abstract class Router
   end
 
   # :nodoc:
+  # The type of each keyword of a path helper: every route parameter, a
+  # `{name...}` one too, takes an [Int] or a [String] (bezel#37).
+  PARAM_TYPE = Meta::TypeRef.union([Meta::TypeRef.of(Int), Meta::TypeRef.of(String)])
+
+  # :nodoc:
   # A `<name>_path` class method for each named route.
   static def self.generate_helpers[T <: Router](cls: Meta::ClassDef[T], table: Array[Route]) -> Void
     seen: Array[String] = []
@@ -131,7 +137,7 @@ abstract class Router
       next if n.nil? || seen.include?(n)
       seen = seen.push(n)
       pattern = r.pattern
-      kws = r.params.map { |p| Meta::Keyword.new(p, Object, true) }
+      kws = r.params.map { |p| Meta::Keyword.typed(p, PARAM_TYPE, true) }
       helper = "#{n}_path".to_sym
       cls.doc "The path of the route `#{pattern}` (#{r.controller.name}##{r.action})."
       if kws.empty?
@@ -146,6 +152,8 @@ abstract class Router
 
   # `pattern` with its parameters taken from `values` (an [Int] or a
   # [String] each), percent-encoded; a `{name...}` one keeps its slashes.
+  # A path helper's keywords are typed `Int | String`; a direct caller
+  # giving another class gets [ArgumentError].
   def self.fill(pattern: String, values: Hash[Symbol, Object]) -> String
     parts = pattern.split("/", -1).map do |seg|
       if seg.start_with?("{") && seg.end_with?("}")
