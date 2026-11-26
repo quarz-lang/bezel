@@ -163,6 +163,27 @@ class ServerTest < Test::Case
     assert_true(Time.now - started < 30.seconds)
   end
 
+  # After SIGINT, a service that never returns is cancelled one second
+  # (SIGINT's grace) plus 10 seconds later, not `grace` plus 10.
+  def test_serve_int_with_a_service_that_never_returns
+    servers = two_servers
+    ports = servers.map { |srv| srv.local_address.port }
+    never = Channel[Nil].new
+    stuck = Bezel.service(run: -> { never.receive?; nil }, shutdown: ->(g: Duration) { nil })
+    started = Time.now
+    Task.scope do |s|
+      t = s.spawn do
+        Bezel.serve(servers, grace: 60.seconds, also: [stuck])
+        nil
+      end
+      assert_true(ports.all? { |port| up?(port) })
+      Process.run("kill", "-INT", Process.pid.to_s)
+      t.await
+    end
+    took = Time.now - started
+    assert_true(took >= 10.seconds && took < 20.seconds, took.inspect)
+  end
+
   def test_serve_needs_something
     assert_raise(ArgumentError) { Bezel.serve(Array[HTTP::Server].new) }
   end

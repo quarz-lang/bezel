@@ -73,7 +73,8 @@ public def service(*, run: shareable () -> Void, shutdown: shareable (Duration) 
 # given twice, ends them all at once). A service's `shutdown` that raises
 # is reported on standard error (its class only) and the shutdown goes
 # on; a task still running `grace` plus 10 seconds after the shutdown
-# began is cancelled (a task that never waits cannot be: the second
+# began is cancelled, the grace being the one the shutdown was given (one
+# second after SIGINT; a task that never waits cannot be: the second
 # signal ends the process). Returns once every task has ended, raising
 # again the first exception one ended with, with the default actions of
 # SIGTERM and SIGINT back (traps the application set for them before
@@ -106,10 +107,18 @@ public def serve(servers: Array[HTTP::Server], *, grace: Duration = 30.seconds, 
   # The index of the first task that raised (-1: none).
   failed = Atom.new(-1)
   tasks: Array[Task[Nil]] = []
-  # Stops everything once, with `g`, and cancels what still runs after
-  # `g` plus 10 seconds.
+  # The tasks, for the watchdog; and the watchdog, once a shutdown began.
+  running = Atom[Array[Task[Nil]]].new([])
+  watchdog = Atom[Task[Nil]?].new(nil)
+  # Stops everything once, with `g`, and starts the watchdog, which
+  # cancels what still runs `g` plus 10 seconds later.
   stop: shareable (Duration) -> Void = ->(g: Duration) {
     if stopping.compare_and_set(false, true)
+      watchdog.set(Task.spawn do
+        Task.sleep(g + 10.seconds)
+        running.get.each(&:cancel)
+        nil
+      end)
       servers.each { |srv| srv.shutdown(timeout: g) }
       also.each do |svc|
         Task.spawn do
@@ -168,16 +177,7 @@ public def serve(servers: Array[HTTP::Server], *, grace: Duration = 30.seconds, 
         end
         nil
       end)
-    end
-    # Cancels what still runs `grace` plus 10 seconds after a shutdown began.
-    all = tasks
-    watchdog = Task.spawn do
-      until stopping.get
-        Task.sleep(100.ms)
-      end
-      Task.sleep(grace + 10.seconds)
-      all.each(&:cancel)
-      nil
+      running.set(tasks)
     end
     tasks.each do |t|
       begin
@@ -189,13 +189,14 @@ public def serve(servers: Array[HTTP::Server], *, grace: Duration = 30.seconds, 
         nil
       end
     end
-    watchdog.cancel
     if (i = failed.get) >= 0
       tasks[i].await
     end
     nil
   ensure
-    # (Nothing outlives the call, should the caller be cancelled.)
+    # (Nothing outlives the call, should the caller be cancelled or a
+    # task have raised.)
+    watchdog.get&.cancel
     tasks.each(&:cancel)
     Signal.trap(:TERM, :default)
     Signal.trap(:INT, :default)
