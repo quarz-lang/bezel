@@ -41,6 +41,23 @@ class RtPages < Bezel::Controller
   def data(conn: Bezel::Conn) -> Bezel::Conn = json(conn, JSON.parse("{\"format\": \"#{conn.format}\"}"))
 end
 
+# bezel#110: a private and a protected method of an action's shape are no
+# actions; a private plug method still runs as a plug; a subclass inherits
+# the public actions only.
+class RtHidden < Bezel::Controller
+  controller do
+    plug :mark
+  end
+  def shown(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "shown #{conn.assign?(:mark) || "-"}")
+  private def secret(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "secret")
+  protected def guarded(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "guarded")
+  private def mark(conn: Bezel::Conn) -> Bezel::Conn = conn.assign(:mark, "plugged")
+end
+
+class RtHiddenSub < RtHidden
+  def own(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "own #{conn.assign?(:mark) || "-"}")
+end
+
 # Three levels, the subclass written first: the statements still run
 # ancestors first (docs/14 §2); the middle one names an inherited action.
 class RtLeaf < RtMid
@@ -326,6 +343,34 @@ class RouterTest < Test::Case
     c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
     assert_raise(ArgumentError) { RtPages.new.dispatch(:nope, c) }
     assert_raise(ArgumentError) { RtPages.new.dispatch(:text, c) }
+  end
+
+  # bezel#110: which methods are actions.
+  def test_private_and_protected_methods_are_no_actions
+    c = Bezel::Conn.build(HTTP::Server::Request.get("/"))
+    assert_equal("shown plugged", (RtHidden.new.dispatch(:shown, c).resp_body.as(HTTP::Content::Text)).text)
+    e = assert_raise(ArgumentError) { RtHidden.new.dispatch(:secret, c) }
+    assert_equal("RtHidden has no action secret", e.message)
+    e = assert_raise(ArgumentError) { RtHidden.new.dispatch(:guarded, c) }
+    assert_equal("RtHidden has no action guarded", e.message)
+    # (The private plug is no action either.)
+    assert_raise(ArgumentError) { RtHidden.new.dispatch(:mark, c) }
+    # A subclass: its own and the inherited public actions, under the
+    # inherited private plug; not the inherited private or protected ones.
+    assert_equal("own plugged", (RtHiddenSub.new.dispatch(:own, c).resp_body.as(HTTP::Content::Text)).text)
+    assert_equal("shown plugged", (RtHiddenSub.new.dispatch(:shown, c).resp_body.as(HTTP::Content::Text)).text)
+    e = assert_raise(ArgumentError) { RtHiddenSub.new.dispatch(:secret, c) }
+    assert_equal("RtHiddenSub has no action secret", e.message)
+    assert_raise(ArgumentError) { RtHiddenSub.new.dispatch(:guarded, c) }
+  end
+
+  def test_a_route_to_a_private_or_protected_method_is_a_compile_error
+    out = check("private_action")
+    assert(!out.success?)
+    assert_match(/main\.qz:10:3: error: `routes` raised ArgumentError: GET \/secret: Pages has no action `secret`/, out.stderr)
+    assert_match(/main\.qz:16:3: error: `routes` raised ArgumentError: GET \/guarded: Pages has no action `guarded`/, out.stderr)
+    assert_match(/main\.qz:22:3: error: `routes` raised ArgumentError: GET \/inherited: SubPages has no action `secret`/, out.stderr)
+    refute_match(/main\.qz:3:3: error/, out.stderr)
   end
 
   def test_inherited_plugs

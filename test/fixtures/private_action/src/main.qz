@@ -1,0 +1,35 @@
+# bezel#110: a route naming a private or protected method is refused.
+class PublicRouter < Bezel::Router
+  routes do
+    get "/", Pages, :home
+    get "/sub", SubPages, :home
+  end
+end
+
+class SecretRouter < Bezel::Router
+  routes do
+    get "/secret", Pages, :secret
+  end
+end
+
+class GuardedRouter < Bezel::Router
+  routes do
+    get "/guarded", Pages, :guarded
+  end
+end
+
+class InheritedRouter < Bezel::Router
+  routes do
+    get "/inherited", SubPages, :secret
+  end
+end
+
+class Pages < Bezel::Controller
+  controller
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+  private def secret(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "secret")
+  protected def guarded(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "guarded")
+end
+
+class SubPages < Pages
+end

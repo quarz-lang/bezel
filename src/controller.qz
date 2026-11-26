@@ -1,8 +1,12 @@
 # The base of an application's controllers. A controller's actions are
-# its public methods taking and returning a [Conn] (but the helpers
-# below), which the router calls for its routes. Its body declares its
-# plugs, one `plug` (or `skip`) line each; [dispatch] is generated over
-# the actions, running the plugs (the superclass's first) before them:
+# its public methods taking one [Conn] and returning one, those it
+# inherits included, but not this class's own helpers (below); the
+# router calls them for its routes, and [dispatch] by name. A `private`
+# or `protected` method is no action: [dispatch] raises [ArgumentError]
+# for its name, and a route naming it is a compile error. Write helpers
+# and plug methods `private`. Its body declares its plugs, one `plug`
+# (or `skip`) line each; [dispatch] is generated over the actions,
+# running the plugs (the superclass's first) before them:
 #
 # ```
 # class Pages < Bezel::Controller
