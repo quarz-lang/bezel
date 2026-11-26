@@ -1,0 +1,59 @@
+# bezel#110: a route naming a private or protected method is refused.
+class PublicRouter < Bezel::Router
+  routes do
+    get "/", Pages, :home
+    get "/sub", SubPages, :home
+  end
+end
+
+class SecretRouter < Bezel::Router
+  routes do
+    get "/secret", Pages, :secret
+  end
+end
+
+class GuardedRouter < Bezel::Router
+  routes do
+    get "/guarded", Pages, :guarded
+  end
+end
+
+class InheritedRouter < Bezel::Router
+  routes do
+    get "/inherited", SubPages, :secret
+  end
+end
+
+class Pages < Bezel::Controller
+  controller
+  def home(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "home")
+  private def secret(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "secret")
+  protected def guarded(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "guarded")
+end
+
+class SubPages < Pages
+end
+
+# `resources` routes all seven names unless `only:`/`except:` choose: a
+# controller lacking one is refused, and accepted once it is left out.
+class Items < Bezel::Controller
+  controller
+  def index(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "index")
+  def new(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "new")
+  def create(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "create")
+  def show(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "show")
+  def edit(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "edit")
+  def update(conn: Bezel::Conn) -> Bezel::Conn = text(conn, "update")
+end
+
+class AllItemsRouter < Bezel::Router
+  routes do
+    resources "/items", Items
+  end
+end
+
+class SomeItemsRouter < Bezel::Router
+  routes do
+    resources "/items", Items, except: [:delete]
+  end
+end
