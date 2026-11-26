@@ -122,7 +122,13 @@ data Conn(
   error: StandardError? = nil,
   # The response's format [Plug::Accepts] chose (`:html`, `:json`), or
   # nil.
-  format: Symbol? = nil
+  format: Symbol? = nil,
+  # The media type to answer [format] with, which [Plug::Accepts] chose
+  # with it: of the format's media types, the one the request asked for
+  # (the first listed for `*/*`, no Accept, or `_format`), parameters
+  # included (`application/ld+json; profile="https://example.com/p"`);
+  # nil when no Accepts ran. [#respond] answers with it.
+  format_type: String? = nil
 )
   # A connection for `req` in [app], its parameters those of the query
   # ([Bezel::BadRequest] when it does not decode).
@@ -270,6 +276,16 @@ data Conn(
   # and halted.
   def json(value: JSON::Value, status: Int = self.status) -> Conn
     send_resp(status, HTTP::Content::Text.new(value.to_json), "application/json")
+  end
+
+  # The connection answered with `body` as the media type [Plug::Accepts]
+  # chose ([format_type], exactly as listed), and halted. Raises
+  # [ArgumentError] when no Accepts ran for the request (no format was
+  # chosen).
+  def respond(body: String | Bytes, status: Int = self.status) -> Conn
+    t = format_type || raise(ArgumentError.new("respond: no media type was chosen for the request (no Bezel::Plug::Accepts ran)"))
+    content = body.is_a?(String) ? HTTP::Content::Text.new(body.as(String)) : HTTP::Content::Binary.new(body.as(Bytes))
+    send_resp(status, content, t)
   end
 
   # The connection answered with a redirect to `to` (`302 Found`, or
