@@ -174,4 +174,21 @@ class ConfigTest < Test::Case
     slash = assert_raise(Bezel::ConfigError) { load({"DATABASE_URL" => "postgres://u:se/cret@h/d"}) }
     assert_false(slash.message.include?("cret"))
   end
+
+  # bezel#117: DATABASE_URL is checked against `environ`, whose libpq
+  # variables pg reads; a bad one is named, its value never shown.
+  def test_database_url_against_environ
+    e = assert_raise(Bezel::ConfigError) { load({"DATABASE_URL" => "postgres://localhost/shop", "PGPORT" => "x-secret"}) }
+    assert_equal("PGPORT: not a number from 1 to 65535", e.message)
+    assert_false(e.message.include?("x-secret"))
+    assert_equal("postgres://localhost/shop", load({"DATABASE_URL" => "postgres://localhost/shop"}).database_url)
+  end
+
+  # A stray libpq variable in the process's environment does not reach a
+  # load given its own `environ:` (a child with PGPORT=x).
+  def test_the_process_environment_does_not_reach_load
+    out = Process.sh("cd test/fixtures/config_stray_pg && PGPORT=x PGSSLMODE=nonsense exec \"${QUARZ:-quarz}\" run")
+    assert_true(out.success?, out.stdout + out.stderr)
+    assert_equal("postgres://localhost/shop\n", out.stdout)
+  end
 end

@@ -127,9 +127,14 @@ data Config(
     db = Config.var(environ, "DATABASE_URL") || s.database_url
     if db
       begin
-        PG.parse_url(db)
-      rescue ArgumentError
-        # (Not pg's message, which may quote the URL and its password.)
+        # (Against `environ`, as the rest of the configuration: pg takes
+        # libpq's variables from it for what the URL omits, bezel#117.)
+        PG.parse_url(db, env: environ)
+      rescue ArgumentError => e
+        # A libpq variable's own error names the variable and never its
+        # value: kept. Otherwise not pg's message, which may quote the
+        # URL and its password.
+        raise ConfigError.new(e.message) if e.message.match?(/\APG[A-Z_]+: /)
         raise ConfigError.new("DATABASE_URL is not a postgres:// URL that pg reads (user, password, host, port, database and the parameters pg knows)")
       end
     end

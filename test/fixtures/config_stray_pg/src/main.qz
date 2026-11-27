@@ -1,0 +1,5 @@
+# bezel#117: run by config_test with PGPORT=x and PGSSLMODE=nonsense in
+# the process's environment, which a load given its own environ: must
+# not read.
+c = Bezel::Config.load("shop", {}, {"BEZEL_ENV" => "test", "DATABASE_URL" => "postgres://localhost/shop"}, quiet: true)
+puts c.database_url
