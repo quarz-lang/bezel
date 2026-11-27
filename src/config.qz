@@ -78,8 +78,10 @@ data Config(
   database_url: String?,
   # The size of the database's connection pool.
   pool_size: Int,
-  # The key sessions and tokens derive theirs from.
-  secret_key_base: String,
+  # The key sessions and tokens derive theirs from, a [Bytes::Secret]
+  # (bezel#86): `to_h` shows it as `#<Bytes::Secret>`, and
+  # `JSON.generate` of a configuration raises `JSON::GeneratorError`.
+  secret_key_base: Bytes::Secret,
   # The trusted proxies.
   trusted_proxies: Array[String],
   # The path of the certificate chain, for HTTPS.
@@ -94,6 +96,13 @@ data Config(
   # ([Bezel::Params#filtered]).
   filter_parameters: Array[String | Regexp] = []
 )
+  # Whether [secret_key_base] is the public placeholder of a task's
+  # configuration ([.for_task] in `prod` without SECRET_KEY_BASE,
+  # [TASK_SECRET]): it signs nothing, so [Bezel.start] and
+  # [Bezel::Keys.derive] refuse it. Computed from the secret (compared in
+  # constant time), however the configuration was made (`with` too).
+  def task? -> Bool = Crypto.secure_compare(secret_key_base, TASK_SECRET)
+
   # The levels, least severe first.
   LOG_LEVELS = [:debug, :info, :warn, :error]
 
@@ -164,12 +173,15 @@ data Config(
         raise ConfigError.new("TLS_CERT/TLS_KEY: #{e.message}")
       end
     end
-    secret = Config.var(environ, "SECRET_KEY_BASE")
-    if secret
-      raise ConfigError.new("SECRET_KEY_BASE must be at least 64 bytes (it has #{secret.bytesize})") if secret.bytesize < 64
-      if secret == TASK_SECRET && !task
+    given = Config.var(environ, "SECRET_KEY_BASE")
+    secret: Bytes::Secret? = nil
+    if given
+      raise ConfigError.new("SECRET_KEY_BASE must be at least 64 bytes (it has #{given.bytesize})") if given.bytesize < 64
+      if given == TASK_SECRET && !task
         raise ConfigError.new("SECRET_KEY_BASE is the placeholder of a task's configuration (Config::TASK_SECRET), which is public: set a secret of your own (`openssl rand -hex 32` gives one)")
       end
+      # (A secret by type: ENV keeps the String it came as.)
+      secret = Bytes::Secret.of(given.to_bytes)
     elsif env == :prod
       raise ConfigError.new("SECRET_KEY_BASE is required in prod (64 bytes or more; `openssl rand -hex 32` gives one); BEZEL_ENV is prod unless set to dev or test")
     else
@@ -179,7 +191,7 @@ data Config(
                     "(made on first use: keep tmp/ out of version control), not for production"
       end
     end
-    Config.new(app, env, host, port, db, pool_size, secret, proxies, cert, key, level,
+    Config.new(app, env, host, port, db, pool_size, secret.as(Bytes::Secret), proxies, cert, key, level,
                s.password_params || Crypto::Argon2::Params::DEFAULT, s.filter_parameters || [])
   end
 
@@ -194,7 +206,7 @@ data Config(
   # ```
   # c = Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod"})
   # c.env                   # => :prod
-  # c.secret_key_base == Bezel::Config::TASK_SECRET   # => true
+  # c.task?                 # => true
   # ```
   def self.for_task(app: String, settings: Hash[Symbol, Settings] = {}, environ: Hash[String, String] = ENV) -> Config
     prod = (Config.var(environ, "BEZEL_ENV") || "prod") == "prod"
@@ -215,7 +227,7 @@ data Config(
 
   # A secret made once per process (`test`, and `dev` when its file cannot
   # be written).
-  PROCESS_SECRET = Atom[String?].new(nil)
+  PROCESS_SECRET = Atom[Bytes::Secret?].new(nil)
 
   # The secret `dev` and `test` use without SECRET_KEY_BASE (bezel#99):
   # random, so that no one can compute it (a digest of the application's
@@ -225,25 +237,29 @@ data Config(
   # task's tokens verify in the server, however many processes start at
   # once; when the file cannot be kept, one per process, with a warning.
   # In `test`, one per process.
-  def self.dev_secret(env: Symbol) -> String
+  #
+  # A [Bytes::Secret]: the file's secret read with `File.read_secret`
+  # (its newline left out), the per-process one drawn with
+  # `Crypto.random_secret` (bezel#86).
+  def self.dev_secret(env: Symbol) -> Bytes::Secret
     if env == :dev
       begin
         Dir.mkdir_p(File.dirname(DEV_SECRET_PATH))
-        made = Config.random_secret
         begin
           # Made only when absent, readable by this user alone: two
           # processes at first use (a server and a task) end with the one
-          # secret the file holds, not each its own.
-          File.open(DEV_SECRET_PATH, "wx", perm: 0o600) { |f| f.write(made + "\n") }
-          return made
+          # secret the file holds, not each its own. (Its text, 64
+          # hexadecimal digits, is a String while it is written: dev's
+          # only.)
+          File.open(DEV_SECRET_PATH, "wx", perm: 0o600) { |f| f.write(Crypto.random_bytes(32).hex + "\n") }
         rescue SystemCallError => e
           raise e unless File.exist?(DEV_SECRET_PATH)
         end
-        # Another process made it, or is making it: what the file holds,
-        # once it is whole.
+        # What the file holds (this process's or another's), once it is
+        # whole.
         40.times do
-          kept = File.read(DEV_SECRET_PATH).strip
-          return kept if kept.bytesize >= 64
+          kept = File.read_secret(DEV_SECRET_PATH, chomp: true)
+          return kept if kept.size >= 64
           Task.sleep(50.ms)
         end
         raise IOError.new("it holds no secret of 64 bytes")
@@ -254,13 +270,9 @@ data Config(
     loop do
       current = PROCESS_SECRET.get
       return current if current
-      PROCESS_SECRET.compare_and_set(nil, Config.random_secret)
+      PROCESS_SECRET.compare_and_set(nil, Crypto.random_secret(64))
     end
   end
-
-  # :nodoc:
-  # 32 random bytes from the system's source, as 64 hexadecimal digits.
-  def self.random_secret -> String = Crypto.random_bytes(32).hex
 
   # :nodoc:
   def self.var(environ: Hash[String, String], name: String) -> String?

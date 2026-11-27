@@ -1,3 +1,4 @@
+require "json"
 require "test"
 
 class ConfigTest < Test::Case
@@ -34,10 +35,12 @@ class ConfigTest < Test::Case
     assert_equal("127.0.0.1", load({"BEZEL_ENV" => "test"}).host)
     assert_equal("0.0.0.0", load({"HOST" => "0.0.0.0"}).host)
     dev = load({}).secret_key_base
-    assert_false(dev == Digest::SHA256.hexdigest("bezel dev secret for shop"))
+    # bezel#86: a secret, read from the file without its newline.
+    assert_equal("#<Bytes::Secret>", dev.inspect)
+    assert_false(dev == Bytes::Secret.of(Digest::SHA256.hexdigest("bezel dev secret for shop").to_bytes))
     assert_equal(dev, load({}).secret_key_base)
-    assert_equal(dev, File.read(Bezel::Config::DEV_SECRET_PATH).strip)
-    assert_match(/\A[0-9a-f]{64}\z/, dev)
+    assert_equal(dev, Bytes::Secret.of(File.read(Bezel::Config::DEV_SECRET_PATH).strip.to_bytes))
+    assert_match(/\A[0-9a-f]{64}\z/, dev.expose_bytes.decode)
     # Readable by its owner alone (GNU stat, as on CI's Linux).
     stat = Process.run("stat", "-c", "%a", Bezel::Config::DEV_SECRET_PATH)
     assert_equal("600", stat.stdout.strip) if stat.success?
@@ -47,8 +50,8 @@ class ConfigTest < Test::Case
       tasks = 4.times.map { scope.spawn { Bezel::Config.dev_secret(:dev) } }.to_a
       tasks.map(&:await)
     end
-    assert_equal(1, got.uniq.size)
-    assert_equal(got[0], File.read(Bezel::Config::DEV_SECRET_PATH).strip)
+    assert_true(got.all? { |g| g == got[0] })
+    assert_equal(got[0], Bytes::Secret.of(File.read(Bezel::Config::DEV_SECRET_PATH).strip.to_bytes))
     dev = got[0]
     t = load({"BEZEL_ENV" => "test"}).secret_key_base
     assert_equal(t, load({"BEZEL_ENV" => "test"}).secret_key_base)
@@ -78,15 +81,19 @@ class ConfigTest < Test::Case
     c = Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "DATABASE_URL" => "postgres://db/shop"})
     assert_equal(:prod, c.env)
     assert_equal("postgres://db/shop", c.database_url)
-    assert_equal(Bezel::Config::TASK_SECRET, c.secret_key_base)
+    assert_true(c.task?)
+    assert_equal(Bytes::Secret.of(Bezel::Config::TASK_SECRET.to_bytes), c.secret_key_base)
     # One given is kept; one too short is not.
     given = "s" * 64
-    assert_equal(given, Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => given}).secret_key_base)
-    assert_equal(Bezel::Config::TASK_SECRET, Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "short"}).secret_key_base)
+    kept = Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => given})
+    assert_equal(Bytes::Secret.of(given.to_bytes), kept.secret_key_base)
+    assert_false(kept.task?)
+    assert_true(Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "short"}).task?)
     # In dev and test, the server's derived secret; settings are read.
     dev = Bezel::Config.for_task("shop", {dev: Bezel::Settings.new(port: 5001)}, environ: {"BEZEL_ENV" => "dev"})
     assert_equal(Bezel::Config.dev_secret(:dev), dev.secret_key_base)
     assert_equal(5001, dev.port)
+    assert_false(dev.task?)
     # (A short one in dev is refused, as `load` refuses it.)
     assert_raise(Bezel::ConfigError) { Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "dev", "SECRET_KEY_BASE" => "short"}) }
     # The placeholder signs nothing, and is no application's secret.
@@ -94,7 +101,7 @@ class ConfigTest < Test::Case
     e = assert_raise(Bezel::ConfigError) { Bezel::Keys.derive(task.secret_key_base, "bezel token") }
     assert_match(/no SECRET_KEY_BASE of 64 bytes or more/, e.message)
     assert_raise(Bezel::ConfigError) { load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => Bezel::Config::TASK_SECRET}) }
-    assert_equal(32, Bezel::Keys.derive("s" * 64, "bezel token").size)
+    assert_equal(32, Bezel::Keys.derive(Bytes::Secret.of(("s" * 64).to_bytes), "bezel token").size)
     # The rest is checked as `load` checks it.
     assert_raise(Bezel::ConfigError) { Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod", "PORT" => "x"}) }
   end
@@ -102,11 +109,12 @@ class ConfigTest < Test::Case
   # A derived key is a secret, made without a plain Bytes, the same one
   # for every caller; one wiped is derived again.
   def test_keys_are_secrets
-    secret = "k" * 64
+    plain = "k" * 64
+    secret = Bytes::Secret.of(plain.to_bytes)
     k = Bezel::Keys.derive(secret, "a test purpose")
     assert_equal("#<Bytes::Secret>", k.inspect)
     assert_true(k.equal?(Bezel::Keys.derive(secret, "a test purpose")))
-    assert_equal(Digest::PBKDF2.sha256(secret, "a test purpose", Bezel::Keys::ITERATIONS, 32), k.expose_bytes)
+    assert_equal(Digest::PBKDF2.sha256(plain, "a test purpose", Bezel::Keys::ITERATIONS, 32), k.expose_bytes)
     k.wipe
     again = Bezel::Keys.derive(secret, "a test purpose")
     assert_false(again.wiped?)
@@ -163,6 +171,43 @@ class ConfigTest < Test::Case
     assert_true(c.log?(:error))
   end
 
+  # bezel#86: keys derived from a base are those of before the base was a
+  # secret, so sessions and tokens made before still open. The values
+  # were computed on bezel main (d6e6b8e, Keys.derive over a String) and
+  # by Python's hashlib.pbkdf2_hmac, not by this code.
+  def test_derived_keys_are_unchanged
+    base = Bytes::Secret.of(("0123456789abcdef" * 4).to_bytes)
+    assert_equal("51967a81f10f5baef77fb6a69eedd5ec0f711cf55e466844a9075eef122fcde3",
+                 Bezel::Keys.derive(base, "bezel session cookie").expose_bytes.hex)
+    assert_equal("eaf78e9e29e69455edc41867fa0e2b4be1cf42a23aaabc1292e228f0c0f5bcd5",
+                 Bezel::Keys.derive(base, "bezel token").expose_bytes.hex)
+    c = load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "0123456789abcdef" * 4})
+    assert_equal(Bezel::Keys.derive(base, "bezel token"), Bezel::Keys.derive(c.secret_key_base, "bezel token"))
+  end
+
+  # task? is computed from the secret, however the configuration was
+  # made: `with` the placeholder is refused by start; a task's
+  # configuration given a real secret is not.
+  def test_task_follows_the_secret
+    real = load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "r" * 64})
+    assert_false(real.task?)
+    fake = real.with(secret_key_base: Bytes::Secret.of(Bezel::Config::TASK_SECRET.to_bytes))
+    assert_true(fake.task?)
+    e = assert_raise(Bezel::ConfigError) { Bezel.start(ConfigTestEndpoint, config: fake) }
+    assert_match(/task's configuration .* cannot serve/, e.message)
+    task = Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod"})
+    assert_true(task.task?)
+    assert_false(task.with(secret_key_base: Bytes::Secret.of(("r" * 64).to_bytes)).task?)
+  end
+
+  # The base is a secret: to_h shows it as one, and JSON refuses it.
+  def test_the_secret_key_base_is_a_secret
+    c = load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "k" * 64})
+    assert_false(c.to_h.inspect.include?("k" * 64), c.to_h.inspect)
+    assert_raise(JSON::GeneratorError) { JSON.generate(c) }
+    assert_equal("#<Bytes::Secret>", load({"BEZEL_ENV" => "test"}).secret_key_base.inspect)
+  end
+
   def test_checked_at_load
     p = assert_raise(Bezel::ConfigError) { load({"TRUSTED_PROXIES" => "not an address"}) }
     assert_match(/TRUSTED_PROXIES/, p.message)
@@ -191,4 +236,9 @@ class ConfigTest < Test::Case
     assert_true(out.success?, out.stdout + out.stderr)
     assert_equal("postgres://localhost/shop\n", out.stdout)
   end
+end
+
+# An endpoint for start's refusal (it never serves).
+class ConfigTestEndpoint < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [Bezel.plug { |conn| conn.text("never") }]
 end

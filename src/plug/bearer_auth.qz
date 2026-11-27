@@ -35,19 +35,20 @@
 class Plug::BearerAuth
   include Plug
 
-  @token: String?
+  @token: (String | Bytes::Secret)?
   @realm: String
 
   # The plug, letting through requests with `token`, its realm `realm`.
-  def initialize(*, token: String?, realm: String)
+  # A [Bytes::Secret] token is compared as its bytes (bezel#86); one
+  # wiped later refuses every request, as an empty token does.
+  def initialize(*, token: (String | Bytes::Secret)?, realm: String)
     @token = token
     @realm = realm
   end
 
   # The plug without its token: whether one is set, and the realm.
   def inspect -> String
-    t = @token
-    "#<Bezel::Plug::BearerAuth realm: #{@realm.inspect}, token: #{t.nil? || t.empty? ? "nil" : "(set)"}>"
+    "#<Bezel::Plug::BearerAuth realm: #{@realm.inspect}, token: #{Plug::BearerAuth.none?(@token) ? "nil" : "(set)"}>"
   end
 
   def call(conn: Conn) -> Conn
@@ -57,12 +58,26 @@ class Plug::BearerAuth
 
   # :nodoc:
   # Whether `header` carries `token` (neither nil nor empty).
-  def self.valid?(token: String?, header: String?) -> Bool
-    return false if token.nil? || token.empty? || header.nil?
+  def self.valid?(token: (String | Bytes::Secret)?, header: String?) -> Bool
+    return false if Plug::BearerAuth.none?(token) || header.nil?
     scheme, _, rest = header.strip.partition(" ")
     given = rest.strip
     return false unless scheme.downcase == "bearer" && !given.empty?
-    Crypto.secure_compare(Digest::SHA256.digest(given), Digest::SHA256.digest(token))
+    t = token
+    return false if t.nil?
+    Crypto.secure_compare(Digest::SHA256.digest(given), Digest::SHA256.digest(t))
+  end
+
+  # :nodoc:
+  # Whether `token` is nil or empty, or a secret wiped since the plug was
+  # made: each refuses every request (401), never a `WipedError` per
+  # request.
+  def self.none?(token: (String | Bytes::Secret)?) -> Bool
+    case token
+    in nil then true
+    in String => t then t.empty?
+    in Bytes::Secret => t then t.wiped? || t.size == 0
+    end
   end
 
   # :nodoc:
