@@ -27,7 +27,7 @@
 public def start(endpoint: Type[Endpoint], settings: Hash[Symbol, Settings] = {}, *, config: Config? = nil,
                  grace: Duration = 30.seconds) -> Void
   c = config || Config.load(app_name(endpoint), settings)
-  if c.secret_key_base == Config::TASK_SECRET
+  if c.task?
     raise ConfigError.new("#{c.app}: a task's configuration (Bezel::Config.for_task) cannot serve: its SECRET_KEY_BASE is the placeholder, which signs no session; set SECRET_KEY_BASE and use Bezel::Config.load")
   end
   pool = open_pool(c)

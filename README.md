@@ -76,7 +76,14 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
   `HOST` says otherwise (`HOST=0.0.0.0` in a container), and without
   `SECRET_KEY_BASE` `dev` uses a random secret it keeps in
   `tmp/dev_secret` (made on first use; keep `tmp/` out of version
-  control), `test` one per process.
+  control), `test` one per process. `Config#secret_key_base` is a
+  `Bytes::Secret` (bezel#86; **breaking**: code reading it as a String
+  calls `expose_bytes`, and `Bezel::Keys.derive` takes a secret), so
+  `config.to_h` shows it as `#<Bytes::Secret>` and
+  `JSON.generate(config)` raises `JSON::GeneratorError`; `ENV` still
+  holds the String it came as. `Config#task?` tells a task's
+  configuration whose secret is the placeholder (`for_task` in `prod`
+  without one), which signs nothing.
 - **The database URL:** pg answers md5, or no authentication at all, only
   from a server authenticated otherwise (a unix socket, or TLS verified
   against roots) unless the URL's `require_auth` lists them
@@ -85,7 +92,10 @@ Bezel.start(Shop::Endpoint, {dev: Bezel::Settings.new(database_url: "postgres://
   TCP URL such as the generated `postgres://localhost/shop_dev`; a
   unix-socket URL (`postgres:///shop_dev?host=/var/run/postgresql`) or a
   server on scram-sha-256 needs nothing. The client's error names the
-  setting to add.
+  setting to add. A `DATABASE_URL` without a password takes it from
+  `PGPASSWORD`, through pg, which reads libpq's variables for what the
+  URL leaves out (pg's README); `Config.load` checks the URL against the
+  `environ` it is given.
 - **[Bezel.start]** serves the endpoint with [HTTP::Server], opens a
   [PG::Pool] when there is a `DATABASE_URL`, and stops gracefully on
   `SIGTERM` and `SIGINT` (a second signal ends the process at once).
@@ -304,7 +314,8 @@ end
   `Bezel::Plug::BearerAuth.new(token: ENV["API_TOKEN"]?, realm: "api")`
   lets through only `Authorization: Bearer <token>` (compared in constant
   time) and answers anything else `401` with `WWW-Authenticate`; a nil or
-  empty token refuses every request.
+  empty token refuses every request. The token may be a `Bytes::Secret`
+  (`File.read_secret(path, chomp: true)`).
 - `conn.session.renew` after a login drops the CSRF secret; `drop` then
   `put` starts a new session.
 
