@@ -39,7 +39,8 @@ class Plug::BearerAuth
   @realm: String
 
   # The plug, letting through requests with `token`, its realm `realm`.
-  # A [Bytes::Secret] token is compared as its bytes (bezel#86).
+  # A [Bytes::Secret] token is compared as its bytes (bezel#86); one
+  # wiped later refuses every request, as an empty token does.
   def initialize(*, token: (String | Bytes::Secret)?, realm: String)
     @token = token
     @realm = realm
@@ -68,12 +69,14 @@ class Plug::BearerAuth
   end
 
   # :nodoc:
-  # Whether `token` is nil or empty (a secret by its size).
+  # Whether `token` is nil or empty, or a secret wiped since the plug was
+  # made: each refuses every request (401), never a `WipedError` per
+  # request.
   def self.none?(token: (String | Bytes::Secret)?) -> Bool
     case token
     in nil then true
     in String => t then t.empty?
-    in Bytes::Secret => t then t.size == 0
+    in Bytes::Secret => t then t.wiped? || t.size == 0
     end
   end
 

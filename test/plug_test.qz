@@ -112,6 +112,15 @@ class PlugTest < Test::Case
     assert_equal(401, bearer(auth, nil).status)
     assert_false(auth.inspect.include?("s3cret"), auth.inspect)
     assert_match(/token: \(set\)/, auth.inspect)
+    # Wiped after the plug was made: every request refused (401), no
+    # WipedError per request.
+    token = Bytes::Secret.of(b"s3cret-token")
+    wiped = Bezel::Plug::BearerAuth.new(token: token, realm: "api")
+    assert_false(bearer(wiped, "Bearer s3cret-token").halted?)
+    token.wipe
+    assert_equal(401, bearer(wiped, "Bearer s3cret-token").status)
+    assert_equal(401, bearer(wiped, nil).status)
+    assert_match(/token: nil/, wiped.inspect)
     empty = Bezel::Plug::BearerAuth.new(token: Bytes::Secret.of(b""), realm: "api")
     assert_equal(401, bearer(empty, "Bearer ").status)
     assert_match(/token: nil/, empty.inspect)

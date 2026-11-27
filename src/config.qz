@@ -94,15 +94,14 @@ data Config(
   password_params: Crypto::Argon2::Params = Crypto::Argon2::Params::DEFAULT,
   # Parameter names the error pages hide beside [Bezel::Params::FILTERED]
   # ([Bezel::Params#filtered]).
-  filter_parameters: Array[String | Regexp] = [],
-  # Whether [secret_key_base] is the placeholder of a task's
-  # configuration ([task?]).
-  task: Bool = false
+  filter_parameters: Array[String | Regexp] = []
 )
-  # Whether this is a task's configuration whose [secret_key_base] is the
-  # public placeholder ([.for_task] in `prod` without SECRET_KEY_BASE):
-  # it signs nothing, so [Bezel.start] and [Bezel::Keys.derive] refuse it.
-  def task? -> Bool = task
+  # Whether [secret_key_base] is the public placeholder of a task's
+  # configuration ([.for_task] in `prod` without SECRET_KEY_BASE,
+  # [TASK_SECRET]): it signs nothing, so [Bezel.start] and
+  # [Bezel::Keys.derive] refuse it. Computed from the secret (compared in
+  # constant time), however the configuration was made (`with` too).
+  def task? -> Bool = Crypto.secure_compare(secret_key_base, TASK_SECRET)
 
   # The levels, least severe first.
   LOG_LEVELS = [:debug, :info, :warn, :error]
@@ -176,11 +175,9 @@ data Config(
     end
     given = Config.var(environ, "SECRET_KEY_BASE")
     secret: Bytes::Secret? = nil
-    placeholder = false
     if given
       raise ConfigError.new("SECRET_KEY_BASE must be at least 64 bytes (it has #{given.bytesize})") if given.bytesize < 64
-      placeholder = given == TASK_SECRET
-      if placeholder && !task
+      if given == TASK_SECRET && !task
         raise ConfigError.new("SECRET_KEY_BASE is the placeholder of a task's configuration (Config::TASK_SECRET), which is public: set a secret of your own (`openssl rand -hex 32` gives one)")
       end
       # (A secret by type: ENV keeps the String it came as.)
@@ -195,7 +192,7 @@ data Config(
       end
     end
     Config.new(app, env, host, port, db, pool_size, secret.as(Bytes::Secret), proxies, cert, key, level,
-               s.password_params || Crypto::Argon2::Params::DEFAULT, s.filter_parameters || [], placeholder)
+               s.password_params || Crypto::Argon2::Params::DEFAULT, s.filter_parameters || [])
   end
 
   # The configuration of a task that serves no request (a migration, a

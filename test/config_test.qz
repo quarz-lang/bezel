@@ -185,6 +185,21 @@ class ConfigTest < Test::Case
     assert_equal(Bezel::Keys.derive(base, "bezel token"), Bezel::Keys.derive(c.secret_key_base, "bezel token"))
   end
 
+  # task? is computed from the secret, however the configuration was
+  # made: `with` the placeholder is refused by start; a task's
+  # configuration given a real secret is not.
+  def test_task_follows_the_secret
+    real = load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "r" * 64})
+    assert_false(real.task?)
+    fake = real.with(secret_key_base: Bytes::Secret.of(Bezel::Config::TASK_SECRET.to_bytes))
+    assert_true(fake.task?)
+    e = assert_raise(Bezel::ConfigError) { Bezel.start(ConfigTestEndpoint, config: fake) }
+    assert_match(/task's configuration .* cannot serve/, e.message)
+    task = Bezel::Config.for_task("shop", environ: {"BEZEL_ENV" => "prod"})
+    assert_true(task.task?)
+    assert_false(task.with(secret_key_base: Bytes::Secret.of(("r" * 64).to_bytes)).task?)
+  end
+
   # The base is a secret: to_h shows it as one, and JSON refuses it.
   def test_the_secret_key_base_is_a_secret
     c = load({"BEZEL_ENV" => "prod", "SECRET_KEY_BASE" => "k" * 64})
@@ -221,4 +236,9 @@ class ConfigTest < Test::Case
     assert_true(out.success?, out.stdout + out.stderr)
     assert_equal("postgres://localhost/shop\n", out.stdout)
   end
+end
+
+# An endpoint for start's refusal (it never serves).
+class ConfigTestEndpoint < Bezel::Endpoint
+  def self.plugs -> Array[Bezel::Plug] = [Bezel.plug { |conn| conn.text("never") }]
 end
